@@ -1,4 +1,4 @@
-﻿<p align="center">
+<p align="center">
   <img src="https://img.shields.io/badge/CS2-CounterStrikeSharp-blue" alt="CounterStrikeSharp" />
   <img src="https://img.shields.io/badge/RayTrace-Required-orange" alt="RayTrace Required" />
   <img src="https://img.shields.io/badge/Version-Alpha%20Release%201.0-brightgreen" alt="Version" />
@@ -29,7 +29,9 @@ Source2-AntiWallHack is a CounterStrikeSharp plugin that reduces wallhack advant
 ## ⚙️ Requirements
 
 - [CounterStrikeSharp](https://github.com/roflmuffin/CounterStrikeSharp)
-- [Ray-Trace](https://github.com/FUNPLAY-pro-CS2/Ray-Trace) (Both "Ray-Trace-CSSharp" and "Ray-Trace-MetaMod")
+- [Ray-Trace](https://github.com/FUNPLAY-pro-CS2/Ray-Trace)
+- Ray-Trace MetaMod plugin (`Ray-Trace-MM`) must be installed and running (backend provider)
+- Ray-Trace CounterStrikeSharp bridge must be installed (`RayTraceImpl` + `RayTraceApi`)
 
 ## 📦 Installation
 
@@ -37,10 +39,12 @@ Source2-AntiWallHack is a CounterStrikeSharp plugin that reduces wallhack advant
 2. Extract the release package.
 3. Place the extracted `Source2-AntiWallHack` plugin folder into:
 `addons/counterstrikesharp/plugins/Source2-AntiWallHack/`
-4. Ensure both "Ray-Trace-CSSharp" and "Ray-Trace-MetaMod" is installed on your server.
-
-5. Restart server.
-6. First run creates config file:
+4. Ensure Ray-Trace MetaMod plugin (`Ray-Trace-MM`) is installed on the server.
+5. Ensure Ray-Trace CSSharp bridge components are installed:
+`addons/counterstrikesharp/plugins/RayTraceImpl/RayTraceImpl.dll`
+`addons/counterstrikesharp/shared/RayTraceApi/RayTraceApi.dll`
+6. Restart server.
+7. First run creates config file:
 
 ```txt
 addons/counterstrikesharp/configs/plugins/Source2-AntiWallHack/Source2-AntiWallHack.json
@@ -89,5 +93,3 @@ Clears cache without restarting the plugin.
 - Name: `Source2-AntiWallHack`
 - Author: `karola3vax` on Discord
 - Version: `Alpha Release 1.0`
-
-
