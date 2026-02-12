@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <AssemblyName>Source2-AntiWallHack</AssemblyName>
+    <RootNamespace>Source2AntiWallHack</RootNamespace>
+    <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+    <RayTraceApiHintPath Condition="'$(RayTraceApiHintPath)' == ''">libs\RayTraceApi.dll</RayTraceApiHintPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="CounterStrikeSharp.API" Version="1.0.362" />
+    <PackageReference Include="System.Text.Json" Version="8.0.5" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="RayTraceApi">
+      <HintPath>$(RayTraceApiHintPath)</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <Target Name="EnsureRayTraceApiReference" BeforeTargets="ResolveReferences">
+    <Error Condition="!Exists('$(RayTraceApiHintPath)')"
+           Text="RayTraceApi.dll not found at $(RayTraceApiHintPath). Install the deployed RayTraceApi shared assembly or provide -p:RayTraceApiHintPath=... when building." />
+  </Target>
+
+</Project>
