@@ -37,7 +37,7 @@ Source2-AntiWallHack is a CounterStrikeSharp plugin that reduces wallhack advant
 2. Extract the release package.
 3. Place the extracted `Source2-AntiWallHack` plugin folder into:
 `addons/counterstrikesharp/plugins/Source2-AntiWallHack/`
-4. Ensure Ray-Trace both CSSharp and MetaMod components are installed to your server
+4. Ensure both "Ray-Trace-CSSharp" and "Ray-Trace-MetaMod" is installed on your server.
 
 5. Restart server.
 6. First run creates config file:
@@ -89,4 +89,5 @@ Clears cache without restarting the plugin.
 - Name: `Source2-AntiWallHack`
 - Author: `karola3vax` on Discord
 - Version: `Alpha Release 1.0`
+
 
