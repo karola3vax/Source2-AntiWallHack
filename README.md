@@ -24,6 +24,8 @@ Source2-AntiWallHack is a CounterStrikeSharp plugin that reduces wallhack advant
 - 🏃 Horizontal peek compensation for fast side peeks
 - 🔫 Linked weapon sync handling when players hide/show
 - 🧠 Runtime LOS/pair caching to lower trace cost
+- 📊 Adaptive trace budget and deferred pair evaluation for high-player servers
+- 🚀 Optional FPS boost transmit filters (ragdolls, dropped weapons, projectiles, effects)
 - 🧱 Optional `PlayerClip` ignore support (anti-rush invisible walls)
 
 ## ⚙️ Requirements
@@ -53,7 +55,7 @@ addons/counterstrikesharp/configs/plugins/Source2-AntiWallHack/Source2-AntiWallH
 ## 🎮 Commands
 
 - `css_source2awh_status`  
-Shows current plugin summary.
+Shows current plugin summary, including trace usage/budget.
 
 - `css_source2awh_reset`  
 Clears cache without restarting the plugin.
@@ -63,30 +65,43 @@ Clears cache without restarting the plugin.
 | Key | Default | User-friendly meaning |
 |---|---:|---|
 | `Enabled` | `true` | Turns Source2-AntiWallHack on/off. |
-| `HideTeammates` | `true` | If true, teammates are also hidden when out of LOS. |
+| `HideTeammates` | `false` | If true, teammates are also hidden when out of LOS. |
 | `IgnoreBots` | `false` | If true, bots are ignored by hide/show logic. |
-| `VisibleGraceTicks` | `1` | How long to keep a player visible after you just saw them. |
-| `PreloadLookaheadTicks` | `12` | How far ahead movement is predicted for early visibility. |
-| `PreloadHoldTicks` | `22` | How long preload visibility is kept once triggered. |
-| `PreloadVelocityScale` | `1.3` | Prediction aggressiveness multiplier. |
+| `BotsAlsoCastRays` | `true` | If true, bot viewers also run LOS/ray checks like real players (useful for stress testing with many bots). Ignored when `IgnoreBots=true`. |
+| `VisibleGraceTicks` | `4` | How long to keep a player visible after you just saw them. |
+| `PreloadLookaheadTicks` | `14` | How far ahead movement is predicted for early visibility. |
+| `PreloadHoldTicks` | `26` | How long preload visibility is kept once triggered. |
+| `PreloadVelocityScale` | `1.35` | Prediction aggressiveness multiplier. |
 | `PreloadMinSpeed` | `0` | Minimum movement speed to allow preload (`0` = always). |
 | `CombatGraceTicks` | `32` | Force-visible ticks after damage events. |
 | `DeathGraceTicks` | `64` | Force-visible ticks around death events. |
 | `MaxTraceDistance` | `4096` | Max LOS check distance. |
-| `SideProbeUnits` | `24` | Side sample width for visibility checks. |
-| `TargetPaddingUnits` | `30` | Expands target sampling area to reduce pop-in. |
-| `HorizontalPeekBonusUnits` | `24` | Extra sample expansion during fast horizontal peeks. |
+| `SideProbeUnits` | `26` | Side sample width for visibility checks. |
+| `TargetPaddingUnits` | `34` | Expands target sampling area to reduce pop-in. |
+| `HorizontalPeekBonusUnits` | `28` | Extra sample expansion during fast horizontal peeks. |
 | `HorizontalPeekSpeedForMaxBonus` | `100` | Speed needed to reach max horizontal bonus. |
+| `VerticalPeekBonusUnits` | `18` | Extra vertical sampling expansion during up/down peeks (ramps, stairs, elevation changes). |
+| `VerticalPeekSpeedForMaxBonus` | `120` | Relative vertical speed needed to reach max vertical peek bonus. |
 | `DebugTraceBeams` | `false` | Draw LOS debug beams (keep off on production). |
 | `AllowLosThroughPlayerClip` | `true` | Ignores `PlayerClip` blockers in LOS checks. Useful for invisible anti-rush walls. |
+| `EnableFpsBoostFilters` | `true` | Enables optional non-player entity filtering for higher client FPS. |
+| `HideRagdolls` | `true` | Hides ragdolls to reduce client render load. |
+| `HideDroppedWeapons` | `true` | Hides dropped weapons (not weapons currently held by players). |
+| `HideSmokeEffects` | `false` | Hides smoke-related entities. Can change gameplay readability. |
+| `HideInfernoEffects` | `false` | Hides inferno/molotov fire entities. Can change gameplay readability. |
+| `HideGrenadeProjectiles` | `false` | Hides grenade projectile entities while in flight. |
+| `HidePhysicsProps` | `false` | Hides physics prop entities (map dependent). |
+| `HideChickens` | `false` | Hides chickens and related small ambient entities. |
 | `ConfigVersion` | `1` | CounterStrikeSharp config schema version value. |
 
 ## 💡 Practical Tuning
 
 - For less pop-in: increase `TargetPaddingUnits` first.
-- Then tune `HorizontalPeekBonusUnits`.
+- Then tune `HorizontalPeekBonusUnits` and `VerticalPeekBonusUnits`.
 - If needed, raise `PreloadLookaheadTicks` slightly.
-- Keep `DebugTraceBeams=false` on live servers unless you wanna see rays. Crash is guaranteed.
+- For extra client FPS: keep `EnableFpsBoostFilters=true`, start with `HideRagdolls` + `HideDroppedWeapons`.
+- Enable smoke/inferno/projectile filters only if your server rules allow that visual reduction.
+- Keep `DebugTraceBeams=false` on live servers; use it only for short diagnostics because it can add noticeable overhead.
 
 ## ℹ️ Plugin Info
 
