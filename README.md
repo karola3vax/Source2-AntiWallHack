@@ -2,7 +2,7 @@
   <img src="https://img.shields.io/badge/CS2-CounterStrikeSharp-blue" alt="CounterStrikeSharp" />
   <img src="https://img.shields.io/badge/RayTrace-Required-orange" alt="RayTrace Required" />
   <img src="https://img.shields.io/badge/Version-Alpha%20Release%201.0-brightgreen" alt="Version" />
-  <img src="https://img.shields.io/badge/Ready_for-Live%20Servers-red" alt="Ready for Live Servers" />
+  <img src="https://img.shields.io/badge/Validation-Staging%20Recommended-yellow" alt="Validation Status" />
 </p>
 
 # Source2-AntiWallHack
@@ -27,6 +27,8 @@ Source2-AntiWallHack is a CounterStrikeSharp plugin that reduces wallhack advant
 - 📊 Adaptive trace budget and deferred pair evaluation for high-player servers
 - 🚀 Optional FPS boost transmit filters (ragdolls, dropped weapons, projectiles, effects)
 - 🧱 Optional `PlayerClip` ignore support (anti-rush invisible walls)
+- 🕒 Wrap-safe tick/deadline handling for long uptimes
+- 🔁 RayTrace failure cooldown + automatic retry (fail-open safety)
 
 ## ⚙️ Requirements
 
@@ -55,19 +57,23 @@ addons/counterstrikesharp/configs/plugins/Source2-AntiWallHack/Source2-AntiWallH
 ## 🎮 Commands
 
 - `css_source2awh_status`  
-Shows current plugin summary, including trace usage/budget.
+Shows full runtime diagnostics summary (trace budget/calls, cache hit rates, deferred reuse, preload probe stats, raytrace cooldown/failure state, entity readiness, and per-thread CheckTransmit allocation sample).
 
 - `css_source2awh_reset`  
 Clears cache without restarting the plugin.
+
+- `css_source2awh_tracepair <viewerSlot> <targetSlot>`  
+Arms a one-tick sampled decision trace for a single viewer->target pair. It logs one decision path and auto-disables.
 
 ## 📁 Configuration (Auto-Generated)
 
 | Key | Default | User-friendly meaning |
 |---|---:|---|
 | `Enabled` | `true` | Turns Source2-AntiWallHack on/off. |
-| `HideTeammates` | `false` | If true, teammates are also hidden when out of LOS. |
+| `HideTeammates` | `true` | If true, teammates are also hidden when out of LOS. |
+| `TeammateInfoPulseTicks` | `12` | Sends short teammate visibility pulses every N ticks so radar/name info can refresh while teammates stay mostly hidden out of LOS (`0` = disabled). |
 | `IgnoreBots` | `false` | If true, bots are ignored by hide/show logic. |
-| `BotsAlsoCastRays` | `true` | If true, bot viewers also run LOS/ray checks like real players (useful for stress testing with many bots). Ignored when `IgnoreBots=true`. |
+| `BotsAlsoCastRays` | `true` | If true, bot viewers that appear in `CheckTransmit` are processed by LOS logic. No extra synthetic bot pass is created. Ignored when `IgnoreBots=true`. |
 | `VisibleGraceTicks` | `4` | How long to keep a player visible after you just saw them. |
 | `PreloadLookaheadTicks` | `14` | How far ahead movement is predicted for early visibility. |
 | `PreloadHoldTicks` | `26` | How long preload visibility is kept once triggered. |
@@ -75,7 +81,7 @@ Clears cache without restarting the plugin.
 | `PreloadMinSpeed` | `0` | Minimum movement speed to allow preload (`0` = always). |
 | `CombatGraceTicks` | `32` | Force-visible ticks after damage events. |
 | `DeathGraceTicks` | `64` | Force-visible ticks around death events. |
-| `MaxTraceDistance` | `4096` | Max LOS check distance. |
+| `MaxTraceDistance` | `6000` | Max LOS check distance. |
 | `SideProbeUnits` | `26` | Side sample width for visibility checks. |
 | `TargetPaddingUnits` | `34` | Expands target sampling area to reduce pop-in. |
 | `HorizontalPeekBonusUnits` | `28` | Extra sample expansion during fast horizontal peeks. |
@@ -86,7 +92,7 @@ Clears cache without restarting the plugin.
 | `AllowLosThroughPlayerClip` | `true` | Ignores `PlayerClip` blockers in LOS checks. Useful for invisible anti-rush walls. |
 | `EnableFpsBoostFilters` | `true` | Enables optional non-player entity filtering for higher client FPS. |
 | `HideRagdolls` | `true` | Hides ragdolls to reduce client render load. |
-| `HideDroppedWeapons` | `true` | Hides dropped weapons (not weapons currently held by players). |
+| `HideDroppedWeapons` | `false` | Hides dropped weapons (not weapons currently held by players). |
 | `HideSmokeEffects` | `false` | Hides smoke-related entities. Can change gameplay readability. |
 | `HideInfernoEffects` | `false` | Hides inferno/molotov fire entities. Can change gameplay readability. |
 | `HideGrenadeProjectiles` | `false` | Hides grenade projectile entities while in flight. |
@@ -102,6 +108,23 @@ Clears cache without restarting the plugin.
 - For extra client FPS: keep `EnableFpsBoostFilters=true`, start with `HideRagdolls` + `HideDroppedWeapons`.
 - Enable smoke/inferno/projectile filters only if your server rules allow that visual reduction.
 - Keep `DebugTraceBeams=false` on live servers; use it only for short diagnostics because it can add noticeable overhead.
+
+## 🛡️ Safety Fallbacks
+
+- If EntitySystem is not ready, antiwallhack evaluation is delayed and safely retried.
+- If RayTrace capability is missing or trace calls fail, plugin fails open (transmit) to avoid hiding visible players.
+- RayTrace failures trigger cooldown-and-retry instead of permanent disable.
+- Tick/deadline logic is wrap-safe, so long server uptimes do not break grace windows or cache deadlines.
+
+## 🧪 Tests
+
+- Unit tests are in `tests/Source2-AntiWallHack.Tests/`.
+- Current tests cover wrap-safe tick math (`TickUtil`) and force/preload decision math (`RuntimeMath`) used by transmit visibility logic.
+- Run with:
+
+```txt
+dotnet test tests/Source2-AntiWallHack.Tests/Source2-AntiWallHack.Tests.csproj -c Release
+```
 
 ## ℹ️ Plugin Info
 
