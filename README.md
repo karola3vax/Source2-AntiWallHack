@@ -7,7 +7,7 @@
 
 # ⚠️ Warning
 
-This project is just in Alpha phase and yet to be released soon. Bugs and technical issues are expected. Use it with care.
+This project is just in Alpha phase and yet to be fully released soon. Bugs and technical issues are expected. Use it with care.
 
 # Source2-AntiWallHack
 
@@ -135,4 +135,5 @@ dotnet test tests/Source2-AntiWallHack.Tests/Source2-AntiWallHack.Tests.csproj -
 - Name: `Source2-AntiWallHack`
 - Author: `karola3vax` on Discord
 - Version: `Alpha Release 1.0`
+
 
