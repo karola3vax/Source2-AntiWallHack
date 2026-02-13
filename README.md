@@ -5,6 +5,10 @@
   <img src="https://img.shields.io/badge/Validation-Staging%20Recommended-yellow" alt="Validation Status" />
 </p>
 
+# ⚠️ Warning
+
+This project is just in Alpha phase and yet to be released soon. Bugs and technical issues are expected. Use it with care.
+
 # Source2-AntiWallHack
 
 Source2-AntiWallHack is a CounterStrikeSharp plugin that reduces wallhack advantage by controlling who gets transmitted to each player. If a player is truly visible, they are shown normally. If they are behind cover and out of line-of-sight, they are hidden from network transmit for that viewer. The plugin also uses preload and grace logic to keep peeks smooth and reduce pop-in/flicker, while staying lightweight enough for busy servers.
@@ -131,3 +135,4 @@ dotnet test tests/Source2-AntiWallHack.Tests/Source2-AntiWallHack.Tests.csproj -
 - Name: `Source2-AntiWallHack`
 - Author: `karola3vax` on Discord
 - Version: `Alpha Release 1.0`
+
