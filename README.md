@@ -2,7 +2,7 @@
   <img src="https://img.shields.io/badge/CS2-CounterStrikeSharp-blue" alt="CounterStrikeSharp" />
   <img src="https://img.shields.io/badge/RayTrace-Required-orange" alt="RayTrace Required" />
   <img src="https://img.shields.io/badge/Version-Alpha%20Release%201.0-brightgreen" alt="Version" />
-  <img src="https://img.shields.io/badge/Validation-Staging%20Recommended-yellow" alt="Validation Status" />
+  <img src="https://img.shields.io/badge/Warning-Alpha%20Release-yellow" alt="Validation Status" />
 </p>
 
 # ⚠️ Warning
@@ -135,5 +135,6 @@ dotnet test tests/Source2-AntiWallHack.Tests/Source2-AntiWallHack.Tests.csproj -
 - Name: `Source2-AntiWallHack`
 - Author: `karola3vax` on Discord
 - Version: `Alpha Release 1.0`
+
 
 
