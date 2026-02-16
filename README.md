@@ -1,140 +1,120 @@
 <p align="center">
-  <img src="https://img.shields.io/badge/CS2-CounterStrikeSharp-blue" alt="CounterStrikeSharp" />
-  <img src="https://img.shields.io/badge/RayTrace-Required-orange" alt="RayTrace Required" />
-  <img src="https://img.shields.io/badge/Version-Alpha%20Release%201.0-brightgreen" alt="Version" />
-  <img src="https://img.shields.io/badge/Warning-Alpha%20Release-yellow" alt="Validation Status" />
+  <h1 align="center">🛡️ S2AW</h1>
+  <p align="center"><b>Source 2 Anti-Wallhack</b> — A server-side visibility plugin for Counter-Strike 2</p>
 </p>
 
-# ⚠️ Warning
+---
 
-This project is just in Alpha phase and yet to be fully released soon. Bugs and technical issues are expected. Use it with care.
+S2AW prevents wallhack cheats by **controlling which player entities are transmitted** to each viewer. If a target cannot be seen through legitimate line-of-sight, their pawn entity is removed from the network snapshot — the cheat never receives the data in the first place.
 
-# Source2-AntiWallHack
+> **How it works:** Each tick, S2AW casts rays from every viewer's eye position toward an expanded bounding box around each target. Only targets with at least one unobstructed ray are transmitted. A grace period ensures smooth transitions when players move between cover.
 
-Source2-AntiWallHack is a CounterStrikeSharp plugin that reduces wallhack advantage by controlling who gets transmitted to each player. If a player is truly visible, they are shown normally. If they are behind cover and out of line-of-sight, they are hidden from network transmit for that viewer. The plugin also uses preload and grace logic to keep peeks smooth and reduce pop-in/flicker, while staying lightweight enough for busy servers.
+## ✨ Key Features
 
-## 🧭 How It Works (Simple)
+- 🔍 **Expanded AABB sampling** — Multi-point traces against scaled bounding boxes prevent pop-in
+- ⚡ **Budgeted ray tracing** — Configurable per-tick trace limit protects server performance
+- 🔄 **Priority viewer system** — Players who moved or turned are processed first
+- 🕐 **Visibility grace period** — Brief delay before hiding prevents flicker at cover edges
+- 🛡️ **Fail-open design** — On budget exhaustion or backend unavailability, targets remain visible (no false concealment)
+- 🤖 **Bot support** — Configurable bot viewer/target processing
 
-1. The plugin checks line-of-sight between players using Ray-Trace.
-2. If target is visible, target is transmitted.
-3. If target is not visible, target is hidden for that viewer.
-4. Small prediction and grace windows keep movement natural during peeks.
+## 📋 Requirements
 
-## 🚀 Features
+### Runtime (Server)
 
-- 🎯 LOS-based per-viewer visibility control
-- ⚡ Predictive preload to reduce first-appearance pop-in
-- 🛡️ Combat/death grace windows for stable visibility
-- 🏃 Horizontal peek compensation for fast side peeks
-- 🔫 Linked weapon sync handling when players hide/show
-- 🧠 Runtime LOS/pair caching to lower trace cost
-- 📊 Adaptive trace budget and deferred pair evaluation for high-player servers
-- 🚀 Optional FPS boost transmit filters (ragdolls, dropped weapons, projectiles, effects)
-- 🧱 Optional `PlayerClip` ignore support (anti-rush invisible walls)
-- 🕒 Wrap-safe tick/deadline handling for long uptimes
-- 🔁 RayTrace failure cooldown + automatic retry (fail-open safety)
+| Component | Path |
+|-----------|------|
+| RayTrace Metamod module | `addons/metamod/RayTrace.vdf` |
+| RayTrace native binary | `addons/RayTrace/bin/win64/RayTrace.dll` |
+| RayTrace gamedata | `addons/RayTrace/gamedata.json` |
+| RayTraceImpl plugin | `addons/counterstrikesharp/plugins/RayTraceImpl/RayTraceImpl.dll` |
+| RayTraceApi shared lib | `addons/counterstrikesharp/shared/RayTraceApi/RayTraceApi.dll` |
 
-## ⚙️ Requirements
+### Build-time
 
-- [CounterStrikeSharp](https://github.com/roflmuffin/CounterStrikeSharp)
-- [Ray-Trace](https://github.com/FUNPLAY-pro-CS2/Ray-Trace)
-- Ray-Trace MetaMod plugin (`Ray-Trace-MM`) must be installed and running (backend provider)
-- Ray-Trace CounterStrikeSharp bridge must be installed (`RayTraceImpl` + `RayTraceApi`)
+- `S2AW/libs/RayTraceApi.dll` must be present before building.
+
+## 🔨 Build
+
+```powershell
+dotnet build S2AW/S2AW.csproj -c Release -warnaserror
+```
 
 ## 📦 Installation
 
-1. Download the latest plugin package from the **Releases** page.
-2. Extract the release package.
-3. Place the extracted `Source2-AntiWallHack` plugin folder into:
-`addons/counterstrikesharp/plugins/Source2-AntiWallHack/`
-4. Ensure Ray-Trace MetaMod plugin (`Ray-Trace-MM`) is installed on the server.
-5. Ensure Ray-Trace CSSharp bridge components are installed:
-`addons/counterstrikesharp/plugins/RayTraceImpl/RayTraceImpl.dll`
-`addons/counterstrikesharp/shared/RayTraceApi/RayTraceApi.dll`
-6. Restart server.
-7. First run creates config file:
+1. Install the **Ray-Trace runtime bridge** files on the server (see table above).
+2. Copy the built plugin folder to your server:
 
-```txt
-addons/counterstrikesharp/configs/plugins/Source2-AntiWallHack/Source2-AntiWallHack.json
+   ```
+   S2AW/release/addons/counterstrikesharp/plugins/S2AW/
+   → addons/counterstrikesharp/plugins/S2AW/
+   ```
+
+3. Restart the server or reload CounterStrikeSharp plugins.
+
+**Plugin files:**
+
+| File | Required |
+|------|----------|
+| `S2AW.dll` | ✅ Yes |
+| `S2AW.deps.json` | ✅ Yes |
+| `S2AW.pdb` | ⬜ Optional (debugging) |
+
+## 🔬 Visibility Pipeline
+
 ```
+OnTick
+ ├─ 1. Scan alive players → build active player list
+ ├─ 2. Rebuild target snapshots (origin + expanded AABB per player)
+ ├─ 3. Build viewer process order (priority: moved/turned viewers first)
+ ├─ 4. For each viewer → for each target:
+ │     ├─ Distance gate (closest point on AABB vs max_distance)
+ │     ├─ FOV gate (AABB center vs viewer forward)
+ │     ├─ Multi-sample ray traces against expanded AABB
+ │     ├─ Any open trace → VISIBLE
+ │     └─ Grace period check → may keep visible briefly
+ └─ 5. Commit hidden pawn indices → applied in CheckTransmit
+```
+
+## ⚡ Performance & Safety
+
+| Feature | Description |
+|---------|-------------|
+| **Trace budget** | `max_traces_per_tick` caps total rays per tick to protect frame time |
+| **Viewer batching** | `max_viewers_per_tick` limits how many viewers are evaluated per tick |
+| **Fail-open on exhaustion** | Unprocessed viewers see all targets and are prioritized next tick |
+| **Viewer pose cache** | Eye position + forward vector cached per tick (avoids recomputation) |
+| **Bounds template cache** | AABB templates cached by collision bounds (cleared per round, capped at 64) |
+| **Debug beam budget** | `debug_draw_max_beams` prevents entity exhaustion from debug visualization |
 
 ## 🎮 Commands
 
-- `css_source2awh_status`  
-Shows full runtime diagnostics summary (trace budget/calls, cache hit rates, deferred reuse, preload probe stats, raytrace cooldown/failure state, entity readiness, and per-thread CheckTransmit allocation sample).
+| Command | Description |
+|---------|-------------|
+| `css_s2aw_selftest` | Prints a full diagnostic report: plugin state, config values, Ray-Trace backend status, active player count, bounds cache size, and hidden viewer count |
+| `css_s2aw_stats` | Shows averaged performance metrics over recent ticks: traces used, viewers processed, budget exhaustion rate, aborted/fail-open viewer counts |
+| `css_s2aw_stats_reset` | Clears the stats history buffer, starting fresh metric collection from the current tick |
 
-- `css_source2awh_reset`  
-Clears cache without restarting the plugin.
+## ⚙️ Configuration
 
-- `css_source2awh_tracepair <viewerSlot> <targetSlot>`  
-Arms a one-tick sampled decision trace for a single viewer->target pair. It logs one decision path and auto-disables.
+S2AW auto-generates a JSON config file on first load. Key settings:
 
-## 📁 Configuration (Auto-Generated)
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `enabled` | `true` | Master on/off switch |
+| `max_distance` | `2800` | Maximum visibility check distance (units) |
+| `max_traces_per_tick` | `3500` | Ray trace budget per server tick |
+| `max_viewers_per_tick` | `64` | Max viewers to process per tick |
+| `visibility_grace_ticks` | `4` | Ticks to keep a target visible after losing LOS |
+| `expanded_box_scale_xy` | `3.0` | Horizontal AABB expansion multiplier |
+| `expanded_box_scale_z` | `1.5` | Vertical AABB expansion multiplier |
+| `sample_budget` | `12` | Max sample points per target AABB |
+| `enforce_fov_check` | `true` | Skip targets outside viewer's FOV |
+| `ignore_bots` | `false` | Whether to skip bots as targets |
+| `hide_teammates` | `true` | Whether to evaluate teammates for hiding |
 
-| Key | Default | User-friendly meaning |
-|---|---:|---|
-| `Enabled` | `true` | Turns Source2-AntiWallHack on/off. |
-| `HideTeammates` | `true` | If true, teammates are also hidden when out of LOS. |
-| `TeammateInfoPulseTicks` | `12` | Sends short teammate visibility pulses every N ticks so radar/name info can refresh while teammates stay mostly hidden out of LOS (`0` = disabled). |
-| `IgnoreBots` | `false` | If true, bots are ignored by hide/show logic. |
-| `BotsAlsoCastRays` | `true` | If true, bot viewers that appear in `CheckTransmit` are processed by LOS logic. No extra synthetic bot pass is created. Ignored when `IgnoreBots=true`. |
-| `VisibleGraceTicks` | `4` | How long to keep a player visible after you just saw them. |
-| `PreloadLookaheadTicks` | `14` | How far ahead movement is predicted for early visibility. |
-| `PreloadHoldTicks` | `26` | How long preload visibility is kept once triggered. |
-| `PreloadVelocityScale` | `1.35` | Prediction aggressiveness multiplier. |
-| `PreloadMinSpeed` | `0` | Minimum movement speed to allow preload (`0` = always). |
-| `CombatGraceTicks` | `32` | Force-visible ticks after damage events. |
-| `DeathGraceTicks` | `64` | Force-visible ticks around death events. |
-| `MaxTraceDistance` | `6000` | Max LOS check distance. |
-| `SideProbeUnits` | `26` | Side sample width for visibility checks. |
-| `TargetPaddingUnits` | `34` | Expands target sampling area to reduce pop-in. |
-| `HorizontalPeekBonusUnits` | `28` | Extra sample expansion during fast horizontal peeks. |
-| `HorizontalPeekSpeedForMaxBonus` | `100` | Speed needed to reach max horizontal bonus. |
-| `VerticalPeekBonusUnits` | `18` | Extra vertical sampling expansion during up/down peeks (ramps, stairs, elevation changes). |
-| `VerticalPeekSpeedForMaxBonus` | `120` | Relative vertical speed needed to reach max vertical peek bonus. |
-| `DebugTraceBeams` | `false` | Draw LOS debug beams (keep off on production). |
-| `AllowLosThroughPlayerClip` | `true` | Ignores `PlayerClip` blockers in LOS checks. Useful for invisible anti-rush walls. |
-| `EnableFpsBoostFilters` | `true` | Enables optional non-player entity filtering for higher client FPS. |
-| `HideRagdolls` | `true` | Hides ragdolls to reduce client render load. |
-| `HideDroppedWeapons` | `false` | Hides dropped weapons (not weapons currently held by players). |
-| `HideSmokeEffects` | `false` | Hides smoke-related entities. Can change gameplay readability. |
-| `HideInfernoEffects` | `false` | Hides inferno/molotov fire entities. Can change gameplay readability. |
-| `HideGrenadeProjectiles` | `false` | Hides grenade projectile entities while in flight. |
-| `HidePhysicsProps` | `false` | Hides physics prop entities (map dependent). |
-| `HideChickens` | `false` | Hides chickens and related small ambient entities. |
-| `ConfigVersion` | `1` | CounterStrikeSharp config schema version value. |
+## 📜 Policy
 
-## 💡 Practical Tuning
-
-- For less pop-in: increase `TargetPaddingUnits` first.
-- Then tune `HorizontalPeekBonusUnits` and `VerticalPeekBonusUnits`.
-- If needed, raise `PreloadLookaheadTicks` slightly.
-- For extra client FPS: keep `EnableFpsBoostFilters=true`, start with `HideRagdolls` + `HideDroppedWeapons`.
-- Enable smoke/inferno/projectile filters only if your server rules allow that visual reduction.
-- Keep `DebugTraceBeams=false` on live servers; use it only for short diagnostics because it can add noticeable overhead.
-
-## 🛡️ Safety Fallbacks
-
-- If EntitySystem is not ready, antiwallhack evaluation is delayed and safely retried.
-- If RayTrace capability is missing or trace calls fail, plugin fails open (transmit) to avoid hiding visible players.
-- RayTrace failures trigger cooldown-and-retry instead of permanent disable.
-- Tick/deadline logic is wrap-safe, so long server uptimes do not break grace windows or cache deadlines.
-
-## 🧪 Tests
-
-- Unit tests are in `tests/Source2-AntiWallHack.Tests/`.
-- Current tests cover wrap-safe tick math (`TickUtil`) and force/preload decision math (`RuntimeMath`) used by transmit visibility logic.
-- Run with:
-
-```txt
-dotnet test tests/Source2-AntiWallHack.Tests/Source2-AntiWallHack.Tests.csproj -c Release
-```
-
-## ℹ️ Plugin Info
-
-- Name: `Source2-AntiWallHack`
-- Author: `karola3vax` on Discord
-- Version: `Alpha Release 1.0`
-
-
-
+- S2AW uses **CounterStrikeSharp + Ray-Trace** only.
+- **CS2TraceRay** is not used.
+- Pawn-index filtering only — controller, scoreboard, and weapon entities are never filtered.
