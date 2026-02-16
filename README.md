@@ -1,7 +1,6 @@
-<p align="center">
-  <h1 align="center">🛡️ S2AW</h1>
-  <p align="center"><b>Source 2 Anti-Wallhack</b> — A server-side visibility plugin for Counter-Strike 2</p>
-</p>
+# 🛡️ S2AW — Source 2 Anti-Wallhack
+
+A server-side visibility plugin for Counter-Strike 2, built on CounterStrikeSharp.
 
 ---
 
@@ -18,41 +17,41 @@ S2AW prevents wallhack cheats by **controlling which player entities are transmi
 - 🛡️ **Fail-open design** — On budget exhaustion or backend unavailability, targets remain visible (no false concealment)
 - 🤖 **Bot support** — Configurable bot viewer/target processing
 
-## 📋 Requirements
+The release package includes **everything needed** — S2AW plugin and all Ray-Trace dependencies.
 
-### Runtime (Server)
-
-| Component | Path |
-|-----------|------|
-| RayTrace Metamod module | `addons/metamod/RayTrace.vdf` |
-| RayTrace native binary | `addons/RayTrace/bin/win64/RayTrace.dll` |
-| RayTrace gamedata | `addons/RayTrace/gamedata.json` |
-| RayTraceImpl plugin | `addons/counterstrikesharp/plugins/RayTraceImpl/RayTraceImpl.dll` |
-| RayTraceApi shared lib | `addons/counterstrikesharp/shared/RayTraceApi/RayTraceApi.dll` |
+> **Prerequisite:** [CounterStrikeSharp](https://docs.cssharp.dev/) and [Metamod:Source](https://www.metamodsource.net/) must already be installed on your server.
 
 ## 📦 Installation
 
-1. Install the **Ray-Trace runtime bridge** files on the server (see table above).
-2. Copy the built plugin folder to your server:
+1. Download the latest release.
+2. **Drag the `addons/` folder** into your server's `csgo/` (or `game/cs2/`) directory.
+3. Restart the server.
 
-   ```
-   S2AW/release/addons/counterstrikesharp/plugins/S2AW/
-   → addons/counterstrikesharp/plugins/S2AW/
-   ```
+That's it — one folder, everything included:
 
-3. Restart the server or reload CounterStrikeSharp plugins.
-
-**Plugin files:**
-
-| File | Required |
-|------|----------|
-| `S2AW.dll` | ✅ Yes |
-| `S2AW.deps.json` | ✅ Yes |
-| `S2AW.pdb` | ⬜ Optional (debugging) |
+```text
+addons/
+├─ metamod/
+│  └─ RayTrace.vdf              ← Metamod plugin descriptor
+├─ RayTrace/
+│  ├─ bin/win64/RayTrace.dll    ← Native ray-trace engine
+│  └─ gamedata.json             ← Gamedata offsets
+└─ counterstrikesharp/
+   ├─ plugins/
+   │  ├─ S2AW/                  ← Anti-wallhack plugin
+   │  │  ├─ S2AW.dll
+   │  │  └─ S2AW.deps.json
+   │  └─ RayTraceImpl/          ← Managed ray-trace bridge
+   │     ├─ RayTraceImpl.dll
+   │     └─ (dependencies)
+   └─ shared/
+      └─ RayTraceApi/           ← Shared API contract
+         └─ RayTraceApi.dll
+```
 
 ## 🔬 Visibility Pipeline
 
-```
+```text
 OnTick
  ├─ 1. Scan alive players → build active player list
  ├─ 2. Rebuild target snapshots (origin + expanded AABB per player)
@@ -69,7 +68,7 @@ OnTick
 ## ⚡ Performance & Safety
 
 | Feature | Description |
-|---------|-------------|
+| --- | --- |
 | **Trace budget** | `max_traces_per_tick` caps total rays per tick to protect frame time |
 | **Viewer batching** | `max_viewers_per_tick` limits how many viewers are evaluated per tick |
 | **Fail-open on exhaustion** | Unprocessed viewers see all targets and are prioritized next tick |
@@ -80,7 +79,7 @@ OnTick
 ## 🎮 Commands
 
 | Command | Description |
-|---------|-------------|
+| --- | --- |
 | `css_s2aw_selftest` | Prints a full diagnostic report: plugin state, config values, Ray-Trace backend status, active player count, bounds cache size, and hidden viewer count |
 | `css_s2aw_stats` | Shows averaged performance metrics over recent ticks: traces used, viewers processed, budget exhaustion rate, aborted/fail-open viewer counts |
 | `css_s2aw_stats_reset` | Clears the stats history buffer, starting fresh metric collection from the current tick |
@@ -90,7 +89,7 @@ OnTick
 S2AW auto-generates a JSON config file on first load. Key settings:
 
 | Setting | Default | Description |
-|---------|---------|-------------|
+| --- | --- | --- |
 | `enabled` | `true` | Master on/off switch |
 | `max_distance` | `2800` | Maximum visibility check distance (units) |
 | `max_traces_per_tick` | `3500` | Ray trace budget per server tick |
@@ -108,3 +107,18 @@ S2AW auto-generates a JSON config file on first load. Key settings:
 - S2AW uses **CounterStrikeSharp + Ray-Trace** only.
 - **CS2TraceRay** is not used.
 - Pawn-index filtering only — controller, scoreboard, and weapon entities are never filtered.
+
+---
+
+<details>
+<summary><b>🔨 Building from Source (Developers)</b></summary>
+
+**Build-time requirement:** `S2AW/libs/RayTraceApi.dll` must be present.
+
+```powershell
+dotnet build S2AW/S2AW.csproj -c Release -warnaserror
+```
+
+Output is placed under `S2AW/release/addons/counterstrikesharp/plugins/S2AW/`.
+
+</details>
