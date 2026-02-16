@@ -19,7 +19,7 @@ S2AW prevents wallhack cheats by **controlling which player entities are transmi
 
 The release package includes **everything needed** — S2AW plugin and all Ray-Trace dependencies.
 
-> **Prerequisite:** [CounterStrikeSharp](https://docs.cssharp.dev/) and [Metamod:Source](https://www.metamodsource.net/) must already be installed on your server.
+> **Prerequisite:** [CounterStrikeSharp](https://github.com/roflmuffin/CounterStrikeSharp) and [Metamod:Source](https://www.metamodsource.net/downloads.php/?branch=master) must already be installed on your server.
 
 ## 📦 Installation
 
