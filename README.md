@@ -30,16 +30,6 @@ S2AW prevents wallhack cheats by **controlling which player entities are transmi
 | RayTraceImpl plugin | `addons/counterstrikesharp/plugins/RayTraceImpl/RayTraceImpl.dll` |
 | RayTraceApi shared lib | `addons/counterstrikesharp/shared/RayTraceApi/RayTraceApi.dll` |
 
-### Build-time
-
-- `S2AW/libs/RayTraceApi.dll` must be present before building.
-
-## 🔨 Build
-
-```powershell
-dotnet build S2AW/S2AW.csproj -c Release -warnaserror
-```
-
 ## 📦 Installation
 
 1. Install the **Ray-Trace runtime bridge** files on the server (see table above).
