@@ -56,35 +56,35 @@ Config file is auto-created on first run at:
 
 | Key | Default | What it does |
 | --- | ------- | ------------ |
-| `enabled` | `true` | Turns the plugin on or off |
-| `hide_teammates` | `true` | Also hides teammates from each other. Turn off for casual or deathmatch |
-| `max_distance` | `5000` | How far (in game units) to check for enemies. Enemies beyond this are always visible |
-| `max_traces_per_tick` | `3500` | How many ray-trace checks are allowed per tick. Higher = more accurate but more CPU |
-| `peek_eye_offset` | `28.0` | Helps prevent enemies "popping in" when you peek corners. Set to `0` to disable |
+| `enabled` | `true` | Turns the entire plugin on or off |
+| `hide_teammates` | `true` | Whether teammates are hidden from each other too. Turn this off for casual or deathmatch servers |
+| `max_distance` | `5000` | How far away the plugin will check for enemies. Players beyond this distance are always visible |
+| `max_traces_per_tick` | `3500` | Controls how many visibility checks can happen each tick. Higher values are more accurate but use more CPU |
+| `peek_eye_offset` | `28.0` | Helps prevent the "pop-in" effect when peeking around corners. Set to `0` to turn this off |
 
 ### Fine-Tuning
 
 | Key | Default | What it does |
 | --- | ------- | ------------ |
-| `tick_divider` | `1` | Run checks every Nth tick. Set to `2` if your server struggles with performance |
-| `max_viewers_per_tick` | `64` | How many players get checked each tick. Lower = less CPU but slower updates |
-| `visibility_grace_ticks` | `4` | After an enemy becomes visible, keep them visible for a few extra ticks to prevent flickering |
-| `reveal_sync_ticks` | `12` | When a hidden enemy is revealed, give extra visibility time so they don't flash in and out |
-| `expanded_box_scale_xy` | `3.0` | Makes the invisible zone around players smaller (wider check area = fewer missed peeks) |
-| `expanded_box_scale_z` | `1.5` | Same as above but for height |
-| `sample_budget` | `2` | How many points on the enemy model to check per target. More = more accurate, more CPU |
-| `first_pass_budget` | `1` | Quick-check points before going deeper. If the first one hits, skip the rest |
+| `tick_divider` | `1` | How frequently the plugin runs visibility checks. Set to `2` to check every other tick and save CPU |
+| `max_viewers_per_tick` | `64` | The maximum number of players that get their visibility calculated each tick |
+| `visibility_grace_ticks` | `4` | How many extra ticks a visible enemy stays visible. Prevents enemies from flickering in and out |
+| `reveal_sync_ticks` | `12` | Extra time given when a hidden enemy first becomes visible, so they smoothly appear |
+| `expanded_box_scale_xy` | `3.0` | How wide the area checked around each player is. Larger values mean fewer missed peeks but less hiding |
+| `expanded_box_scale_z` | `1.5` | Same as above but controls the height of the checked area |
+| `sample_budget` | `2` | How many points on each enemy are checked for visibility. More points are more accurate but cost more CPU |
+| `first_pass_budget` | `1` | How many quick checks to do first. If any of them see the enemy, the rest are skipped |
 
 ### Other
 
 | Key | Default | What it does |
 | --- | ------- | ------------ |
-| `ignore_bots` | `false` | If on, bots will always be visible (saves CPU) |
-| `process_bot_viewers` | `true` | If off, bots won't get their own visibility checks (saves CPU) |
-| `enforce_fov_check` | `true` | Skip checking enemies that are behind the viewer's back |
-| `fov_dot_threshold` | `-0.20` | How wide the "behind your back" zone is. Default covers about 192° in front |
-| `round_start_fail_open_ms` | `500` | Everyone is visible for this many milliseconds after round start |
-| `raytrace_retry_ticks` | `128` | How often to try reconnecting if the ray-trace system goes down |
+| `ignore_bots` | `false` | When turned on, bots are always visible to everyone. Saves some CPU on bot-heavy servers |
+| `process_bot_viewers` | `true` | When turned off, bots don't get their own visibility calculations. Saves CPU |
+| `enforce_fov_check` | `true` | Skips checking enemies that are behind the player's back, since they can't see them anyway |
+| `fov_dot_threshold` | `-0.20` | Controls how wide the field of view check is. The default covers roughly 192° in front of the player |
+| `round_start_fail_open_ms` | `500` | After each round starts, everyone is visible for this many milliseconds to let the game stabilize |
+| `raytrace_retry_ticks` | `128` | If the ray-trace system disconnects, how often the plugin tries to reconnect |
 
 ---
 
