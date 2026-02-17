@@ -1,113 +1,138 @@
-# S2AW (Source 2 Anti-Wallhack)
+# 🛡️ S2AW — Source 2 Anti-Wallhack
 
-S2AW is a CounterStrikeSharp plugin for CS2 servers.
-It reduces wallhack advantage by filtering pawn transmit per viewer using Ray-Trace LOS checks.
+> **Counter-Strike 2 için sunucu taraflı anti-wallhack eklentisi**  
+> CounterStrikeSharp + Ray-Trace bridge ile, oyuncu görünürlüğünü viewer bazlı yönetir.
 
-- If target is visible for a viewer: pawn is transmitted.
-- If target is not visible: target pawn index is removed for that viewer in `CheckTransmit`.
-- S2AW does not directly remove controller/scoreboard/weapon entities.
+---
 
-## Runtime Requirements
+## ✨ Ne Yapar?
 
-S2AW uses the official Ray-Trace bridge path (no CS2TraceRay fallback):
+S2AW, her viewer için her target pawn’ı değerlendirir:
+
+- 👀 **Görünürse:** Pawn normal şekilde transmit edilir.
+- 🧱 **LOS dışındaysa:** Sadece o viewer için target pawn index’i transmit listesinden çıkarılır.
+- 🧩 **Yan entity’ler (controller/scoreboard/weapon):** Doğrudan filtrelenmez.
+
+Bu sayede wallhack avantajı azalır; sunucu stabilitesi için fail-open güvenliği korunur.
+
+---
+
+## 🔧 Zorunlu Bileşenler
+
+S2AW yalnızca resmi Ray-Trace bridge yolunu kullanır.  
+**CS2TraceRay fallback yoktur.**
 
 - Metamod:Source
 - CounterStrikeSharp
-- Ray-Trace native module
-- RayTraceImpl plugin
-- RayTraceApi shared assembly
+- Ray-Trace (native)
+- RayTraceImpl (CS# plugin)
+- RayTraceApi (shared assembly)
 
-Expected server layout:
+### Beklenen Sunucu Dizilimi
 
-- `addons/metamod/RayTrace.vdf`
-- `addons/RayTrace/bin/win64/RayTrace.dll`
-- `addons/RayTrace/gamedata.json`
-- `addons/counterstrikesharp/plugins/RayTraceImpl/*`
-- `addons/counterstrikesharp/shared/RayTraceApi/*`
-- `addons/counterstrikesharp/plugins/S2AW/S2AW.dll`
+```text
+csgo/addons/
+├── metamod/
+│   └── RayTrace.vdf
+├── RayTrace/
+│   ├── bin/win64/RayTrace.dll
+│   └── gamedata.json
+└── counterstrikesharp/
+    ├── plugins/
+    │   ├── RayTraceImpl/
+    │   └── S2AW/S2AW.dll
+    └── shared/
+        └── RayTraceApi/
+```
 
-## Build
+---
+
+## 🏗️ Build
 
 ```bash
 dotnet build S2AW/S2AW.csproj -c Release -warnaserror
 ```
 
-## Core Runtime Flow
+---
 
-1. `OnTick` builds active players and target expanded AABB snapshots.
-2. Viewers are processed with motion priority and adaptive per-tick limits.
-3. Per viewer-target relation:
-   - no-trace gates run first (team, cache, distance, FOV, static carry/stagger)
-   - trace path runs only when needed
-4. Hidden pawn list is committed per viewer.
-5. `CheckTransmit` removes only hidden pawn indices for that viewer.
+## 🧠 Çalışma Akışı
 
-## Performance Model
+1. `OnTick` aktif oyuncuları ve target expanded AABB snapshot’larını oluşturur.
+2. Viewer’lar motion-priority + adaptif batch ile sıralanır.
+3. Her viewer-target ilişkisinde önce ucuz gate’ler (cache, distance, FOV, stagger/carry) çalışır.
+4. Gerekirse LOS trace yapılır.
+5. Hidden pawn listesi viewer slotu için commit edilir.
+6. `CheckTransmit`, ilgili viewer için sadece hidden pawn index’lerini çıkarır.
 
-S2AW is optimized to reduce trace pressure:
+---
 
-- Per-tick trace budget (`max_traces_per_tick`)
-- Load-aware budget and distance shaping
-  - mid load: ~75% budget, ~85% distance envelope
-  - heavy load: ~60% budget, ~70% distance envelope
-- Per-viewer fair-share trace budget
-- Relation cache (`hidden`, `grace`, `next-evaluate`)
-- Static relation carry and far/mid deterministic stagger
-- Motion-priority effect limited by distance
-- Small bounded LOS sample set (`base <= 3`)
-- Assist limits
-  - low-load only
-  - hidden + priority relations only
-  - one assist attempt per viewer per tick
-  - strict global assist budget cap
-- Round-start fail-open warmup for state stabilization
+## ⚡ Performans Modeli (Özet)
 
-Design choice: when Ray-Trace is unavailable or budget is exhausted, S2AW fail-opens for gameplay stability.
+S2AW trace maliyetini agresif biçimde düşürmek için:
 
-## Main Config Keys
+- 🎯 Tick başına global trace budget (`max_traces_per_tick`)
+- 📉 Yüke göre adaptif budget/distance
+  - mid load: ~%75 budget, ~%85 distance
+  - heavy load: ~%60 budget, ~%70 distance
+- 🧮 Viewer başına fair-share trace bölüşümü
+- 🗂️ Relation cache (`hidden`, `grace`, `next-evaluate`)
+- 🧊 Static carry + deterministic far/mid stagger (no-trace tekrar kullanım)
+- 📏 Motion-priority etkisini mesafe ile sınırlama
+- 📌 Küçük ve sabit sample set (`base <= 3`)
+- 👁️ PeekAssist kısıtları
+  - sadece low-load
+  - sadece hidden + priority relation
+  - viewer başına tick’te en fazla 1 assist denemesi
+  - global assist budget limiti
+- ⏱️ Round başlangıcında kısa fail-open warmup (`round_start_fail_open_ms`)
 
-- `enabled`
-- `ignore_bots`
-- `process_bot_viewers`
-- `hide_teammates`
-- `tick_divider`
-- `max_viewers_per_tick`
-- `max_distance`
-- `visibility_grace_ticks`
-- `reveal_sync_ticks`
-- `enforce_fov_check`
-- `fov_dot_threshold`
-- `max_traces_per_tick`
-- `raytrace_retry_ticks`
-- `expanded_box_scale_xy`
-- `expanded_box_scale_z`
-- `sample_budget`
-- `first_pass_budget`
-- `peek_eye_offset`
-- `round_start_fail_open_ms`
+---
 
-## Current Defaults
+## ⚙️ Config Anahtarları
 
-- `enabled=true`
-- `ignore_bots=false`
-- `process_bot_viewers=true`
-- `hide_teammates=true`
-- `tick_divider=1`
-- `max_viewers_per_tick=64`
-- `max_distance=5000`
-- `visibility_grace_ticks=4`
-- `reveal_sync_ticks=12`
-- `max_traces_per_tick=3500`
-- `expanded_box_scale_xy=3.0`
-- `expanded_box_scale_z=1.5`
-- `sample_budget=2`
-- `first_pass_budget=1`
-- `peek_eye_offset=28.0`
-- `round_start_fail_open_ms=500`
+| Anahtar | Varsayılan | Açıklama |
+|---|---:|---|
+| `enabled` | `true` | Eklenti aktif/pasif |
+| `ignore_bots` | `false` | Botları hedef olarak yok say |
+| `process_bot_viewers` | `true` | Botlar viewer olarak işlensin mi |
+| `hide_teammates` | `true` | Takım arkadaşları da LOS dışındaysa gizlenebilir |
+| `tick_divider` | `1` | Kaç tickte bir değerlendirme yapılır |
+| `max_viewers_per_tick` | `64` | Tick başına işlenecek max viewer |
+| `max_distance` | `5000` | Bu mesafenin ötesi fail-open visible |
+| `visibility_grace_ticks` | `4` | Flicker azaltmak için görünürlük grace |
+| `reveal_sync_ticks` | `12` | Hidden→visible geçişte sync hold |
+| `enforce_fov_check` | `true` | FOV gate aktif/pasif |
+| `fov_dot_threshold` | `-0.20` | FOV dot eşiği |
+| `max_traces_per_tick` | `3500` | Tick trace bütçesi |
+| `raytrace_retry_ticks` | `128` | RayTrace reconnect deneme aralığı |
+| `expanded_box_scale_xy` | `3.0` | Expanded AABB XY ölçeği |
+| `expanded_box_scale_z` | `1.5` | Expanded AABB Z ölçeği |
+| `sample_budget` | `2` | Relation başına base sample bütçesi |
+| `first_pass_budget` | `1` | İlk hızlı örnekleme bütçesi |
+| `peek_eye_offset` | `28.0` | PeekAssist omuz offseti |
+| `round_start_fail_open_ms` | `500` | Round başı warmup fail-open süresi |
+| `debug_draw_traces` | `false` | Debug trace çizimi |
+| `debug_draw_expanded_aabb` | `false` | Debug AABB çizimi |
+| `debug_draw_interval_ms` | `1000` | Debug çizim throttle |
+| `debug_draw_max_beams` | `256` | Debug beam güvenlik limiti |
 
-## Commands
+---
 
-- `css_s2aw_status`
-- `css_s2aw_stats`
-- `css_s2aw_stats_reset`
+## 🖥️ Komutlar
+
+- `css_s2aw_status` → Durum ve aktif runtime bilgisi
+- `css_s2aw_stats` → Son tick ortalamaları ve yük göstergeleri
+- `css_s2aw_stats_reset` → Stats geçmişini sıfırlar
+
+---
+
+## 🚑 Notlar
+
+- Ray-Trace backend yoksa veya trace budget dolarsa sistem **fail-open** davranır.
+- Bu tasarım, gameplay stabilitesini korumak için bilinçli tercihtir.
+- 32-slot yoğun sunucularda ilk tuning sırası:
+  1. `ignore_bots` / `process_bot_viewers`
+  2. `max_traces_per_tick`
+  3. `sample_budget` + `first_pass_budget`
+  4. `peek_eye_offset`
 
