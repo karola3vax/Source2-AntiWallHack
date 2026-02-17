@@ -2,7 +2,7 @@
 
 A server-side visibility plugin for Counter-Strike 2, built on CounterStrikeSharp.
 
----
+> ⚠️ **Windows only** — S2AW and its Ray-Trace dependency are currently Windows server builds only. Linux is not supported.
 
 S2AW prevents wallhack cheats by **controlling which player entities are transmitted** to each viewer. If a target cannot be seen through legitimate line-of-sight, their pawn entity is removed from the network snapshot — the cheat never receives the data in the first place.
 
@@ -91,7 +91,7 @@ S2AW auto-generates a JSON config file on first load. Key settings:
 | Setting | Default | Description |
 | --- | --- | --- |
 | `enabled` | `true` | Master on/off switch |
-| `max_distance` | `2800` | Maximum visibility check distance (units) |
+| `max_distance` | `5000` | Maximum visibility check distance (units) |
 | `max_traces_per_tick` | `3500` | Ray trace budget per server tick |
 | `max_viewers_per_tick` | `64` | Max viewers to process per tick |
 | `visibility_grace_ticks` | `4` | Ticks to keep a target visible after losing LOS |
@@ -99,13 +99,21 @@ S2AW auto-generates a JSON config file on first load. Key settings:
 | `expanded_box_scale_z` | `1.5` | Vertical AABB expansion multiplier |
 | `sample_budget` | `12` | Max sample points per target AABB |
 | `enforce_fov_check` | `true` | Skip targets outside viewer's FOV |
-| `ignore_bots` | `false` | Whether to skip bots as targets |
+| `ignore_bots` | `true` | Whether to skip bots as targets |
 | `hide_teammates` | `true` | Whether to evaluate teammates for hiding |
+
+**Debug / visualization settings:**
+
+| Setting | Default | Description |
+| --- | --- | --- |
+| `debug_draw_traces` | `false` | Draw ray-trace beams in-game (visible to all players) |
+| `debug_draw_expanded_aabb` | `false` | Draw expanded AABB bounding boxes around targets |
+| `debug_draw_interval_ms` | `1000` | Minimum milliseconds between debug draw updates |
+| `debug_draw_max_beams` | `256` | Maximum debug beam entities per round (prevents entity exhaustion) |
 
 ## 📜 Policy
 
 - S2AW uses **CounterStrikeSharp + Ray-Trace** only.
-- **CS2TraceRay** is not used.
 - Pawn-index filtering only — controller, scoreboard, and weapon entities are never filtered.
 
 ---
