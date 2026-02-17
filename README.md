@@ -63,7 +63,7 @@ csgo/
 │   └── RayTrace/
 │       ├── bin/
 │       │   └── win64/
-│       │       └── RayTrace.dll          (or linuxsteamrt64/RayTrace.so)
+│       │       └── RayTrace.dll
 │       └── gamedata.json
 ```
 
@@ -77,7 +77,7 @@ csgo/
     └── counterstrikesharp/
         ├── plugins/
         │   └── RayTraceImpl/
-        │       └── RayTraceImpl.dll      (+ dependencies)
+        │       └── RayTraceImpl.dll        (+ dependencies)
         └── shared/
             └── RayTraceApi/
                 └── RayTraceApi.dll
@@ -105,6 +105,8 @@ Ray-Trace capability connected.
 ```
 
 Run `css_s2aw_status` in the server console to confirm everything is active.
+
+> **Note:** S2AW currently supports **Windows servers only**.
 
 ---
 
@@ -281,7 +283,7 @@ S2AW always defaults to **visible** on any error:
 **Fix:**
 
 1. Verify `RayTrace.vdf` is in `addons/metamod/`
-2. Verify `RayTrace.dll` (or `.so`) is in `addons/RayTrace/bin/win64/` (or `linuxsteamrt64/`)
+2. Verify `RayTrace.dll` is in `addons/RayTrace/bin/win64/`
 3. Verify `RayTraceImpl.dll` is in `addons/counterstrikesharp/plugins/RayTraceImpl/`
 4. Verify `RayTraceApi.dll` is in `addons/counterstrikesharp/shared/RayTraceApi/`
 5. Restart the server (hot-reload may not initialize the native module)
@@ -328,4 +330,4 @@ A: On a typical 10v10 server, S2AW uses ~1200 traces/tick out of the default 350
 A: Yes. 5v5 is the lightest workload. Default settings work well without any tuning.
 
 **Q: Does S2AW work on Linux servers?**  
-A: Yes, as long as the Ray-Trace native module has a Linux build (`RayTrace.so` in `linuxsteamrt64/`).
+A: Not currently. S2AW only supports Windows servers at this time.
