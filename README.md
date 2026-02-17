@@ -34,7 +34,7 @@ You need these installed on your Windows dedicated server **before** adding S2AW
 
 | Dependency | Where to get it |
 | --- | --- |
-| **Metamod:Source** | [Download (master branch)](https://www.metamodsource.net/downloads.php/?branch=master) |
+| **Metamod:Source** | [Download (Dev Build)](https://www.metamodsource.net/downloads.php/?branch=master) |
 | **CounterStrikeSharp** | [GitHub releases](https://github.com/roflmuffin/CounterStrikeSharp) |
 
 ## 📦 Installation
@@ -72,7 +72,7 @@ addons/
 After the server starts, open the server console and run:
 
 ```text
-css_s2aw_selftest
+css_s2aw_status
 ```
 
 You should see a report showing `enabled=True` and `raytrace_ready=True`. If `raytrace_ready` is `False`, the Ray-Trace files may not be installed correctly.
@@ -85,7 +85,7 @@ All commands can be run from the **server console** or by an admin **in-game** (
 
 | Command | What it does |
 | --- | --- |
-| `css_s2aw_selftest` | Full diagnostic report — shows whether the plugin is active, Ray-Trace is connected, current config values, how many players are being tracked, and the bounds cache size |
+| `css_s2aw_status` | Full diagnostic report — shows whether the plugin is active, Ray-Trace is connected, current config values, how many players are being tracked, and the bounds cache size |
 | `css_s2aw_stats` | Performance dashboard — averaged over recent ticks, shows ray traces per tick, viewers processed per tick, how often the budget ran out, and how many viewers had to fail-open |
 | `css_s2aw_stats_reset` | Resets the stats counters to zero so you can start measuring from a clean slate |
 
