@@ -3,9 +3,9 @@
 <div align="center">
 
 ![Counter-Strike 2](https://img.shields.io/badge/Counter--Strike_2-Release-orange?style=for-the-badge&logo=counter-strike)
-![CounterStrikeSharp](https://img.shields.io/badge/CounterStrikeSharp-v256+-purple?style=for-the-badge)
-![Metamod](https://img.shields.io/badge/Metamod-Source-blue?style=for-the-badge)
-![Ray-Trace](https://img.shields.io/badge/Ray--Trace-Native-yellow?style=for-the-badge)
+![CounterStrikeSharp](https://img.shields.io/badge/CounterStrikeSharp-v362+-purple?style=for-the-badge)
+![Metamod](https://img.shields.io/badge/Metamod-1387+-blue?style=for-the-badge)
+![Ray-Trace](https://img.shields.io/badge/Ray--Trace-1.0.4+-yellow?style=for-the-badge)
 ![Release](https://img.shields.io/badge/Release-Alpha-red?style=for-the-badge)
 
 **High-performance server-side visibility culling for CS2.**
