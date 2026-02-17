@@ -69,7 +69,7 @@ Config file is auto-created on first run at:
 | `tick_divider` | `1` | How frequently the plugin runs visibility checks. Set to `2` to check every other tick and save CPU |
 | `max_viewers_per_tick` | `64` | The maximum number of players that get their visibility calculated each tick |
 | `visibility_grace_ticks` | `4` | How many extra ticks a visible enemy stays visible. Prevents enemies from flickering in and out |
-| `reveal_sync_ticks` | `12` | Extra time given when a hidden enemy first becomes visible, so they smoothly appear |
+| `reveal_sync_ticks` | `12` | When a hidden enemy becomes visible again, keeps them visible long enough for the game to sync their weapon data. Without this, their weapon can appear floating in the air |
 | `expanded_box_scale_xy` | `3.0` | How wide the area checked around each player is. Larger values mean fewer missed peeks but less hiding |
 | `expanded_box_scale_z` | `1.5` | Same as above but controls the height of the checked area |
 | `sample_budget` | `2` | How many points on each enemy are checked for visibility. More points are more accurate but cost more CPU |
@@ -83,7 +83,7 @@ Config file is auto-created on first run at:
 | `process_bot_viewers` | `true` | When turned off, bots don't get their own visibility calculations. Saves CPU |
 | `enforce_fov_check` | `true` | Skips checking enemies that are behind the player's back, since they can't see them anyway |
 | `fov_dot_threshold` | `-0.20` | Controls how wide the field of view check is. The default covers roughly 192° in front of the player |
-| `round_start_fail_open_ms` | `500` | After each round starts, everyone is visible for this many milliseconds to let the game stabilize |
+| `round_start_fail_open_ms` | `500` | Everyone is visible for this many milliseconds after each round starts, so the game can sync all pawn and weapon data before filtering begins |
 | `raytrace_retry_ticks` | `128` | If the ray-trace system disconnects, how often the plugin tries to reconnect |
 
 ---
@@ -98,17 +98,50 @@ Config file is auto-created on first run at:
 
 ---
 
-## 🏗️ How It Works
+## 🧠 Visibility Logic Flow
+
+S2AW decides visibility in this exact order. If any step says "Visible" or "Hidden", it stops there.
+
+1. **Round Start Check**
+    * Is the round just starting? (`round_start_fail_open_ms`)
+    * **Yes:** Force **VISIBLE** (allows full data sync).
+
+2. **Teammate Check**
+    * Is the target on the same team? (`hide_teammates` = false)
+    * **Yes:** Force **VISIBLE**.
+
+3. **Relation Cache (Zero-Cost)**
+    * Did we already decide this recently? (Grace period active or "check later" time not reached)
+    * **Yes:** Use cached result (Visible/Hidden).
+
+4. **Spatial Gates (Cheap)**
+    * Is target beyond max distance? (`max_distance`) → **VISIBLE** (fail-open for safety).
+    * Is target behind the viewer? (`enforce_fov_check`) → **HIDDEN**.
+
+5. **Ray-Trace (Expensive)**
+    * Check for line-of-sight using ray-tracing.
+    * **Hit:** Player is **VISIBLE**.
+        * *Apply Grade Period:*
+            * If player was previously *HIDDEN*, use `reveal_sync_ticks` (Weapon Sync).
+            * If player was already *VISIBLE*, use `visibility_grace_ticks` (Anti-Flicker).
+    * **Blocked:** Player is **HIDDEN**.
+
+---
+
+## 🏗️ Technical Architecture
 
 ```text
-Every tick:
- 1. Find all alive players
- 2. Build expanded hitboxes for each enemy
- 3. Pick which viewers to check (moving/turning players go first)
- 4. For each viewer × each enemy:
-    → Can this viewer see this enemy? (ray-trace check)
-    → If not visible → remove from transmit list
- 5. CheckTransmit: hidden enemies are stripped from the network data
+OnTick
+ ├─ Build player lists + target AABB snapshots
+ ├─ Detect movement (viewer turning/moving, target moving)
+ ├─ Select viewers (priority-first: moving/turning viewers go first)
+ │
+ └─ Per viewer × per target:
+     ├─ Check Logic Flow (above)
+     └─ Commit hidden list
+
+OnCheckTransmit
+ └─ Remove hidden pawn indices from viewer's transmit set
 ```
 
 **Safety first:** If anything goes wrong (ray-trace down, budget exhausted, any error), S2AW makes everyone visible. A bug will never make a legitimate player invisible.
