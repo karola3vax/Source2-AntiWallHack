@@ -1,132 +1,169 @@
 # 🛡️ S2AW — Source 2 Anti-Wallhack
 
-A server-side visibility plugin for Counter-Strike 2, built on CounterStrikeSharp.
+A server-side anti-wallhack plugin for Counter-Strike 2, powered by CounterStrikeSharp and Ray-Trace.
 
-> ⚠️ **Windows only** — S2AW and its Ray-Trace dependency are currently Windows server builds only. Linux is not supported.
+> ⚠️ **Windows only** — S2AW and its Ray-Trace dependency currently support Windows dedicated servers only. Linux is not supported.
 
-S2AW prevents wallhack cheats by **controlling which player entities are transmitted** to each viewer. If a target cannot be seen through legitimate line-of-sight, their pawn entity is removed from the network snapshot — the cheat never receives the data in the first place.
+---
 
-> **How it works:** Each tick, S2AW casts rays from every viewer's eye position toward an expanded bounding box around each target. Only targets with at least one unobstructed ray are transmitted. A grace period ensures smooth transitions when players move between cover.
+## 💡 What Does It Do?
+
+Wallhack cheats work by reading enemy positions from the game's network data. S2AW stops this at the source: if a player **can't physically see** an enemy through walls or obstacles, their entity data is **never sent** over the network. The cheat has nothing to read.
+
+Every server tick, S2AW:
+
+1. Builds an **expanded bounding box** around each player (larger than their actual model to account for peeking).
+2. Casts multiple **ray traces** from each viewer's eye to sample points on those boxes.
+3. If **no ray reaches** the target → the target's pawn is **removed from the network snapshot** for that viewer.
+4. A short **grace period** keeps players visible briefly after breaking line-of-sight, preventing jarring pop-in.
 
 ## ✨ Key Features
 
-- 🔍 **Expanded AABB sampling** — Multi-point traces against scaled bounding boxes prevent pop-in
-- ⚡ **Budgeted ray tracing** — Configurable per-tick trace limit protects server performance
-- 🔄 **Priority viewer system** — Players who moved or turned are processed first
-- 🕐 **Visibility grace period** — Brief delay before hiding prevents flicker at cover edges
-- 🛡️ **Fail-open design** — On budget exhaustion or backend unavailability, targets remain visible (no false concealment)
-- 🤖 **Bot support** — Configurable bot viewer/target processing
+- 🔍 **Expanded AABB sampling** — Multi-point traces against scaled bounding boxes prevent pop-in when players peek corners
+- ⚡ **Budgeted ray tracing** — Per-tick trace limit keeps server performance stable, even with many players
+- 🔄 **Priority viewer system** — Players who are actively moving or turning their camera are processed first
+- 🕐 **Visibility grace period** — Seconds of grace after losing sight prevent flicker at cover transitions
+- 🛡️ **Fail-open design** — If the system runs out of budget or the backend is unavailable, all players remain visible (no false concealment, no gameplay disruption)
+- 🤖 **Bot support** — Choose whether bots are tracked as targets, viewers, or both
 
-The release package includes **everything needed** — S2AW plugin and all Ray-Trace dependencies.
+---
 
-> **Prerequisite:** [CounterStrikeSharp](https://github.com/roflmuffin/CounterStrikeSharp) and [Metamod:Source](https://www.metamodsource.net/downloads.php/?branch=master) must already be installed on your server.
+## 📋 Prerequisites
+
+You need these installed on your Windows dedicated server **before** adding S2AW:
+
+| Dependency | Where to get it |
+| --- | --- |
+| **Metamod:Source** | [Download (master branch)](https://www.metamodsource.net/downloads.php/?branch=master) |
+| **CounterStrikeSharp** | [GitHub releases](https://github.com/roflmuffin/CounterStrikeSharp) |
 
 ## 📦 Installation
 
-1. Download the latest release.
-2. **Drag the `addons/` folder** into your server's `csgo/` (or `game/cs2/`) directory.
-3. Restart the server.
+The release package includes **S2AW + all Ray-Trace files** — nothing else to download.
 
-That's it — one folder, everything included:
+1. **Download** the latest S2AW release.
+2. **Drag the entire `addons/` folder** into your server's `game/csgo/` directory. If prompted, merge with the existing `addons/` folder.
+3. **Restart** the server.
+
+Done! The folder structure you're installing looks like this:
 
 ```text
 addons/
 ├─ metamod/
-│  └─ RayTrace.vdf              ← Metamod plugin descriptor
+│  └─ RayTrace.vdf              ← Registers RayTrace with Metamod
 ├─ RayTrace/
 │  ├─ bin/win64/RayTrace.dll    ← Native ray-trace engine
-│  └─ gamedata.json             ← Gamedata offsets
+│  └─ gamedata.json             ← Engine offset data
 └─ counterstrikesharp/
    ├─ plugins/
-   │  ├─ S2AW/                  ← Anti-wallhack plugin
+   │  ├─ S2AW/                  ← The anti-wallhack plugin
    │  │  ├─ S2AW.dll
    │  │  └─ S2AW.deps.json
-   │  └─ RayTraceImpl/          ← Managed ray-trace bridge
+   │  └─ RayTraceImpl/          ← Managed bridge to the native engine
    │     ├─ RayTraceImpl.dll
    │     └─ (dependencies)
    └─ shared/
-      └─ RayTraceApi/           ← Shared API contract
+      └─ RayTraceApi/           ← Shared API used by both plugins
          └─ RayTraceApi.dll
 ```
 
-## 🔬 Visibility Pipeline
+### ✅ Verifying It Works
+
+After the server starts, open the server console and run:
 
 ```text
-OnTick
- ├─ 1. Scan alive players → build active player list
- ├─ 2. Rebuild target snapshots (origin + expanded AABB per player)
- ├─ 3. Build viewer process order (priority: moved/turned viewers first)
- ├─ 4. For each viewer → for each target:
- │     ├─ Distance gate (closest point on AABB vs max_distance)
- │     ├─ FOV gate (AABB center vs viewer forward)
- │     ├─ Multi-sample ray traces against expanded AABB
- │     ├─ Any open trace → VISIBLE
- │     └─ Grace period check → may keep visible briefly
- └─ 5. Commit hidden pawn indices → applied in CheckTransmit
+css_s2aw_selftest
 ```
 
-## ⚡ Performance & Safety
-
-| Feature | Description |
-| --- | --- |
-| **Trace budget** | `max_traces_per_tick` caps total rays per tick to protect frame time |
-| **Viewer batching** | `max_viewers_per_tick` limits how many viewers are evaluated per tick |
-| **Fail-open on exhaustion** | Unprocessed viewers see all targets and are prioritized next tick |
-| **Viewer pose cache** | Eye position + forward vector cached per tick (avoids recomputation) |
-| **Bounds template cache** | AABB templates cached by collision bounds (cleared per round, capped at 64) |
-| **Debug beam budget** | `debug_draw_max_beams` prevents entity exhaustion from debug visualization |
-
-## 🎮 Commands
-
-| Command | Description |
-| --- | --- |
-| `css_s2aw_selftest` | Prints a full diagnostic report: plugin state, config values, Ray-Trace backend status, active player count, bounds cache size, and hidden viewer count |
-| `css_s2aw_stats` | Shows averaged performance metrics over recent ticks: traces used, viewers processed, budget exhaustion rate, aborted/fail-open viewer counts |
-| `css_s2aw_stats_reset` | Clears the stats history buffer, starting fresh metric collection from the current tick |
-
-## ⚙️ Configuration
-
-S2AW auto-generates a JSON config file on first load. Key settings:
-
-| Setting | Default | Description |
-| --- | --- | --- |
-| `enabled` | `true` | Master on/off switch |
-| `max_distance` | `5000` | Maximum visibility check distance (units) |
-| `max_traces_per_tick` | `3500` | Ray trace budget per server tick |
-| `max_viewers_per_tick` | `64` | Max viewers to process per tick |
-| `visibility_grace_ticks` | `4` | Ticks to keep a target visible after losing LOS |
-| `expanded_box_scale_xy` | `3.0` | Horizontal AABB expansion multiplier |
-| `expanded_box_scale_z` | `1.5` | Vertical AABB expansion multiplier |
-| `sample_budget` | `12` | Max sample points per target AABB |
-| `enforce_fov_check` | `true` | Skip targets outside viewer's FOV |
-| `ignore_bots` | `true` | Whether to skip bots as targets |
-| `hide_teammates` | `true` | Whether to evaluate teammates for hiding |
-
-**Debug / visualization settings:**
-
-| Setting | Default | Description |
-| --- | --- | --- |
-| `debug_draw_traces` | `false` | Draw ray-trace beams in-game (visible to all players) |
-| `debug_draw_expanded_aabb` | `false` | Draw expanded AABB bounding boxes around targets |
-| `debug_draw_interval_ms` | `1000` | Minimum milliseconds between debug draw updates |
-| `debug_draw_max_beams` | `256` | Maximum debug beam entities per round (prevents entity exhaustion) |
-
-## 📜 Policy
-
-- S2AW uses **CounterStrikeSharp + Ray-Trace** only.
-- Pawn-index filtering only — controller, scoreboard, and weapon entities are never filtered.
+You should see a report showing `enabled=True` and `raytrace_ready=True`. If `raytrace_ready` is `False`, the Ray-Trace files may not be installed correctly.
 
 ---
 
-<details>
-<summary><b>🔨 Building from Source (Developers)</b></summary>
+## 🎮 Console Commands
 
-**Build-time requirement:** `S2AW/libs/RayTraceApi.dll` must be present.
+All commands can be run from the **server console** or by an admin **in-game** (requires appropriate permissions):
 
-```powershell
-dotnet build S2AW/S2AW.csproj -c Release -warnaserror
+| Command | What it does |
+| --- | --- |
+| `css_s2aw_selftest` | Full diagnostic report — shows whether the plugin is active, Ray-Trace is connected, current config values, how many players are being tracked, and the bounds cache size |
+| `css_s2aw_stats` | Performance dashboard — averaged over recent ticks, shows ray traces per tick, viewers processed per tick, how often the budget ran out, and how many viewers had to fail-open |
+| `css_s2aw_stats_reset` | Resets the stats counters to zero so you can start measuring from a clean slate |
+
+---
+
+## ⚙️ Configuration
+
+S2AW **auto-generates** a JSON config file the first time it loads. You'll find it at:
+
+```text
+addons/counterstrikesharp/configs/plugins/S2AW/S2AW.json
 ```
 
-Output is placed under `S2AW/release/addons/counterstrikesharp/plugins/S2AW/`.
+Edit the file, then restart the server (or reload the plugin) for changes to take effect.
 
-</details>
+### Core Settings
+
+| Setting | Default | What it controls |
+| --- | --- | --- |
+| `enabled` | `true` | Master switch — set to `false` to disable all visibility filtering |
+| `max_distance` | `5000` | Players farther than this (in game units) are always visible — saves traces on large maps |
+| `max_traces_per_tick` | `3500` | Total ray traces allowed per server tick — higher = more accurate but costs more CPU |
+| `max_viewers_per_tick` | `64` | How many viewers to evaluate per tick — on 64+ player servers you may want to tune this |
+| `visibility_grace_ticks` | `4` | After losing line-of-sight, keep the target visible for this many ticks to prevent pop-in |
+| `expanded_box_scale_xy` | `3.0` | How much to expand the target's bounding box horizontally (wider = more generous visibility) |
+| `expanded_box_scale_z` | `1.5` | How much to expand vertically |
+| `sample_budget` | `12` | Max sample points checked per target — more points = better coverage but more traces used |
+| `first_pass_budget` | `4` | Samples checked in the fast first pass before falling back to full budget |
+| `enforce_fov_check` | `true` | Skip targets behind the viewer's back — saves traces with minimal risk |
+| `fov_dot_threshold` | `-0.20` | FOV cutoff (dot product). `-0.20` is very wide (~100°+ each side). Set lower to be more generous |
+| `tick_divider` | `1` | Process visibility every N-th tick. `1` = every tick, `2` = every other tick, etc. |
+
+### Player Filtering
+
+| Setting | Default | What it controls |
+| --- | --- | --- |
+| `ignore_bots` | `true` | Skip bot players as targets — they don't need wallhack protection |
+| `process_bot_viewers` | `true` | Whether bots get their own visibility evaluation (disable to save traces) |
+| `hide_teammates` | `true` | Whether teammates are candidates for hiding (disable if teammates should always be visible) |
+
+### Debug & Visualization
+
+These settings let you **see the plugin working** in-game. Useful for tuning or verifying on a test server.
+
+| Setting | Default | What it controls |
+| --- | --- | --- |
+| `debug_draw_traces` | `false` | Render ray-trace beams as visible laser lines in the game world |
+| `debug_draw_expanded_aabb` | `false` | Render the expanded bounding boxes around each player |
+| `debug_draw_interval_ms` | `1000` | How often debug visuals update (in milliseconds) — lower = more frequent updates |
+| `debug_draw_max_beams` | `256` | Max beam entities per round — prevents crashing the server with too many debug draws |
+
+> 💡 **Tip:** To visualize everything at once, set both `debug_draw_traces` and `debug_draw_expanded_aabb` to `true`, and lower `debug_draw_interval_ms` to `100` for real-time feedback. Remember to turn them off in production!
+
+---
+
+## 🔬 How It Works (Technical)
+
+For those who want to understand the internals:
+
+```text
+Every Server Tick:
+ ├─ 1. Scan all alive players → build active player list
+ ├─ 2. Rebuild target snapshots
+ │     Each player gets an expanded axis-aligned bounding box (AABB)
+ │     based on their collision bounds × scale config
+ ├─ 3. Build viewer processing order
+ │     Priority goes to players who moved or turned since last tick
+ ├─ 4. For each viewer → for each enemy target:
+ │     ├─ Distance check     — skip if target is beyond max_distance
+ │     ├─ FOV check          — skip if target is behind the viewer
+ │     ├─ Sample ray traces  — cast up to sample_budget rays at the
+ │     │                       expanded AABB (closest point first,
+ │     │                       then corners sorted by distance)
+ │     ├─ Any ray hits open air → target is VISIBLE
+ │     └─ All rays blocked → check grace period before hiding
+ └─ 5. Commit hidden pawn indices
+       Applied in CheckTransmit — hidden pawn entities are removed
+       from the network snapshot for that specific viewer
+```
+
+The system is designed to be **conservative** — when in doubt, targets stay visible. This prevents false concealment that players would notice as enemies appearing out of thin air.
