@@ -174,4 +174,3 @@ S2AW adapts to server load dynamically:
 | **22–29** | **Eco** | Reduces max distance by 15%, trace budget by 25%. |
 | **30+** | **Turbo** | Aggressive culling, reduced distance, focuses on near enemies. |
 
-*Designed for high-performance 128-tick simulations.*
