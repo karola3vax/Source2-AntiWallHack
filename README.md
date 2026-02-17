@@ -2,9 +2,11 @@
 
 <div align="center">
 
-![Counter-Strike 2](https://img.shields.io/badge/Counter--Strike%202-Released-orange?style=for-the-badge&logo=counter-strike)
-![Platform](https://img.shields.io/badge/Platform-Windows-blue?style=for-the-badge&logo=windows)
-![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)
+![Counter-Strike 2](https://img.shields.io/badge/Counter--Strike_2-Release-orange?style=for-the-badge&logo=counter-strike)
+![CounterStrikeSharp](https://img.shields.io/badge/CounterStrikeSharp-v256+-purple?style=for-the-badge)
+![Metamod](https://img.shields.io/badge/Metamod-Source-blue?style=for-the-badge)
+![Ray-Trace](https://img.shields.io/badge/Ray--Trace-Native-yellow?style=for-the-badge)
+![Release](https://img.shields.io/badge/Release-Alpha-red?style=for-the-badge)
 
 **High-performance server-side visibility culling for CS2.**
 *Blocks wallhacks by removing enemy data from the network stream before it reaches the client.*
@@ -173,4 +175,3 @@ S2AW adapts to server load dynamically:
 | **< 22** | **Full** | Max precision, full distance checks. |
 | **22–29** | **Eco** | Reduces max distance by 15%, trace budget by 25%. |
 | **30+** | **Turbo** | Aggressive culling, reduced distance, focuses on near enemies. |
-
