@@ -2,26 +2,23 @@
 
 **Server-side wallhack protection for Counter-Strike 2.**
 
-S2AW filters enemy player data before it reaches the client — wallhack software cannot display what was never sent.
+S2AW hides enemy players that are behind walls, floors, or obstacles — the data is removed before it reaches the client, so wallhack software has nothing to show.
 
-Each tick, S2AW checks line-of-sight from every viewer to every enemy using ray-tracing. Enemies behind walls are removed from the network transmit. Simple, effective, zero client-side changes.
-
-> ⚠️ **Windows servers only** · Requires [CounterStrikeSharp](https://github.com/roflmuffin/CounterStrikeSharp)
+> ⚠️ **Windows servers only**
 
 ---
 
 ## 📦 Installation
 
-### Prerequisites
+### What You Need
 
 | # | Component | Link |
 | - | --------- | ---- |
-| 1 | **Metamod:Source** (Dev Build) | [sourcemm.net](https://www.sourcemm.net/downloads.php?branch=dev) |
+| 1 | **Metamod:Source** (Dev Build) | [Download](https://www.sourcemm.net/downloads.php?branch=dev) |
 | 2 | **CounterStrikeSharp** | [GitHub](https://github.com/roflmuffin/CounterStrikeSharp) |
-| 3 | **Ray-Trace** native module | Included in release package |
-| 4 | **RayTraceImpl** plugin | Included in release package |
+| 3 | **Ray-Trace** | [GitHub](https://github.com/FUNPLAY-pro-CS2/Ray-Trace) · *Included in S2AW releases* |
 
-### Server File Layout
+### Where Files Go
 
 ```text
 csgo/addons/
@@ -43,48 +40,51 @@ csgo/addons/
 
 ### Verify
 
-Restart server → check console for `Ray-Trace capability connected.`
-Run **`css_s2aw_status`** to confirm.
+Restart server → look for `Ray-Trace capability connected.` in console.
+Type **`css_s2aw_status`** to confirm everything is running.
 
 ---
 
 ## ⚙️ Configuration
 
-Auto-generated at first load: `configs/plugins/S2AW/S2AW.json`
+Config file is auto-created on first run at:
+`configs/plugins/S2AW/S2AW.json`
 
-### Essential
+> 💡 **Most servers work great with defaults.** Only change these if you have a specific reason.
 
-| Key | Default | Description |
-| --- | ------- | ----------- |
-| `enabled` | `true` | Master switch |
-| `hide_teammates` | `true` | Hide same-team players (set `false` for casual/DM) |
-| `max_distance` | `5000` | LOS check range in units (300–5000) |
-| `max_traces_per_tick` | `3500` | Trace budget per tick (128–20000) |
-| `peek_eye_offset` | `28.0` | Shoulder-peek compensation in units (0–64, `0` = off) |
+### Important Settings
 
-### Tuning
+| Key | Default | What it does |
+| --- | ------- | ------------ |
+| `enabled` | `true` | Turns the plugin on or off |
+| `hide_teammates` | `true` | Also hides teammates from each other. Turn off for casual or deathmatch |
+| `max_distance` | `5000` | How far (in game units) to check for enemies. Enemies beyond this are always visible |
+| `max_traces_per_tick` | `3500` | How many ray-trace checks are allowed per tick. Higher = more accurate but more CPU |
+| `peek_eye_offset` | `28.0` | Helps prevent enemies "popping in" when you peek corners. Set to `0` to disable |
 
-| Key | Default | Description |
-| --- | ------- | ----------- |
-| `tick_divider` | `1` | Evaluate every Nth tick (1–16) |
-| `max_viewers_per_tick` | `64` | Max viewers per tick (1–64) |
-| `visibility_grace_ticks` | `4` | Keep visible for N extra ticks after LOS confirmed (0–32) |
-| `reveal_sync_ticks` | `12` | Extra grace on hidden→visible transition (0–32) |
-| `expanded_box_scale_xy` | `3.0` | Horizontal hitbox expansion (1.0–6.0) |
-| `expanded_box_scale_z` | `1.5` | Vertical hitbox expansion (1.0–6.0) |
-| `sample_budget` | `2` | Max sample points per target (1–3) |
-| `first_pass_budget` | `1` | Traces before early-exit (1–3) |
+### Fine-Tuning
+
+| Key | Default | What it does |
+| --- | ------- | ------------ |
+| `tick_divider` | `1` | Run checks every Nth tick. Set to `2` if your server struggles with performance |
+| `max_viewers_per_tick` | `64` | How many players get checked each tick. Lower = less CPU but slower updates |
+| `visibility_grace_ticks` | `4` | After an enemy becomes visible, keep them visible for a few extra ticks to prevent flickering |
+| `reveal_sync_ticks` | `12` | When a hidden enemy is revealed, give extra visibility time so they don't flash in and out |
+| `expanded_box_scale_xy` | `3.0` | Makes the invisible zone around players smaller (wider check area = fewer missed peeks) |
+| `expanded_box_scale_z` | `1.5` | Same as above but for height |
+| `sample_budget` | `2` | How many points on the enemy model to check per target. More = more accurate, more CPU |
+| `first_pass_budget` | `1` | Quick-check points before going deeper. If the first one hits, skip the rest |
 
 ### Other
 
-| Key | Default | Description |
-| --- | ------- | ----------- |
-| `ignore_bots` | `false` | Never hide bot pawns |
-| `process_bot_viewers` | `true` | Run visibility for bot viewers |
-| `enforce_fov_check` | `true` | Skip traces for out-of-FOV targets |
-| `fov_dot_threshold` | `-0.20` | FOV cutoff, `-0.20` ≈ 192° (-1.0–1.0) |
-| `round_start_fail_open_ms` | `500` | Grace period after round start (0–5000 ms) |
-| `raytrace_retry_ticks` | `128` | API reconnect interval (16–1024) |
+| Key | Default | What it does |
+| --- | ------- | ------------ |
+| `ignore_bots` | `false` | If on, bots will always be visible (saves CPU) |
+| `process_bot_viewers` | `true` | If off, bots won't get their own visibility checks (saves CPU) |
+| `enforce_fov_check` | `true` | Skip checking enemies that are behind the viewer's back |
+| `fov_dot_threshold` | `-0.20` | How wide the "behind your back" zone is. Default covers about 192° in front |
+| `round_start_fail_open_ms` | `500` | Everyone is visible for this many milliseconds after round start |
+| `raytrace_retry_ticks` | `128` | How often to try reconnecting if the ray-trace system goes down |
 
 ---
 
@@ -92,68 +92,62 @@ Auto-generated at first load: `configs/plugins/S2AW/S2AW.json`
 
 | Command | What it does |
 | ------- | ------------ |
-| `css_s2aw_status` | Config, Ray-Trace status, active players, hidden counts |
-| `css_s2aw_stats` | Avg traces/tick, budget utilization, health |
-| `css_s2aw_stats_reset` | Reset stats buffer |
+| `css_s2aw_status` | Shows current status: config, player count, what's hidden |
+| `css_s2aw_stats` | Shows performance numbers: how many traces per tick, health indicator |
+| `css_s2aw_stats_reset` | Clears the stats history |
 
 ---
 
 ## 🏗️ How It Works
 
 ```text
-OnTick
- ├─ Build player lists + target AABB snapshots
- ├─ Detect movement (viewer turning/moving, target moving)
- ├─ Select viewers (priority-first: moving/turning viewers go first)
- │
- └─ Per viewer × per target:
-     ├─ Skip: teammate / cached result / out of range / out of FOV
-     ├─ IsVisibleExpandedAabb() → ray-trace sample points
-     └─ IsVisibleWithPeekAssist() → shoulder offset check
-         └─ Commit hidden list
-
-OnCheckTransmit
- └─ Remove hidden pawn indices from viewer's transmit set
+Every tick:
+ 1. Find all alive players
+ 2. Build expanded hitboxes for each enemy
+ 3. Pick which viewers to check (moving/turning players go first)
+ 4. For each viewer × each enemy:
+    → Can this viewer see this enemy? (ray-trace check)
+    → If not visible → remove from transmit list
+ 5. CheckTransmit: hidden enemies are stripped from the network data
 ```
 
-**Safety:** Every error path defaults to **visible** (fail-open). A bug will never hide a legitimate player.
+**Safety first:** If anything goes wrong (ray-trace down, budget exhausted, any error), S2AW makes everyone visible. A bug will never make a legitimate player invisible.
 
 ---
 
 ## 📈 Performance
 
-S2AW auto-scales based on player count:
+S2AW automatically reduces work when the server is busy:
 
-| Players | Trace Budget | Distance | Notes |
-| ------- | ------------ | -------- | ----- |
-| < 22 | 100% | 100% | Full evaluation |
-| 22–29 | 75% | 85% | Medium load-shedding |
-| ≥ 30 | 60% | 70% | Heavy load-shedding |
+| Players | Effect |
+| ------- | ------ |
+| Under 22 | Full speed |
+| 22–29 | Reduced range and budget |
+| 30+ | Aggressive throttling |
 
-Most viewer-target pairs **skip traces entirely** via:
-team check → relation cache → distance gate → FOV gate → static carry → deterministic stagger
+Most checks are **free** — teammates, cached results, faraway enemies, and enemies behind you are all skipped without any ray-trace.
 
-Typical 10v10: ~1200 traces/tick out of 3500 budget (~35% utilization).
+Typical 10v10: ~35% of the trace budget used.
 
 ---
 
 ## 🔧 Troubleshooting
 
 **"Ray-Trace capability unavailable"**
-→ RayTrace module or RayTraceImpl plugin not loaded. Verify all files are in place and restart the server.
+→ Ray-Trace files are missing or not loaded. Check that all files are in the right folders and restart the server.
 
-**"trace budget reached this tick"**
-→ Informational. S2AW auto-recovers by fail-opening remaining viewers. If constant, increase `max_traces_per_tick`.
+**"trace budget reached"**
+→ Normal on busy servers. S2AW handles it automatically. If constant, increase `max_traces_per_tick`.
 
-**Players report pop-in**
-→ Increase `peek_eye_offset` (max 64), `visibility_grace_ticks`, or `expanded_box_scale_xy`.
+**Enemies pop in when peeking corners**
+→ Increase `peek_eye_offset` (try 40–64). Also try increasing `visibility_grace_ticks`.
 
 **High CPU usage**
-→ Increase `tick_divider` to 2, or lower `max_traces_per_tick`. Check `css_s2aw_stats`.
+→ Set `tick_divider` to `2` or lower `max_traces_per_tick`. Run `css_s2aw_stats` to check load.
 
 ---
 
-## 🔨 Build
+## 🔨 Build from Source
 
 ```bash
 dotnet build S2AW/S2AW.csproj -c Release -warnaserror
@@ -163,11 +157,11 @@ dotnet build S2AW/S2AW.csproj -c Release -warnaserror
 
 ## ❓ FAQ
 
-**Does S2AW completely block wallhacks?**
-S2AW removes enemy pawn data from the network stream. Wallhack software can't show what wasn't sent. Some indirect info (radar, sound) is outside S2AW's scope.
+**Does this completely stop wallhacks?**
+S2AW removes enemy model data from the network. Wallhacks can't show players that were never sent. Some indirect info (radar blips, sound) is outside S2AW's scope.
 
-**Does it affect legitimate players?**
-No. Expanded hitboxes + fail-open design + grace ticks ensure no legitimate play is affected.
+**Will legitimate players notice anything?**
+No. The safety margins are generous, and any error defaults to "show the player."
 
-**Works on 5v5 competitive?**
-Yes. 5v5 is the lightest workload, default config works perfectly.
+**Works for 5v5?**
+Yes, 5v5 is the easiest workload. Defaults work perfectly.
