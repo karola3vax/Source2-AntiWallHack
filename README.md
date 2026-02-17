@@ -6,28 +6,28 @@
 ![Platform](https://img.shields.io/badge/Platform-Windows-blue?style=for-the-badge&logo=windows)
 ![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)
 
-**High-performance server-side visibility culling for CS2.**  
+**High-performance server-side visibility culling for CS2.**
 *Blocks wallhacks by removing enemy data from the network stream before it reaches the client.*
 
-[Installation](#-installation) • [Configuration](#-configuration) • [How It Works](#-how-it-works) • [Support](#-troubleshooting)
+[Installation](#installation) • [Configuration](#configuration) • [How It Works](#how-it-works) • [Support](#troubleshooting)
 
 </div>
 
 ---
 
-## ✨ Features
+## Features
 
-- **True Anti-Wallhack:** Enemies behind walls are **physically removed** from the packet. Cheats cannot see what isn't there.
+- **True Anti-Wallhack:** Enemies behind walls are physically removed from the packet. Cheats cannot see what isn't there.
 - **Fail-Open Safety:** Defaults to "Visible" on any error or budget overflow. Legit gameplay is never compromised.
 - **Smart Performance:**
-  - 🧠 **Caches** visibility results to skip redundant checks.
-  - 📉 **Load-Shedding** automatically reduces range/precision when server FPS drops or player count spikes.
-  - 🏎️ **Optimized** for 64-player servers (adaptive batching).
+  - **Caches** visibility results to skip redundant checks.
+  - **Load-Shedding** automatically reduces range/precision when server FPS drops or player count spikes.
+  - **Optimized** for 64-player servers (adaptive batching).
 - **Peek Compensation:** Special logic to prevent "pop-in" when enemies peek corners.
 
 ---
 
-## 📦 Installation
+## Installation
 
 ### 1. Requirements
 
@@ -70,50 +70,50 @@ Type `css_s2aw_status` in the server console to verify S2AW is running.
 
 ---
 
-## 🏗️ How It Works (The Logic Flow)
+## How It Works (The Logic Flow)
 
 Every tick, S2AW decides if Player A can see Player B. The decision happens in this **exact order**:
 
-### 1. 🏁 Round Start (Global Sync)
+### 1. Round Start (Global Sync)
 >
-> **Is the round just starting?**  
+> **Is the round just starting?**
 > If YES (`round_start_fail_open_ms`), everyone is **VISIBLE**.
 > *Why? Ensures all player and weapon data is fully synced to clients before we start hiding things.*
 
-### 2. 🤝 Game Rules
+### 2. Game Rules
 >
-> **Are they teammates?**  
+> **Are they teammates?**
 > If YES (`hide_teammates` = false), they are **VISIBLE**.
 
-### 3. 🧠 Smart Caching (Zero Cost)
+### 3. Smart Caching (Zero Cost)
 >
-> **Did we check this recently?**  
+> **Did we check this recently?**
 > If YES, use the cached result (Visible/Hidden) without running a new trace.
 
-### 4. 📐 Spatial Gates (Cheap Checks)
+### 4. Spatial Gates (Cheap Checks)
 >
-> **Is the target too far?** (`max_distance`) → **VISIBLE** (Safety).  
+> **Is the target too far?** (`max_distance`) → **VISIBLE** (Safety).
 > **Is the target behind us?** (`enforce_fov_check`) → **HIDDEN**.
 
-### 5. 🔦 Ray-Trace (Expensive)
+### 5. Ray-Trace (Expensive)
 >
-> **Is there a wall in the way?**  
-> We trace a line from Viewer Eye → Target Body.
+> **Is there a wall in the way?**
+> We trace a line from Viewer Eye to Target Body.
 >
 > - **BLOCKED:** Player is **HIDDEN**.
 > - **CLEAR:** Player is **VISIBLE**.
 >   - *Transition Logic:*
->     - **Hidden ➔ Visible:** We hold them visible for `reveal_sync_ticks` (e.g. 12 ticks) to let their weapon model sync.
->     - **Visible ➔ Visible:** We refresh the `visibility_grace_ticks` (e.g. 4 ticks) to prevent flickering if they briefly go behind a thin object.
+>     - **Hidden -> Visible:** We hold them visible for `reveal_sync_ticks` (e.g. 12 ticks) to let their weapon model sync.
+>     - **Visible -> Visible:** We refresh the `visibility_grace_ticks` (e.g. 4 ticks) to prevent flickering if they briefly go behind a thin object.
 
 ---
 
-## ⚙️ Configuration
+## Configuration
 
-The config file is generated automatically at:  
+The config file is generated automatically at:
 `addons/counterstrikesharp/configs/plugins/S2AW/S2AW.json`
 
-### 🔹 Essentials
+### Essentials
 
 | Setting | Default | Description |
 | :--- | :--- | :--- |
@@ -123,7 +123,7 @@ The config file is generated automatically at:
 | `max_traces_per_tick` | `3500` | **Performance Cap:** Higher = more accuracy, Lower = less CPU usage. |
 | `peek_eye_offset` | `28.0` | **Anti-Pop-in:** Checks visibility from a "virtual shoulder" to catch peeks early. |
 
-### 🔹 Tuning & Performance
+### Tuning & Performance
 
 | Setting | Default | Description |
 | :--- | :--- | :--- |
@@ -136,7 +136,7 @@ The config file is generated automatically at:
 
 ---
 
-## 📊 Commands
+## Commands
 
 | Command | Usage | Description |
 | :--- | :--- | :--- |
@@ -146,25 +146,25 @@ The config file is generated automatically at:
 
 ---
 
-## 🔧 Troubleshooting
+## Troubleshooting
 
-#### ❌ "Ray-Trace capability unavailable"
+#### "Ray-Trace capability unavailable"
 >
-> **Cause:** The native module isn't loaded.  
+> **Cause:** The native module isn't loaded.
 > **Fix:** Check that `RayTrace.dll` is in the correct folder and `RayTrace.vdf` is in `addons/metamod`. Restart server.
 
-#### ⚠️ "Trace budget reached this tick"
+#### "Trace budget reached this tick"
 >
-> **Cause:** Server is very busy (many players looking at many enemies).  
+> **Cause:** Server is very busy (many players looking at many enemies).
 > **Fix:** Normal behavior. S2AW "fails open" (shows players) when budget is hit to preserve FPS. If frequent, increase `max_traces_per_tick` or reduce `max_distance`.
 
-#### 👻 Enemies "pop in" when peeking
+#### Enemies "pop in" when peeking
 >
 > **Fix:** Increase `peek_eye_offset` (try 40.0) or `expanded_box_scale_xy`.
 
 ---
 
-## 📈 Performance Scaling
+## Performance Scaling
 
 S2AW adapts to server load dynamically:
 
