@@ -121,20 +121,42 @@ The config file is generated automatically at:
 | :--- | :--- | :--- |
 | `enabled` | `true` | Master switch for the plugin. |
 | `hide_teammates` | `true` | Set `false` for Casual/DM servers where teammates should see each other. |
-| `max_distance` | `5000` | Max distance (units) to process. Enemies further away are always visible. |
-| `max_traces_per_tick` | `3500` | **Performance Cap:** Higher = more accuracy, Lower = less CPU usage. |
+| `ignore_bots` | `false` | If `true`, bots are always visible (saves CPU on bot matches). |
+| `process_bot_viewers` | `true` | If `false`, bots do not run visibility checks (they see everyone). |
 | `peek_eye_offset` | `28.0` | **Anti-Pop-in:** Checks visibility from a "virtual shoulder" to catch peeks early. |
 
-### Tuning & Performance
+### Performance Tuning
 
 | Setting | Default | Description |
 | :--- | :--- | :--- |
 | `tick_divider` | `1` | Run checks every N ticks. Set to `2` on weak CPU servers. |
 | `max_viewers_per_tick` | `64` | Max players processed per tick. |
-| `expanded_box_scale_xy` | `3.0` | **Safety Margin:** Makes the target hitbox wider effectively "shrinking" walls. |
+| `max_traces_per_tick` | `3500` | **Hard Cap:** Max ray-traces allowed per tick before fail-open. |
+| `max_distance` | `5000` | Enemies further than this (units) are always visible. |
+| `raytrace_retry_ticks` | `128` | Internal buffer size for ray-trace retries (Advanced). |
+
+### Visibility Logic
+
+| Setting | Default | Description |
+| :--- | :--- | :--- |
 | `visibility_grace_ticks` | `4` | **Anti-Flicker:** Keeps a player visible for X ticks after losing LOS. |
 | `reveal_sync_ticks` | `12` | **Weapon Sync:** Keeps a newly revealed player visible longer so their weapon doesn't float. |
 | `round_start_fail_open_ms`| `500` | **Warmup:** Time (ms) after round start where everyone is visible. |
+| `enforce_fov_check` | `true` | Optimize by skipping checks for enemies behind the player. |
+| `fov_dot_threshold` | `-0.2` | FOV tolerance. Lower values = wider field of view check. |
+
+### Advanced & Debug
+
+| Setting | Default | Description |
+| :--- | :--- | :--- |
+| `expanded_box_scale_xy` | `3.0` | Horizontal hitbox expansion factor for safety. |
+| `expanded_box_scale_z` | `1.5` | Vertical hitbox expansion factor. |
+| `sample_budget` | `2` | Max visibility points to check per target per tick. |
+| `first_pass_budget` | `1` | Points to check in the first reliable pass. |
+| `debug_draw_traces` | `false` | Visualizes visibility rays (Requires high server FPS). |
+| `debug_draw_expanded_aabb`| `false` | Visualizes the expanded safety hitboxes. |
+| `debug_draw_interval_ms` | `1000` | How often debug visuals update. |
+| `debug_draw_max_beams` | `256` | Limit on debug beams to prevent crash. |
 
 ---
 
