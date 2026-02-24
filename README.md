@@ -116,9 +116,9 @@ The amount of players on your server highly impacts the calculations of S2AWH th
 | Key | Default | Description |
 | :--- | :--- | :--- |
 | `Diagnostics.ShowDebugInfo` | `true` | Enable console log output. |
-| `Diagnostics.DrawDebugTraceBeams` | `false` | Enable visual ray drawing (Testing only). |
-| `Diagnostics.DrawDebugTraceBeamsForHumans` | `true` | Draw rays for human players. |
-| `Diagnostics.DrawDebugTraceBeamsForBots` | `true` | Draw rays for bot players. |
+| `Diagnostics.DrawDebugTraceBeams` | `false` | Enables the visualization for rays. Only for debugging. |
+| `Diagnostics.DrawDebugTraceBeamsForHumans` | `true` | Draw rays cast from human players. |
+| `Diagnostics.DrawDebugTraceBeamsForBots` | `true` | Draw rays cast from bot players. |
 
 </details>
 
