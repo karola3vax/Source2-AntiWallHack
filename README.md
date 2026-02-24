@@ -37,10 +37,13 @@
 
 ![Ray-Trace Installation Guide](https://raw.githubusercontent.com/karola3vax/server-assets/refs/heads/main/Screenshot_1.png)
 
-4. Download the latest release from **Releases** and extract its contents into your server directory.
-5. Start the server. The config will generate automatically in `\addons\counterstrikesharp\configs\plugins\S2AWH\S2AWH.json`
+1. Download the latest release from **Releases** and extract its contents into your server directory.
+2. Start the server. The config will generate automatically in `\addons\counterstrikesharp\configs\plugins\S2AWH\S2AWH.json`
 
 ---
+
+> [!CAUTION]
+> **Performance Impact:** Due to the intensive nature of real-time Ray-Tracing, S2AWH is performance-heavy. Servers with **20+ players** may experience noticeable "slow server frame" issues. Please refer to the [Performance Tuning](#-performance-tuning) section to optimize your settings.
 
 ## ⚙️ Performance Tuning
 
