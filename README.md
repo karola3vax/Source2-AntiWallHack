@@ -38,7 +38,7 @@
 3. Install the **Ray-Trace** version matching your OS (Windows or Linux).
    - *Note: Ray-Trace is mandatory for S2AWH to function.*
 
-![Ray-Trace Installation Guide](https://raw.githubusercontent.com/karola3vax/server-assets/refs/heads/main/Screenshot_1.png)
+![Ray-Trace Installation Guide](https://raw.githubusercontent.com/karola3vax/server-assets/refs/heads/main/Screenshot_2.png)
 
 4. Download the latest release from **Releases** and extract its contents. It should look like:
    `\addons\counterstrikesharp\plugins\S2AWH\S2AWH.dll`
