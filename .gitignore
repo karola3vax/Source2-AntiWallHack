@@ -1,0 +1,16 @@
+bin/
+obj/
+publish/
+release_staging/
+
+CounterStrikeSharp-main/
+Ray-Trace-main/
+_tmp_reflect/
+
+*.user
+*.suo
+*.cache
+*.zip
+*.dll
+*.pdb
+*.json

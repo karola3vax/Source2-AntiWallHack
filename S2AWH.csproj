@@ -1,0 +1,42 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>S2AWH</RootNamespace>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <Version>3.0.0</Version>
+    <AssemblyName>S2AWH</AssemblyName>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <CssApiPath Condition="'$(CssApiPath)' == '' and Exists('..\Dependencies\CounterStrikeSharp-main\managed\CounterStrikeSharp.API\bin\Release\net8.0\CounterStrikeSharp.API.dll')">..\Dependencies\CounterStrikeSharp-main\managed\CounterStrikeSharp.API\bin\Release\net8.0\CounterStrikeSharp.API.dll</CssApiPath>
+    <CssApiPath Condition="'$(CssApiPath)' == '' and Exists('..\CounterStrikeSharp-main\managed\CounterStrikeSharp.API\bin\Release\net8.0\CounterStrikeSharp.API.dll')">..\CounterStrikeSharp-main\managed\CounterStrikeSharp.API\bin\Release\net8.0\CounterStrikeSharp.API.dll</CssApiPath>
+    <CssApiPath Condition="'$(CssApiPath)' == '' and Exists('..\..\AGWH\CounterStrikeSharp-main\managed\CounterStrikeSharp.API\bin\Release\net8.0\CounterStrikeSharp.API.dll')">..\..\AGWH\CounterStrikeSharp-main\managed\CounterStrikeSharp.API\bin\Release\net8.0\CounterStrikeSharp.API.dll</CssApiPath>
+    <RayTraceApiPath Condition="'$(RayTraceApiPath)' == '' and Exists('..\Dependencies\Ray-Trace-main\managed\RayTrace\RayTraceApi\bin\Release\net8.0\RayTraceApi.dll')">..\Dependencies\Ray-Trace-main\managed\RayTrace\RayTraceApi\bin\Release\net8.0\RayTraceApi.dll</RayTraceApiPath>
+    <RayTraceApiPath Condition="'$(RayTraceApiPath)' == '' and Exists('..\Ray-Trace-main\managed\RayTrace\RayTraceApi\bin\Release\net8.0\RayTraceApi.dll')">..\Ray-Trace-main\managed\RayTrace\RayTraceApi\bin\Release\net8.0\RayTraceApi.dll</RayTraceApiPath>
+    <RayTraceApiPath Condition="'$(RayTraceApiPath)' == '' and Exists('..\..\AGWH\Ray-Trace-main\managed\RayTrace\RayTraceApi\bin\Release\net8.0\RayTraceApi.dll')">..\..\AGWH\Ray-Trace-main\managed\RayTrace\RayTraceApi\bin\Release\net8.0\RayTraceApi.dll</RayTraceApiPath>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Config.cs" />
+    <Compile Include="LosEvaluator.cs" />
+    <Compile Include="PreloadPredictor.cs" />
+    <Compile Include="S2AWH.cs" />
+    <Compile Include="TransmitFilter.cs" />
+    <Compile Include="VisibilityEval.cs" />
+    <Compile Include="VisibilityGeometry.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <Reference Include="CounterStrikeSharp.API">
+      <HintPath>$(CssApiPath)</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="RayTraceApi">
+      <HintPath>$(RayTraceApiPath)</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+  <Target Name="ValidateLocalDependencies" BeforeTargets="ResolveReferences">
+    <Error Condition="'$(CssApiPath)' == ''" Text="CounterStrikeSharp.API.dll bulunamadi. Expected: ..\Dependencies\CounterStrikeSharp-main\managed\CounterStrikeSharp.API\bin\Release\net8.0\CounterStrikeSharp.API.dll" />
+    <Error Condition="'$(RayTraceApiPath)' == ''" Text="RayTraceApi.dll bulunamadi. Expected: ..\Dependencies\Ray-Trace-main\managed\RayTrace\RayTraceApi\bin\Release\net8.0\RayTraceApi.dll" />
+  </Target>
+</Project>
