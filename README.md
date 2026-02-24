@@ -2,7 +2,7 @@
 
 # 💎 S2AWH
 
-## High-Performance Server-Authoritative Anti-Wallhack for CS2
+## Server-Sided Anti-Wallhack for CS2
 
 [![Version](https://img.shields.io/badge/VERSION-3.0.0-ec4899?style=for-the-badge&logoColor=white)](https://github.com/karola3vax/Source2-AntiWallHack)
 [![CounterStrikeSharp](https://img.shields.io/badge/CSSHARP-v1.0.362%2B-db2777?style=for-the-badge&logoColor=white)](https://github.com/roflmuffin/CounterStrikeSharp)
@@ -50,7 +50,7 @@
 
 ## ⚙️ Performance Tuning
 
-S2AWH is highly tunable. The amount of players on your server highly impacts the calculations of S2AWH thus degrading server performance. Use the following profiles to match your server capacity:
+The amount of players on your server highly impacts the calculations of S2AWH thus degrading server performance. Use the following profiles to match your server capacity by giving up some accuracy to balance performance.
 
 | Profile | `UpdateFrequencyTicks` | `RevealHoldSeconds` | Use Case |
 | :--- | :---: | :---: | :--- |
