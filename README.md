@@ -50,7 +50,7 @@
 
 ## ⚙️ Performance Tuning
 
-S2AWH is highly tunable. Use the following profiles to match your server capacity:
+S2AWH is highly tunable. The amount of players on your server highly impacts the calculations of S2AWH thus degrading server performance. Use the following profiles to match your server capacity:
 
 | Profile | `UpdateFrequencyTicks` | `RevealHoldSeconds` | Use Case |
 | :--- | :---: | :---: | :--- |
