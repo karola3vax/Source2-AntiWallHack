@@ -54,9 +54,9 @@ S2AWH is highly tunable. Use the following profiles to match your server capacit
 
 | Profile | `UpdateFrequencyTicks` | `RevealHoldSeconds` | Use Case |
 | :--- | :---: | :---: | :--- |
-| **Ultra-Fast** | `2` | `0.3` | 5v5 Competitive / Pro Matches |
-| **Balanced** | `4` | `0.4` | 10v10 Casual / Community Servers |
-| **Massive** | `10` | `0.5` | 32+ Player Deathmatch / Servers |
+| **10 PLAYERS** | `2` | `0.3` | 5v5 Competitive / Pro Matches |
+| **20 PLAYERS** | `4` | `0.4` | 10v10 Casual / Community Servers 
+| **30 PLAYERS** | `10` | `0.5` | 32+ Player Deathmatch / Servers 
 
 > [!TIP]
 > Increasing `UpdateFrequencyTicks` spreads the work over a larger "stagger window," yielding much smoother server frame times on high-player-count servers.
