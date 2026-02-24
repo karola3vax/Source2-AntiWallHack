@@ -20,6 +20,9 @@
 
 ---
 
+> [!CAUTION]
+> **Performance Impact:** Due to the intensive nature of real-time Ray-Tracing, S2AWH is performance-heavy. Servers with **20+ players** may experience noticeable "slow server frame" issues. Please refer to the [Performance Tuning](#-performance-tuning) section to optimize your settings.
+
 ## ✅ Requirements
 
 - **[CounterStrikeSharp](https://github.com/roflmuffin/CounterStrikeSharp)** `v1.0.362+`
@@ -41,9 +44,6 @@
 2. Start the server. The config will generate automatically in `\addons\counterstrikesharp\configs\plugins\S2AWH\S2AWH.json`
 
 ---
-
-> [!CAUTION]
-> **Performance Impact:** Due to the intensive nature of real-time Ray-Tracing, S2AWH is performance-heavy. Servers with **20+ players** may experience noticeable "slow server frame" issues. Please refer to the [Performance Tuning](#-performance-tuning) section to optimize your settings.
 
 ## ⚙️ Performance Tuning
 
