@@ -42,7 +42,7 @@
 
 4. Download the latest release from **Releases** and extract its contents. It should look like:
    `\addons\counterstrikesharp\plugins\S2AWH\S2AWH.dll`
-5. Start the server. The config will generate automatically in
+5. Start the server. The config will generate automatically in but make sure to delete old S2AWH if this is not your first installation.
    `\addons\counterstrikesharp\configs\plugins\S2AWH\S2AWH.json`
 
 ---
