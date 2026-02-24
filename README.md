@@ -1,4 +1,4 @@
-﻿<div align="center">
+<div align="center">
 
 # 💎 S2AWH
 
@@ -38,13 +38,13 @@
 3. Install the **Ray-Trace** version matching your OS (Windows or Linux).
    - *Note: Ray-Trace is mandatory for S2AWH to function.*
 
-![Ray-Trace Installation Guide](https://raw.githubusercontent.com/karola3vax/server-assets/refs/heads/main/Screenshot_2.png)
+[![Ray-Trace Installation Guide](https://raw.githubusercontent.com/karola3vax/server-assets/refs/heads/main/Screenshot_2.png)](https://github.com/FUNPLAY-pro-CS2/Ray-Trace)
 
-4. Download the latest release from **Releases** and extract its contents. It should look like:
+1. Download the latest release from **Releases** and extract its contents. It should look like:
    `\addons\counterstrikesharp\plugins\S2AWH\S2AWH.dll`
-5. Make sure to delete old config file S2AWH.json if this is not your first installation.
-6. Start the server. The config will generate automatically in `\addons\counterstrikesharp\configs\plugins\S2AWH\S2AWH.json`.
-7. Done. Now head over to your game console for logs.
+2. Make sure to delete old config file S2AWH.json if this is not your first installation.
+3. Start the server. The config will generate automatically in `\addons\counterstrikesharp\configs\plugins\S2AWH\S2AWH.json`.
+4. Done. Now head over to your game console for logs.
 
 ---
 
@@ -55,8 +55,8 @@ The amount of players on your server highly impacts the calculations of S2AWH th
 | Profile | `UpdateFrequencyTicks` | `RevealHoldSeconds` | Use Case |
 | :--- | :---: | :---: | :--- |
 | **10 PLAYERS** | `2` | `0.3` | 5v5 Competitive / Pro Matches |
-| **20 PLAYERS** | `4` | `0.4` | 10v10 Casual / Community Servers 
-| **30 PLAYERS** | `10` | `0.5` | 32+ Player Deathmatch / Servers 
+| **20 PLAYERS** | `4` | `0.4` | 10v10 Casual / Community Servers |
+| **30 PLAYERS** | `10` | `0.5` | 32+ Player Deathmatch / Servers |
 
 > [!TIP]
 > Increasing `UpdateFrequencyTicks` spreads the work over a larger "stagger window," yielding much smoother server frame times on high-player-count servers.
