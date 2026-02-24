@@ -40,8 +40,10 @@
 
 ![Ray-Trace Installation Guide](https://raw.githubusercontent.com/karola3vax/server-assets/refs/heads/main/Screenshot_1.png)
 
-1. Download the latest release from **Releases** and extract its contents into your server directory.
-2. Start the server. The config will generate automatically in `\addons\counterstrikesharp\configs\plugins\S2AWH\S2AWH.json`
+4. Download the latest release from **Releases** and extract its contents. It should look like:
+   `\addons\counterstrikesharp\plugins\S2AWH\S2AWH.dll`
+5. Start the server. The config will generate automatically in
+   `\addons\counterstrikesharp\configs\plugins\S2AWH\S2AWH.json`
 
 ---
 
