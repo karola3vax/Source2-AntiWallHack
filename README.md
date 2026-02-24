@@ -21,7 +21,7 @@
 ---
 
 > [!CAUTION]
-> **Performance Impact:** Due to the intensive nature of real-time Ray-Tracing, S2AWH is performance-heavy. Using this plugin on servers over **20+ players** servers is not recommended. Servers with **20+ players** may experience noticeable "slow server frame" issues. Please refer to the [Performance Tuning](#-performance-tuning) section to optimize your settings.
+> **Performance Impact:** Due to the intensive nature of real-time Ray-Tracing, S2AWH is performance-heavy. Using this plugin on servers over **20+ players** is not recommended. Servers with **20+ players** may experience noticeable "slow server frame" issues. Please refer to the [Performance Tuning](#-performance-tuning) section to optimize your settings.
 
 ## ✅ Requirements
 
