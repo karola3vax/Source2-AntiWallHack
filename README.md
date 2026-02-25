@@ -2,123 +2,160 @@
 
 # 💎 S2AWH
 
-## Server-Sided Anti-Wallhack for CS2
+### Server-Sided Anti-Wallhack for Counter-Strike 2
 
-[![Version](https://img.shields.io/badge/VERSION-3.0.0-ec4899?style=for-the-badge&logoColor=white)](https://github.com/karola3vax/Source2-AntiWallHack)
-[![CounterStrikeSharp](https://img.shields.io/badge/CSSHARP-v1.0.362%2B-db2777?style=for-the-badge&logoColor=white)](https://github.com/roflmuffin/CounterStrikeSharp)
-[![Ray-Trace](https://img.shields.io/badge/RAY--TRACE-v1.0.4-b0126f?style=for-the-badge&logoColor=white)](https://github.com/FUNPLAY-pro-CS2/Ray-Trace)
+[![Version](https://img.shields.io/badge/VERSION-3.0.1-ec4899?style=for-the-badge&logoColor=white)](https://github.com/karola3vax/Source2-AntiWallHack/releases)
+[![CounterStrikeSharp](https://img.shields.io/badge/CSSHARP-v1.0.362%2B-db2777?style=for-the-badge&logoColor=white)](https://github.com/roflmuffin/CounterStrikeSharp/releases)
+[![Ray-Trace](https://img.shields.io/badge/RAY--TRACE-v1.0.4-b0126f?style=for-the-badge&logoColor=white)](https://github.com/FUNPLAY-pro-CS2/Ray-Trace/releases)
 [![Build](https://img.shields.io/badge/BUILD-.NET%208-ad1457?style=for-the-badge&logoColor=white)](https://dotnet.microsoft.com/)
 [![License](https://img.shields.io/badge/LICENSE-MIT-10b981?style=for-the-badge&logoColor=white)](./LICENSE)
 
 ---
 
-**S2AWH** neutralizes the effectiveness of wallhacks by up to **80%**. It achieves this by intelligently validating player visibility right on the server and withholding enemy data until they are truly visible to you.
+**S2AWH** neutralizes the effectiveness of wallhacks by up to **80%**.
+It validates player visibility in real-time on the server and withholds enemy data until they are truly visible — making wallhacks see nothing but air.
 
-[Requirements](#-requirements) • [Installation](#-installation) • [Performance Tuning](#-performance-tuning) • [Configuration Reference](#-configuration-reference)
+[How It Works](#-how-it-works) • [Requirements](#-requirements) • [Installation](#-installation) • [Performance Tuning](#-performance-tuning) • [Configuration](#-configuration-reference)
 
 </div>
 
 ---
 
 > [!CAUTION]
-> **Performance Impact:** Due to the intensive nature of real-time Ray-Tracing, S2AWH is performance-heavy. Using this plugin on servers over **20+ players** is not recommended. Servers with **20+ players** may experience noticeable "slow server frame" issues. Please refer to the [Performance Tuning](#-performance-tuning) section to optimize your settings.
+>
+> ### ⚠️ Performance Notice
+>
+> S2AWH performs **real-time ray-tracing** on every server tick. This is computationally expensive.
+> **Using S2AWH on servers with 20+ players is NOT recommended** — it will cause noticeable server frame-time degradation.
+> Please review the [Performance Tuning](#-performance-tuning) section before deploying.
+
+---
+
+## 🧠 How It Works
+
+S2AWH uses a **4-stage visibility cascade** powered by real-time ray-tracing to determine whether each player should receive another player's data:
+
+```
+1. AABB Point Traces    — 10-point body sampling against world geometry
+2. Gap-Sweep Fan        — 8 angular rays to catch narrow slit visibility
+3. Aim-Ray AABB Probe   — Scope/crosshair-aligned slab intersection check
+4. Micro-Hull Fallback  — Small hull traces for the thinnest angles
+```
+
+If **none** of the stages detect visibility → **enemy data is withheld entirely**.
+The client never receives the position, model, or weapon data of hidden players.
+
+> [!NOTE]
+> Unlike client-sided anti-cheats, S2AWH operates entirely on the server. There is nothing for cheat software to bypass on the client because the data simply never arrives.
+
+---
 
 ## ✅ Requirements
 
-- **[CounterStrikeSharp](https://github.com/roflmuffin/CounterStrikeSharp)** `v1.0.362+`
-- **[MetaMod:Source](https://www.sourcemm.net/downloads.php?branch=dev)** `1387+`
-- **[Ray-Trace](https://github.com/FUNPLAY-pro-CS2/Ray-Trace)** `v1.0.4` (Manual install required)
+| Dependency | Version | Link |
+| :--- | :--- | :--- |
+| **CounterStrikeSharp** | `v1.0.362+` | [Releases](https://github.com/roflmuffin/CounterStrikeSharp/releases) |
+| **MetaMod:Source** | `1387+` | [Download](https://www.sourcemm.net/downloads.php?branch=dev) |
+| **Ray-Trace** | `v1.0.4` | [Releases](https://github.com/FUNPLAY-pro-CS2/Ray-Trace/releases) |
 
 ---
 
 ## 🔧 Installation
 
-1. Stop your server.
-2. Install **CounterStrikeSharp** and **MetaMod**.
-3. Install the **Ray-Trace** version matching your OS (Windows or Linux).
-   - *Note: Ray-Trace is mandatory for S2AWH to function.*
+1. **Stop** your server.
+2. Install **CounterStrikeSharp** and **MetaMod** if not already installed.
+3. Install the **Ray-Trace** build matching your OS (Windows or Linux).
 
-[![Ray-Trace Installation Guide](https://raw.githubusercontent.com/karola3vax/server-assets/refs/heads/main/Screenshot_2.png)](https://github.com/FUNPLAY-pro-CS2/Ray-Trace)
+[![Ray-Trace Installation Guide](https://raw.githubusercontent.com/karola3vax/server-assets/refs/heads/main/Screenshot_2.png)](https://github.com/FUNPLAY-pro-CS2/Ray-Trace/releases)
 
-1. Download the latest release from **Releases** and extract its contents. It should look like:
-   `\addons\counterstrikesharp\plugins\S2AWH\S2AWH.dll`
-2. Make sure to delete old config file S2AWH.json if this is not your first installation.
-3. Start the server. The config will generate automatically in `\addons\counterstrikesharp\configs\plugins\S2AWH\S2AWH.json`.
-4. Done. Now head over to your game console for logs.
+1. Download the latest release from the **[Releases](https://github.com/karola3vax/Source2-AntiWallHack/releases)** page and extract its contents:
+
+   ```
+   \addons\counterstrikesharp\plugins\S2AWH\S2AWH.dll
+   ```
+
+2. If upgrading from a previous version, **delete the old `S2AWH.json`** config file.
+3. Start the server. A fresh config will generate automatically at:
+
+   ```
+   \addons\counterstrikesharp\configs\plugins\S2AWH\S2AWH.json
+   ```
+
+4. Check the server console for S2AWH startup logs to confirm everything is running.
 
 ---
 
 ## ⚙️ Performance Tuning
 
-The amount of players on your server highly impacts the calculations of S2AWH thus degrading server performance. Use the following profiles to match your server capacity by giving up some accuracy to balance performance.
+Use the following profiles to match your server's player capacity:
 
-| Profile | `UpdateFrequencyTicks` | `RevealHoldSeconds` | Use Case |
+| Profile | `UpdateFrequencyTicks` | `RevealHoldSeconds` | Best For |
 | :--- | :---: | :---: | :--- |
-| **10 PLAYERS** | `2` | `0.3` | 5v5 Competitive / Pro Matches |
-| **20 PLAYERS** | `4` | `0.4` | 10v10 Casual / Community Servers |
-| **30 PLAYERS** | `10` | `0.5` | 32+ Player Deathmatch / Servers |
+| **Competitive** | `2` | `0.3` | 5v5 matches, pro servers |
+| **Casual** | `4` | `0.4` | 10v10 casual & community servers |
+| **Large** | `10` | `0.5` | 20+ player DM / public servers |
 
 > [!TIP]
-> Increasing `UpdateFrequencyTicks` spreads the work over a larger "stagger window," yielding much smoother server frame times on high-player-count servers.
+> `UpdateFrequencyTicks` controls the stagger window — higher values spread ray-trace work across more ticks, dramatically reducing per-frame CPU cost at the expense of slightly delayed visibility updates.
 
 ---
 
 ## 📖 Configuration Reference
 
 <details>
-<summary><b>Click to View Full Settings Table</b></summary>
+<summary><b>Click to expand full settings table</b></summary>
 
 ### 🛰️ Core & Trace
 
 | Key | Default | Description |
-| :--- | :--- | :--- |
-| `Core.Enabled` | `true` | Global plugin toggle. |
-| `Core.UpdateFrequencyTicks` | `10` | Size of the staggered work window. |
-| `Trace.RayTracePoints` | `10` | Samples per AABB. (1-10, lower = better performance). |
-| `Trace.UseFovCulling` | `true` | Skip checks for targets outside view cone. |
-| `Trace.FovDegrees` | `200.0` | Total horizontal FOV check range. |
+| :--- | :---: | :--- |
+| `Core.Enabled` | `true` | Global plugin toggle |
+| `Core.UpdateFrequencyTicks` | `10` | Stagger window size (higher = smoother, slower updates) |
+| `Trace.RayTracePoints` | `10` | Sample points per target AABB (1–10, lower = faster) |
+| `Trace.UseFovCulling` | `true` | Skip checks for targets outside the view cone |
+| `Trace.FovDegrees` | `200.0` | Total horizontal FOV for culling |
 
-### 🚀 Prediction (Peek-Assist)
-
-| Key | Default | Description |
-| :--- | :--- | :--- |
-| `Preload.PredictorDistance` | `150.0` | Forward prediction distance in units. |
-| `Preload.PredictorMinSpeed` | `1.0` | Speed threshold to enable prediction. |
-| `Preload.EnableViewerPeekAssist` | `true` | Predicts own movement for smoother peeks. |
-| `Preload.ViewerPredictorDistanceFactor` | `0.85` | Multiplier for own-prediction strength. |
-| `Preload.RevealHoldSeconds` | `0.3` | Time (s) to keep players visible after hiding. |
-
-### 📦 AABB Scaling (Advanced)
+### 🚀 Prediction & Peek-Assist
 
 | Key | Default | Description |
-| :--- | :--- | :--- |
-| `Aabb.HorizontalScale` | `3.0` | Base horizontal expansion of bounds. |
-| `Aabb.VerticalScale` | `2.0` | Base vertical expansion of bounds. |
-| `Aabb.EnableAdaptiveProfile` | `true` | Dynamically expands bounds at high speeds. |
-| `Aabb.ProfileSpeedStart` | `40.0` | Speed where adaptive expansion starts. |
-| `Aabb.ProfileSpeedFull` | `260.0` | Speed where max expansion is reached. |
-| `Aabb.ProfileHorizontalMaxMultiplier` | `1.7` | Max horizontal scale limit. |
-| `Aabb.ProfileVerticalMaxMultiplier` | `1.35` | Max vertical scale limit. |
-| `Aabb.EnableDirectionalShift` | `true` | Shifts bounds towards movement direction. |
-| `Aabb.DirectionalForwardShiftMaxUnits` | `34.0` | Max shift distance in units. |
-| `Aabb.DirectionalPredictorShiftFactor` | `0.65` | Blend factor for movement-based shift. |
+| :--- | :---: | :--- |
+| `Preload.PredictorDistance` | `150.0` | Forward prediction distance (units) |
+| `Preload.PredictorMinSpeed` | `1.0` | Minimum speed to activate prediction |
+| `Preload.EnableViewerPeekAssist` | `true` | Predict viewer's own movement for smoother peeks |
+| `Preload.ViewerPredictorDistanceFactor` | `0.85` | Multiplier for viewer prediction strength |
+| `Preload.RevealHoldSeconds` | `0.3` | Time (s) to keep targets visible after LOS loss |
+
+### 📦 AABB Scaling
+
+| Key | Default | Description |
+| :--- | :---: | :--- |
+| `Aabb.HorizontalScale` | `3.0` | Base horizontal expansion of collision bounds |
+| `Aabb.VerticalScale` | `2.0` | Base vertical expansion of collision bounds |
+| `Aabb.EnableAdaptiveProfile` | `true` | Dynamically expand bounds at higher speeds |
+| `Aabb.ProfileSpeedStart` | `40.0` | Speed where adaptive expansion begins |
+| `Aabb.ProfileSpeedFull` | `260.0` | Speed where maximum expansion is reached |
+| `Aabb.ProfileHorizontalMaxMultiplier` | `1.7` | Maximum horizontal scale limit |
+| `Aabb.ProfileVerticalMaxMultiplier` | `1.35` | Maximum vertical scale limit |
+| `Aabb.EnableDirectionalShift` | `true` | Shift bounds toward movement direction |
+| `Aabb.DirectionalForwardShiftMaxUnits` | `34.0` | Maximum directional shift distance (units) |
+| `Aabb.DirectionalPredictorShiftFactor` | `0.65` | Blend factor for movement-based shift |
 
 ### 👥 Visibility Logic
 
 | Key | Default | Description |
-| :--- | :--- | :--- |
-| `Visibility.IncludeTeammates` | `true` | Run visibility checks for teammates. |
-| `Visibility.IncludeBots` | `true` | Run visibility checks for bot targets. |
-| `Visibility.BotsDoLOS` | `true` | Run LOS logic for bot viewers (stress testing). |
+| :--- | :---: | :--- |
+| `Visibility.IncludeTeammates` | `true` | Run visibility checks for teammates |
+| `Visibility.IncludeBots` | `true` | Run visibility checks for bot targets |
+| `Visibility.BotsDoLOS` | `true` | Run LOS evaluations for bot viewers |
 
 ### 🩺 Diagnostics
 
 | Key | Default | Description |
-| :--- | :--- | :--- |
-| `Diagnostics.ShowDebugInfo` | `true` | Enable console log output. |
-| `Diagnostics.DrawDebugTraceBeams` | `false` | Enables the visualization for rays. Only for debugging. |
-| `Diagnostics.DrawDebugTraceBeamsForHumans` | `true` | Draw rays cast from human players. |
-| `Diagnostics.DrawDebugTraceBeamsForBots` | `true` | Draw rays cast from bot players. |
+| :--- | :---: | :--- |
+| `Diagnostics.ShowDebugInfo` | `true` | Enable detailed console output |
+| `Diagnostics.DrawDebugTraceBeams` | `false` | Visualize rays in-game (debug only) |
+| `Diagnostics.DrawDebugTraceBeamsForHumans` | `true` | Draw beams for human player traces |
+| `Diagnostics.DrawDebugTraceBeamsForBots` | `true` | Draw beams for bot player traces |
 
 </details>
 
@@ -126,17 +163,19 @@ The amount of players on your server highly impacts the calculations of S2AWH th
 
 ## 🤝 Credits
 
-- **[karola3vax](https://github.com/karola3vax)** - Lead Author
-- **[CounterStrikeSharp](https://github.com/roflmuffin/CounterStrikeSharp)** by **[roflmuffin](https://github.com/roflmuffin)**
+- **[karola3vax](https://github.com/karola3vax)** — Lead Author
+- **[CounterStrikeSharp](https://github.com/roflmuffin/CounterStrikeSharp/releases)** by **[roflmuffin](https://github.com/roflmuffin)**
 - **[MetaMod:Source](https://www.metamodsource.net/downloads.php?branch=dev)** by **[AlliedModders](https://github.com/alliedmodders)**
-- **[Ray-Trace](https://github.com/FUNPLAY-pro-CS2/Ray-Trace)** by **[SlynxCZ](https://github.com/SlynxCZ)**
+- **[Ray-Trace](https://github.com/FUNPLAY-pro-CS2/Ray-Trace/releases)** by **[SlynxCZ](https://github.com/SlynxCZ)**
 
 ---
 
 ## ⚖️ License
 
-Distributed under the **MIT License**. See `LICENSE` for more information.
+Distributed under the **MIT License**. See [`LICENSE`](./LICENSE) for details.
 
 <div align="center">
-  <p><i>S2AWH: Because skill should be the only advantage.</i></p>
+  <br>
+  <i>S2AWH — Because skill should be the only advantage.</i>
+  <br><br>
 </div>
