@@ -114,6 +114,8 @@ Use the following profiles to match your server's player capacity:
 | `Trace.RayTracePoints` | `10` | Sample points per target AABB (1–10, lower = faster) |
 | `Trace.UseFovCulling` | `true` | Skip checks for targets outside the view cone |
 | `Trace.FovDegrees` | `200.0` | Total horizontal FOV for culling |
+| `Trace.AimRayHitRadius` | `100.0` | Radius (units) around aim-ray hit point to reveal nearby targets |
+| `Trace.AimRaySpreadDegrees` | `1.0` | Angular spread (degrees) for the 5-ray X pattern around crosshair |
 
 ### 🚀 Prediction & Peek-Assist
 
