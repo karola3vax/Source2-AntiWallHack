@@ -116,6 +116,7 @@ Use the following profiles to match your server's player capacity:
 | `Trace.FovDegrees` | `200.0` | Total horizontal FOV for culling |
 | `Trace.AimRayHitRadius` | `100.0` | Radius (units) around aim-ray hit point to reveal nearby targets |
 | `Trace.AimRaySpreadDegrees` | `1.0` | Angular spread (degrees) for the 5-ray X pattern around crosshair |
+| `Trace.GapSweepProximity` | `72.0` | Max distance (units) from target body for gap-sweep rays to count as visible (20–200) |
 
 ### 🚀 Prediction & Peek-Assist
 
