@@ -2,11 +2,11 @@
 
 ## 3.0.1
 
+- **New feature:** The plugin now traces rays where your crosshair is pointing — if a ray hits a wall and an enemy is nearby that hit point, they're revealed. Added `AimRayHitRadius`, `AimRaySpreadDegrees`, and `GapSweepProximity` to control how this works.
 - **Better performance on large servers:** Reduced default body trace points from 10 to 6, teammates are no longer checked by default, and peek-assist now reacts faster at lower speeds — all saving CPU on 30+ player servers.
 - **Jump-peek support:** Players jumping to peek over walls now see enemies immediately — no more delayed pop-in during jump peeks. Falling does not leak info.
 - **Improved detection accuracy:** Enemies peeking through narrow gaps, thin slits, and tight corners are now caught more reliably.
 - **Wider FOV culling cone:** Default FOV increased from 200° to 220° to reduce edge cases where enemies at the screen border were briefly hidden.
-- **New tuning options:** The plugin now traces rays where your crosshair is pointing — if a ray hits a wall and an enemy is nearby that hit point, they're revealed. Added `AimRayHitRadius`, `AimRaySpreadDegrees`, and `GapSweepProximity` to control how this works.
 - **Bug fix:** Fixed an internal tracking issue that could misreport entity removal when debug counters were off.
 - **Cleaner logs and docs:** Simplified debug output and rewrote the README with clearer instructions.
 
