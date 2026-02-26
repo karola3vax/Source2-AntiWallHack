@@ -26,6 +26,15 @@ public sealed class S2AWHConfig : BasePluginConfig
 
         [JsonPropertyName("FovDegrees")]
         public float FovDegrees { get; set; } = 200.0f;
+
+        [JsonPropertyName("AimRayHitRadius")]
+        public float AimRayHitRadius { get; set; } = 100.0f;
+
+        [JsonPropertyName("AimRaySpreadDegrees")]
+        public float AimRaySpreadDegrees { get; set; } = 1.0f;
+
+        [JsonPropertyName("GapSweepProximity")]
+        public float GapSweepProximity { get; set; } = 72.0f;
     }
 
     public sealed class PreloadSettings
@@ -82,7 +91,7 @@ public sealed class S2AWHConfig : BasePluginConfig
     public sealed class VisibilitySettings
     {
         [JsonPropertyName("IncludeTeammates")]
-        public bool IncludeTeammates { get; set; } = true;
+        public bool IncludeTeammates { get; set; } = false;
 
         [JsonPropertyName("IncludeBots")]
         public bool IncludeBots { get; set; } = true;
@@ -133,122 +142,71 @@ public sealed class S2AWHConfig : BasePluginConfig
     [JsonIgnore]
     public float FovDotThreshold => _fovDotThreshold;
 
+    /// <summary>
+    /// Validates and clamps all config values to their allowed ranges, returning a list of
+    /// human-readable warnings for any values that were auto-corrected.
+    /// </summary>
     public IReadOnlyList<string> Normalize()
     {
         List<string> warnings = new();
 
-        if (Trace.RayTracePoints < 1)
-        {
-            int invalidValue = Trace.RayTracePoints;
-            Trace.RayTracePoints = 1;
-            warnings.Add($"Trace.RayTracePoints was {invalidValue}. Because the valid range is 1 to 10, the plugin now uses 1.");
-        }
-        else if (Trace.RayTracePoints > 10)
-        {
-            int invalidValue = Trace.RayTracePoints;
-            Trace.RayTracePoints = 10;
-            warnings.Add($"Trace.RayTracePoints was {invalidValue}. Because the valid range is 1 to 10, the plugin now uses 10.");
-        }
+        // --- Trace ---
+        int rayTracePoints = Trace.RayTracePoints;
+        ClampWithWarning(ref rayTracePoints, 1, 10, "Trace.RayTracePoints", warnings);
+        Trace.RayTracePoints = rayTracePoints;
 
-        if (Trace.FovDegrees < 1.0f)
-        {
-            float invalidValue = Trace.FovDegrees;
-            Trace.FovDegrees = 1.0f;
-            warnings.Add($"Trace.FovDegrees was {invalidValue}. Because the minimum value is 1, the plugin now uses 1.");
-        }
-        else if (Trace.FovDegrees > 359.0f)
-        {
-            float invalidValue = Trace.FovDegrees;
-            Trace.FovDegrees = 359.0f;
-            warnings.Add($"Trace.FovDegrees was {invalidValue}. Because the maximum value is 359, the plugin now uses 359.");
-        }
+        float fovDegrees = Trace.FovDegrees;
+        ClampWithWarning(ref fovDegrees, 1.0f, 359.0f, "Trace.FovDegrees", warnings);
+        Trace.FovDegrees = fovDegrees;
 
-        if (Core.UpdateFrequencyTicks < 1)
-        {
-            int invalidValue = Core.UpdateFrequencyTicks;
-            Core.UpdateFrequencyTicks = 1;
-            warnings.Add($"Core.UpdateFrequencyTicks was {invalidValue}. Because the minimum value is 1, the plugin now uses 1.");
-        }
+        float aimRayHitRadius = Trace.AimRayHitRadius;
+        ClampWithWarning(ref aimRayHitRadius, 0.0f, 500.0f, "Trace.AimRayHitRadius", warnings);
+        Trace.AimRayHitRadius = aimRayHitRadius;
 
-        if (Preload.PredictorDistance < 0.0f)
-        {
-            float invalidValue = Preload.PredictorDistance;
-            Preload.PredictorDistance = 0.0f;
-            warnings.Add($"Preload.PredictorDistance was {invalidValue}. Because this value cannot be negative, the plugin now uses 0.");
-        }
+        float aimRaySpreadDegrees = Trace.AimRaySpreadDegrees;
+        ClampWithWarning(ref aimRaySpreadDegrees, 0.0f, 5.0f, "Trace.AimRaySpreadDegrees", warnings);
+        Trace.AimRaySpreadDegrees = aimRaySpreadDegrees;
 
-        if (Preload.PredictorMinSpeed < 0.0f)
-        {
-            float invalidValue = Preload.PredictorMinSpeed;
-            Preload.PredictorMinSpeed = 0.0f;
-            warnings.Add($"Preload.PredictorMinSpeed was {invalidValue}. Because the minimum value is 0, the plugin now uses 0.");
-        }
-        else if (Preload.PredictorMinSpeed > 100.0f)
-        {
-            float invalidValue = Preload.PredictorMinSpeed;
-            Preload.PredictorMinSpeed = 100.0f;
-            warnings.Add($"Preload.PredictorMinSpeed was {invalidValue}. Because the maximum value is 100, the plugin now uses 100.");
-        }
+        float gapSweepProximity = Trace.GapSweepProximity;
+        ClampWithWarning(ref gapSweepProximity, 20.0f, 200.0f, "Trace.GapSweepProximity", warnings);
+        Trace.GapSweepProximity = gapSweepProximity;
 
-        if (Preload.ViewerPredictorDistanceFactor < 0.0f)
-        {
-            float invalidValue = Preload.ViewerPredictorDistanceFactor;
-            Preload.ViewerPredictorDistanceFactor = 0.0f;
-            warnings.Add($"Preload.ViewerPredictorDistanceFactor was {invalidValue}. Because the minimum value is 0, the plugin now uses 0.");
-        }
-        else if (Preload.ViewerPredictorDistanceFactor > 2.0f)
-        {
-            float invalidValue = Preload.ViewerPredictorDistanceFactor;
-            Preload.ViewerPredictorDistanceFactor = 2.0f;
-            warnings.Add($"Preload.ViewerPredictorDistanceFactor was {invalidValue}. Because the maximum value is 2, the plugin now uses 2.");
-        }
+        // --- Core ---
+        int updateFrequencyTicks = Core.UpdateFrequencyTicks;
+        ClampWithWarning(ref updateFrequencyTicks, 1, int.MaxValue, "Core.UpdateFrequencyTicks", warnings);
+        Core.UpdateFrequencyTicks = updateFrequencyTicks;
 
-        if (Aabb.HorizontalScale < 1.0f)
-        {
-            float invalidValue = Aabb.HorizontalScale;
-            Aabb.HorizontalScale = 1.0f;
-            warnings.Add($"Aabb.HorizontalScale was {invalidValue}. Because the minimum value is 1, the plugin now uses 1.");
-        }
-        else if (Aabb.HorizontalScale > 10.0f)
-        {
-            float invalidValue = Aabb.HorizontalScale;
-            Aabb.HorizontalScale = 10.0f;
-            warnings.Add($"Aabb.HorizontalScale was {invalidValue}. Because the maximum value is 10, the plugin now uses 10.");
-        }
+        // --- Preload ---
+        float predictorDistance = Preload.PredictorDistance;
+        ClampWithWarning(ref predictorDistance, 0.0f, float.MaxValue, "Preload.PredictorDistance", warnings);
+        Preload.PredictorDistance = predictorDistance;
 
-        if (Aabb.VerticalScale < 1.0f)
-        {
-            float invalidValue = Aabb.VerticalScale;
-            Aabb.VerticalScale = 1.0f;
-            warnings.Add($"Aabb.VerticalScale was {invalidValue}. Because the minimum value is 1, the plugin now uses 1.");
-        }
-        else if (Aabb.VerticalScale > 10.0f)
-        {
-            float invalidValue = Aabb.VerticalScale;
-            Aabb.VerticalScale = 10.0f;
-            warnings.Add($"Aabb.VerticalScale was {invalidValue}. Because the maximum value is 10, the plugin now uses 10.");
-        }
+        float predictorMinSpeed = Preload.PredictorMinSpeed;
+        ClampWithWarning(ref predictorMinSpeed, 0.0f, 100.0f, "Preload.PredictorMinSpeed", warnings);
+        Preload.PredictorMinSpeed = predictorMinSpeed;
 
-        if (Preload.RevealHoldSeconds < 0.0f)
-        {
-            float invalidValue = Preload.RevealHoldSeconds;
-            Preload.RevealHoldSeconds = 0.0f;
-            warnings.Add($"Preload.RevealHoldSeconds was {invalidValue}. Because the minimum value is 0, the plugin now uses 0.");
-        }
-        else if (Preload.RevealHoldSeconds > 1.0f)
-        {
-            float invalidValue = Preload.RevealHoldSeconds;
-            Preload.RevealHoldSeconds = 1.0f;
-            warnings.Add($"Preload.RevealHoldSeconds was {invalidValue}. Because the maximum value is 1, the plugin now uses 1.");
-        }
+        float viewerPredictorDistanceFactor = Preload.ViewerPredictorDistanceFactor;
+        ClampWithWarning(ref viewerPredictorDistanceFactor, 0.0f, 2.0f, "Preload.ViewerPredictorDistanceFactor", warnings);
+        Preload.ViewerPredictorDistanceFactor = viewerPredictorDistanceFactor;
 
-        if (Aabb.ProfileSpeedStart < 0.0f)
-        {
-            float invalidValue = Aabb.ProfileSpeedStart;
-            Aabb.ProfileSpeedStart = 0.0f;
-            warnings.Add($"Aabb.ProfileSpeedStart was {invalidValue}. Because the minimum value is 0, the plugin now uses 0.");
-        }
+        float revealHoldSeconds = Preload.RevealHoldSeconds;
+        ClampWithWarning(ref revealHoldSeconds, 0.0f, 1.0f, "Preload.RevealHoldSeconds", warnings);
+        Preload.RevealHoldSeconds = revealHoldSeconds;
 
+        // --- Aabb ---
+        float horizontalScale = Aabb.HorizontalScale;
+        ClampWithWarning(ref horizontalScale, 1.0f, 10.0f, "Aabb.HorizontalScale", warnings);
+        Aabb.HorizontalScale = horizontalScale;
+
+        float verticalScale = Aabb.VerticalScale;
+        ClampWithWarning(ref verticalScale, 1.0f, 10.0f, "Aabb.VerticalScale", warnings);
+        Aabb.VerticalScale = verticalScale;
+
+        float profileSpeedStart = Aabb.ProfileSpeedStart;
+        ClampWithWarning(ref profileSpeedStart, 0.0f, float.MaxValue, "Aabb.ProfileSpeedStart", warnings);
+        Aabb.ProfileSpeedStart = profileSpeedStart;
+
+        // ProfileSpeedFull must be at least ProfileSpeedStart + 1 (special logic).
         float minProfileSpeedFull = Aabb.ProfileSpeedStart + 1.0f;
         if (Aabb.ProfileSpeedFull < minProfileSpeedFull)
         {
@@ -257,60 +215,56 @@ public sealed class S2AWHConfig : BasePluginConfig
             warnings.Add($"Aabb.ProfileSpeedFull was {invalidValue}. Because it must be at least ProfileSpeedStart + 1, the plugin now uses {Aabb.ProfileSpeedFull}.");
         }
 
-        if (Aabb.ProfileHorizontalMaxMultiplier < 1.0f)
-        {
-            float invalidValue = Aabb.ProfileHorizontalMaxMultiplier;
-            Aabb.ProfileHorizontalMaxMultiplier = 1.0f;
-            warnings.Add($"Aabb.ProfileHorizontalMaxMultiplier was {invalidValue}. Because the minimum value is 1, the plugin now uses 1.");
-        }
-        else if (Aabb.ProfileHorizontalMaxMultiplier > 3.0f)
-        {
-            float invalidValue = Aabb.ProfileHorizontalMaxMultiplier;
-            Aabb.ProfileHorizontalMaxMultiplier = 3.0f;
-            warnings.Add($"Aabb.ProfileHorizontalMaxMultiplier was {invalidValue}. Because the maximum value is 3, the plugin now uses 3.");
-        }
+        float profileHorizontalMaxMultiplier = Aabb.ProfileHorizontalMaxMultiplier;
+        ClampWithWarning(ref profileHorizontalMaxMultiplier, 1.0f, 3.0f, "Aabb.ProfileHorizontalMaxMultiplier", warnings);
+        Aabb.ProfileHorizontalMaxMultiplier = profileHorizontalMaxMultiplier;
 
-        if (Aabb.ProfileVerticalMaxMultiplier < 1.0f)
-        {
-            float invalidValue = Aabb.ProfileVerticalMaxMultiplier;
-            Aabb.ProfileVerticalMaxMultiplier = 1.0f;
-            warnings.Add($"Aabb.ProfileVerticalMaxMultiplier was {invalidValue}. Because the minimum value is 1, the plugin now uses 1.");
-        }
-        else if (Aabb.ProfileVerticalMaxMultiplier > 3.0f)
-        {
-            float invalidValue = Aabb.ProfileVerticalMaxMultiplier;
-            Aabb.ProfileVerticalMaxMultiplier = 3.0f;
-            warnings.Add($"Aabb.ProfileVerticalMaxMultiplier was {invalidValue}. Because the maximum value is 3, the plugin now uses 3.");
-        }
+        float profileVerticalMaxMultiplier = Aabb.ProfileVerticalMaxMultiplier;
+        ClampWithWarning(ref profileVerticalMaxMultiplier, 1.0f, 3.0f, "Aabb.ProfileVerticalMaxMultiplier", warnings);
+        Aabb.ProfileVerticalMaxMultiplier = profileVerticalMaxMultiplier;
 
-        if (Aabb.DirectionalForwardShiftMaxUnits < 0.0f)
-        {
-            float invalidValue = Aabb.DirectionalForwardShiftMaxUnits;
-            Aabb.DirectionalForwardShiftMaxUnits = 0.0f;
-            warnings.Add($"Aabb.DirectionalForwardShiftMaxUnits was {invalidValue}. Because the minimum value is 0, the plugin now uses 0.");
-        }
-        else if (Aabb.DirectionalForwardShiftMaxUnits > 128.0f)
-        {
-            float invalidValue = Aabb.DirectionalForwardShiftMaxUnits;
-            Aabb.DirectionalForwardShiftMaxUnits = 128.0f;
-            warnings.Add($"Aabb.DirectionalForwardShiftMaxUnits was {invalidValue}. Because the maximum value is 128, the plugin now uses 128.");
-        }
+        float directionalForwardShiftMaxUnits = Aabb.DirectionalForwardShiftMaxUnits;
+        ClampWithWarning(ref directionalForwardShiftMaxUnits, 0.0f, 128.0f, "Aabb.DirectionalForwardShiftMaxUnits", warnings);
+        Aabb.DirectionalForwardShiftMaxUnits = directionalForwardShiftMaxUnits;
 
-        if (Aabb.DirectionalPredictorShiftFactor < 0.0f)
-        {
-            float invalidValue = Aabb.DirectionalPredictorShiftFactor;
-            Aabb.DirectionalPredictorShiftFactor = 0.0f;
-            warnings.Add($"Aabb.DirectionalPredictorShiftFactor was {invalidValue}. Because the minimum value is 0, the plugin now uses 0.");
-        }
-        else if (Aabb.DirectionalPredictorShiftFactor > 1.0f)
-        {
-            float invalidValue = Aabb.DirectionalPredictorShiftFactor;
-            Aabb.DirectionalPredictorShiftFactor = 1.0f;
-            warnings.Add($"Aabb.DirectionalPredictorShiftFactor was {invalidValue}. Because the maximum value is 1, the plugin now uses 1.");
-        }
+        float directionalPredictorShiftFactor = Aabb.DirectionalPredictorShiftFactor;
+        ClampWithWarning(ref directionalPredictorShiftFactor, 0.0f, 1.0f, "Aabb.DirectionalPredictorShiftFactor", warnings);
+        Aabb.DirectionalPredictorShiftFactor = directionalPredictorShiftFactor;
 
         _fovDotThreshold = ComputeFovDotThreshold(Trace.FovDegrees);
         return warnings;
+    }
+
+    private static void ClampWithWarning(ref int value, int min, int max, string paramName, List<string> warnings)
+    {
+        if (value < min)
+        {
+            int invalid = value;
+            value = min;
+            warnings.Add($"{paramName} was {invalid}. Because the minimum value is {min}, the plugin now uses {min}.");
+        }
+        else if (max != int.MaxValue && value > max)
+        {
+            int invalid = value;
+            value = max;
+            warnings.Add($"{paramName} was {invalid}. Because the maximum value is {max}, the plugin now uses {max}.");
+        }
+    }
+
+    private static void ClampWithWarning(ref float value, float min, float max, string paramName, List<string> warnings)
+    {
+        if (value < min)
+        {
+            float invalid = value;
+            value = min;
+            warnings.Add($"{paramName} was {invalid}. Because the minimum value is {min}, the plugin now uses {min}.");
+        }
+        else if (max != float.MaxValue && value > max)
+        {
+            float invalid = value;
+            value = max;
+            warnings.Add($"{paramName} was {invalid}. Because the maximum value is {max}, the plugin now uses {max}.");
+        }
     }
 
     private static float ComputeFovDotThreshold(float fovDegrees)

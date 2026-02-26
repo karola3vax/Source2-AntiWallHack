@@ -28,11 +28,17 @@ internal static class VisibilityGeometry
         InteractionLayers.MASK_WORLD_ONLY
     );
 
+    /// <summary>
+    /// Returns shared trace options used by LOS checks.
+    /// </summary>
     public static TraceOptions GetVisibilityTraceOptions()
     {
         return VisibilityTraceOptions;
     }
 
+    /// <summary>
+    /// Returns whether debug LOS beams should be rendered for the viewer type.
+    /// </summary>
     public static bool ShouldDrawDebugTraceBeam(bool viewerIsBot)
     {
         var diagnostics = S2AWHState.Current.Diagnostics;
@@ -46,6 +52,9 @@ internal static class VisibilityGeometry
             : diagnostics.DrawDebugTraceBeamsForHumans;
     }
 
+    /// <summary>
+    /// Draws a short-lived debug beam for a single trace.
+    /// </summary>
     public static void DrawDebugTraceBeam(Vector start, Vector intendedEnd, in TraceResult traceResult, bool viewerIsBot)
     {
         CBeam? beam = Utilities.CreateEntityByName<CBeam>("env_beam");
@@ -153,6 +162,9 @@ internal static class VisibilityGeometry
         return false;
     }
 
+    /// <summary>
+    /// Creates a reusable fixed-size point buffer used by target sampling.
+    /// </summary>
     public static Vector[] CreatePointBuffer()
     {
         Vector[] buffer = new Vector[MaxTracePoints];
@@ -172,6 +184,9 @@ internal static class VisibilityGeometry
         point.Z = z;
     }
 
+    /// <summary>
+    /// Resolves the pawn eye position into the supplied output vector.
+    /// </summary>
     public static bool TryFillEyePosition(CBasePlayerPawn pawn, Vector eyePosition)
     {
         var origin = pawn.AbsOrigin;
@@ -195,6 +210,9 @@ internal static class VisibilityGeometry
         return true;
     }
 
+    /// <summary>
+    /// Fills sampled target points for LOS/prediction and returns the number of points written.
+    /// </summary>
     public static int FillTargetPoints(
         CBasePlayerPawn pawn,
         Vector[] pointBuffer,

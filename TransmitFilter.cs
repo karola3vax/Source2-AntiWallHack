@@ -5,8 +5,18 @@ namespace S2AWH;
 
 public class TransmitFilter
 {
+    private const float NearbyAlwaysVisibleDistanceSq = 75.0f * 75.0f;
     private readonly LosEvaluator _losEvaluator;
     private readonly PreloadPredictor _predictor;
+    private int _cachedFovViewerPawnIndex = -1;
+    private int _cachedFovTick = -1;
+    private bool _cachedFovStateReady;
+    private float _cachedFovStartX;
+    private float _cachedFovStartY;
+    private float _cachedFovStartZ;
+    private float _cachedFovNormalX;
+    private float _cachedFovNormalY;
+    private float _cachedFovNormalZ;
 
     public TransmitFilter(LosEvaluator losEvaluator, PreloadPredictor predictor)
     {
@@ -39,7 +49,7 @@ public class TransmitFilter
 
         if (config.Trace.UseFovCulling && viewerAlive)
         {
-            if (!IsFOV(viewerPawn, targetPawn, config.FovDotThreshold))
+            if (!IsFOV(viewerPawn, targetPawn, config.FovDotThreshold, nowTick))
             {
                 return VisibilityEval.Hidden;
             }
@@ -73,58 +83,84 @@ public class TransmitFilter
         return VisibilityEval.Hidden;
     }
 
-    private static bool IsFOV(CBasePlayerPawn viewerPawnBase, CBasePlayerPawn targetPawn, float fovDotThreshold)
+    private bool IsFOV(CCSPlayerPawn viewerPawn, CBasePlayerPawn targetPawn, float fovDotThreshold, int nowTick)
     {
-        var start = viewerPawnBase.AbsOrigin;
-        if (start == null) return true; // Safety
-
-        float startX = start.X;
-        float startY = start.Y;
-        float startZ = start.Z;
-
-        var viewOffset = viewerPawnBase.ViewOffset;
-        if (viewOffset != null)
+        // Nearly full-circle FOV means culling does no practical work.
+        if (fovDotThreshold <= -0.9998f)
         {
-            startX += viewOffset.X;
-            startY += viewOffset.Y;
-            startZ += viewOffset.Z;
+            return true;
+        }
+
+        int viewerPawnIndex = (int)viewerPawn.Index;
+        if (_cachedFovViewerPawnIndex != viewerPawnIndex || _cachedFovTick != nowTick)
+        {
+            _cachedFovViewerPawnIndex = viewerPawnIndex;
+            _cachedFovTick = nowTick;
+            _cachedFovStateReady = false;
+
+            var start = viewerPawn.AbsOrigin;
+            if (start == null)
+            {
+                return true; // Safety
+            }
+
+            _cachedFovStartX = start.X;
+            _cachedFovStartY = start.Y;
+            _cachedFovStartZ = start.Z;
+
+            var viewOffset = viewerPawn.ViewOffset;
+            if (viewOffset != null)
+            {
+                _cachedFovStartX += viewOffset.X;
+                _cachedFovStartY += viewOffset.Y;
+                _cachedFovStartZ += viewOffset.Z;
+            }
+
+            var angles = viewerPawn.EyeAngles;
+            if (angles == null)
+            {
+                return true; // Safety
+            }
+
+            float pitch = angles.X * MathF.PI / 180.0f;
+            float yaw = angles.Y * MathF.PI / 180.0f;
+
+            (float sinPitch, float cosPitch) = MathF.SinCos(pitch);
+            (float sinYaw, float cosYaw) = MathF.SinCos(yaw);
+            _cachedFovNormalX = cosPitch * cosYaw;
+            _cachedFovNormalY = cosPitch * sinYaw;
+            _cachedFovNormalZ = -sinPitch;
+            _cachedFovStateReady = true;
+        }
+
+        if (!_cachedFovStateReady)
+        {
+            return true;
         }
 
         var end = targetPawn.AbsOrigin;
-        if (end == null) return true;
+        if (end == null)
+        {
+            return true;
+        }
 
-        // Cast to CCSPlayerPawn to ensure we can get EyeAngles safely
-        var viewerPawn = viewerPawnBase as CCSPlayerPawn;
-        if (viewerPawn == null) return true;
+        float planeX = end.X - _cachedFovStartX;
+        float planeY = end.Y - _cachedFovStartY;
+        float planeZ = end.Z - _cachedFovStartZ;
+        float distanceSq = (planeX * planeX) + (planeY * planeY) + (planeZ * planeZ);
 
-        var angles = viewerPawn.EyeAngles;
-        if (angles == null) return true;
+        // If they are closer than 75 units, always render even if behind.
+        if (distanceSq < NearbyAlwaysVisibleDistanceSq)
+        {
+            return true;
+        }
 
-        float pitch = angles.X * MathF.PI / 180.0f;
-        float yaw = angles.Y * MathF.PI / 180.0f;
-
-        (float sinPitch, float cosPitch) = MathF.SinCos(pitch);
-        (float sinYaw, float cosYaw) = MathF.SinCos(yaw);
-        float normalX = cosPitch * cosYaw;
-        float normalY = cosPitch * sinYaw;
-        float normalZ = -sinPitch;
-
-        float planeX = end.X - startX;
-        float planeY = end.Y - startY;
-        float planeZ = end.Z - startZ;
-        float distance = MathF.Sqrt((planeX * planeX) + (planeY * planeY) + (planeZ * planeZ));
-        
-        // If they are closer than 75 units, ALWAYS render them even if they are behind
-        if (distance < 75.0f) return true;
-
-        // Normalize plane
-        float inverseDistance = 1.0f / distance;
+        float inverseDistance = 1.0f / MathF.Sqrt(distanceSq);
         planeX *= inverseDistance;
         planeY *= inverseDistance;
         planeZ *= inverseDistance;
 
-        // Dot product
-        float dot = (planeX * normalX) + (planeY * normalY) + (planeZ * normalZ);
+        float dot = (planeX * _cachedFovNormalX) + (planeY * _cachedFovNormalY) + (planeZ * _cachedFovNormalZ);
         
         // FOV culling threshold is derived from Trace.FovDegrees.
         return dot > fovDotThreshold;

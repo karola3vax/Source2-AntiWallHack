@@ -4,7 +4,7 @@
     <RootNamespace>S2AWH</RootNamespace>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <Version>3.0.0</Version>
+    <Version>3.0.1</Version>
     <AssemblyName>S2AWH</AssemblyName>
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
     <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
@@ -21,6 +21,9 @@
     <Compile Include="LosEvaluator.cs" />
     <Compile Include="PreloadPredictor.cs" />
     <Compile Include="S2AWH.cs" />
+    <Compile Include="S2AWH.Logging.cs" />
+    <Compile Include="S2AWH.Memory.cs" />
+    <Compile Include="S2AWH.Transmit.cs" />
     <Compile Include="TransmitFilter.cs" />
     <Compile Include="VisibilityEval.cs" />
     <Compile Include="VisibilityGeometry.cs" />

@@ -23,11 +23,13 @@ public class PreloadPredictor
     private readonly Vector _viewerEyeBuffer = new(0.0f, 0.0f, 0.0f);
     private readonly Vector _predictedTargetOrigin = new(0.0f, 0.0f, 0.0f);
     private readonly Vector _predictedViewerEye = new(0.0f, 0.0f, 0.0f);
+    private readonly TraceOptions _cachedTraceOptions = VisibilityGeometry.GetVisibilityTraceOptions();
     private readonly Dictionary<int, PredictorTargetCacheEntry> _targetCacheBySlot = new(64);
 
     // Per-tick viewer eye cache (same pattern as LosEvaluator).
     private int _cachedViewerPawnIndex = -1;
     private int _cachedViewerTick = -1;
+    private bool _cachedDrawDebugBeams;
 
     public PreloadPredictor(CRayTraceInterface rayTrace)
     {
@@ -51,6 +53,7 @@ public class PreloadPredictor
         }
 
         int viewerPawnIndex = (int)viewerPawn.Index;
+        bool viewerIsBot = viewer.IsBot;
         if (_cachedViewerPawnIndex != viewerPawnIndex || _cachedViewerTick != nowTick)
         {
             if (!VisibilityGeometry.TryFillEyePosition(viewerPawn, _viewerEyeBuffer))
@@ -59,12 +62,12 @@ public class PreloadPredictor
             }
             _cachedViewerPawnIndex = viewerPawnIndex;
             _cachedViewerTick = nowTick;
+            _cachedDrawDebugBeams = VisibilityGeometry.ShouldDrawDebugTraceBeam(viewerIsBot);
         }
 
         var config = S2AWHState.Current;
-        bool viewerIsBot = viewer.IsBot;
-        var options = VisibilityGeometry.GetVisibilityTraceOptions();
-        bool drawDebugBeams = VisibilityGeometry.ShouldDrawDebugTraceBeam(viewerIsBot);
+        var options = _cachedTraceOptions;
+        bool drawDebugBeams = _cachedDrawDebugBeams;
         var targetCache = GetOrRefreshTargetCache(target, targetPawn, targetOrigin, config, nowTick);
 
         if (targetCache.HasTargetLookahead &&
@@ -264,11 +267,17 @@ public class PreloadPredictor
         return true;
     }
 
+    /// <summary>
+    /// Clears cached predictor data for the given target slot.
+    /// </summary>
     internal void InvalidateTargetSlot(int targetSlot)
     {
         _targetCacheBySlot.Remove(targetSlot);
     }
 
+    /// <summary>
+    /// Clears all predictor caches.
+    /// </summary>
     internal void ClearCaches()
     {
         _targetCacheBySlot.Clear();

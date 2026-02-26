@@ -1,4 +1,4 @@
-<div align="center">
+﻿<div align="center">
 
 # S2AWH
 
@@ -93,8 +93,8 @@ Use these as starting profiles, then benchmark on your own hardware.
 | Profile | `UpdateFrequencyTicks` | `RevealHoldSeconds` | `RayTracePoints` | Best For |
 | :--- | :---: | :---: | :---: | :--- |
 | **Competitive** | `2` | `0.30` | `10` | 5v5 / scrim |
-| **Casual** | `4` | `0.4` | `8` | 10v10 community |
-| **Large** | `8` | `0.5` | `6` | 20-24 players |
+| **Casual** | `4` | `0.40` | `8` | 10v10 community |
+| **Large** | `8` | `0.50` | `6` | 20-24 players |
 | **High Population** | `10` | `1.0` | `4` | 30+ players |
 
 > [!TIP]
