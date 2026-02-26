@@ -22,7 +22,8 @@ It runs on the server and only sends enemy data when that enemy should really be
 ---
 
 > [!IMPORTANT]
-> The plugin is server-side. Cheat software on the client cannot bypass data that was never sent.
+> S2AWH runs entirely on the server — enemy data is stripped before it ever reaches the client.
+> No cheat software can reveal what was never sent. Wallhacks see nothing.
 
 > [!CAUTION]
 >
