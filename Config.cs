@@ -25,7 +25,7 @@ public sealed class S2AWHConfig : BasePluginConfig
         public bool UseFovCulling { get; set; } = true;
 
         [JsonPropertyName("FovDegrees")]
-        public float FovDegrees { get; set; } = 200.0f;
+        public float FovDegrees { get; set; } = 220.0f;
 
         [JsonPropertyName("AimRayHitRadius")]
         public float AimRayHitRadius { get; set; } = 100.0f;

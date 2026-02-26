@@ -119,7 +119,7 @@ Use these as starting profiles, then benchmark on your own hardware.
 | `Core.UpdateFrequencyTicks` | `10` | How many ticks to spread viewer work across (higher = lower CPU, slower updates) |
 | `Trace.RayTracePoints` | `6` | Number of body sample points per target (`1..10`) |
 | `Trace.UseFovCulling` | `true` | Skip expensive checks for targets outside viewer cone |
-| `Trace.FovDegrees` | `200.0` | FOV cone size used by culling |
+| `Trace.FovDegrees` | `220.0` | FOV cone size used by culling |
 | `Trace.AimRayHitRadius` | `100.0` | Reveal radius around aim-ray hit points |
 | `Trace.AimRaySpreadDegrees` | `1.0` | Angular spacing for 5-ray X aim pattern |
 | `Trace.GapSweepProximity` | `72.0` | Max distance from target center for gap-sweep hit to count (`20..200`) |

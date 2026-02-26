@@ -2,11 +2,13 @@
 
 ## 3.0.1
 
-- **Improved detection accuracy:** Enemies peeking through narrow gaps, thin slits, and tight corners are now detected more reliably thanks to refined aim-ray and gap-sweep probes.
-- **Better performance on large servers:** Default ray trace points lowered from 10 to 6, teammate visibility checks are skipped by default, and adaptive profile speed range tightened (`ProfileSpeedStart: 80`, `ProfileSpeedFull: 100`) for faster peek-assist response — all reducing CPU usage on 30+ player servers.
-- **New tuning options:** Added `AimRayHitRadius`, `AimRaySpreadDegrees`, and `GapSweepProximity` settings to give server operators finer control over detection sensitivity and performance balance.
-- **Bug fix:** Corrected an internal tracking issue where hidden entity removal could be misreported, improving diagnostic accuracy when debug counters are enabled.
-- **Cleaner logs and docs:** Debug console output is now easier to read, and the README has been rewritten with clearer installation steps and configuration guidance.
+- **Better performance on large servers:** Reduced default body trace points from 10 to 6, teammates are no longer checked by default, and peek-assist now reacts faster at lower speeds — all saving CPU on 30+ player servers.
+- **Jump-peek support:** Players jumping to peek over walls now see enemies immediately — no more delayed pop-in during jump peeks. Falling does not leak info.
+- **Improved detection accuracy:** Enemies peeking through narrow gaps, thin slits, and tight corners are now caught more reliably.
+- **Wider FOV culling cone:** Default FOV increased from 200° to 220° to reduce edge cases where enemies at the screen border were briefly hidden.
+- **New tuning options:** Added `AimRayHitRadius`, `AimRaySpreadDegrees`, and `GapSweepProximity` for fine-tuning detection sensitivity.
+- **Bug fix:** Fixed an internal tracking issue that could misreport entity removal when debug counters were off.
+- **Cleaner logs and docs:** Simplified debug output and rewrote the README with clearer instructions.
 
 ## 3.0.0
 

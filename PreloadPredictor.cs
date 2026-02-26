@@ -87,7 +87,7 @@ public class PreloadPredictor
                 config.Preload.PredictorMinSpeed,
                 config.Aabb.ProfileSpeedFull,
                 viewerPredictDistance,
-                horizontalOnly: true,
+                horizontalOnly: false,
                 out float viewerLookaheadX,
                 out float viewerLookaheadY,
                 out float viewerLookaheadZ))
@@ -97,7 +97,7 @@ public class PreloadPredictor
 
         _predictedViewerEye.X = _viewerEyeBuffer.X + viewerLookaheadX;
         _predictedViewerEye.Y = _viewerEyeBuffer.Y + viewerLookaheadY;
-        _predictedViewerEye.Z = _viewerEyeBuffer.Z + viewerLookaheadZ;
+        _predictedViewerEye.Z = _viewerEyeBuffer.Z + Math.Max(0.0f, viewerLookaheadZ);
 
         EnsureCurrentPoints(targetCache, targetPawn, targetOrigin);
         if (targetCache.CurrentPointCount <= 0)
