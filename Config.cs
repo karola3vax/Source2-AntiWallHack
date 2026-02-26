@@ -19,7 +19,7 @@ public sealed class S2AWHConfig : BasePluginConfig
     public sealed class TraceSettings
     {
         [JsonPropertyName("RayTracePoints")]
-        public int RayTracePoints { get; set; } = 8;
+        public int RayTracePoints { get; set; } = 6;
 
         [JsonPropertyName("UseFovCulling")]
         public bool UseFovCulling { get; set; } = true;
@@ -67,10 +67,10 @@ public sealed class S2AWHConfig : BasePluginConfig
         public bool EnableAdaptiveProfile { get; set; } = true;
 
         [JsonPropertyName("ProfileSpeedStart")]
-        public float ProfileSpeedStart { get; set; } = 40.0f;
+        public float ProfileSpeedStart { get; set; } = 80.0f;
 
         [JsonPropertyName("ProfileSpeedFull")]
-        public float ProfileSpeedFull { get; set; } = 260.0f;
+        public float ProfileSpeedFull { get; set; } = 100.0f;
 
         [JsonPropertyName("ProfileHorizontalMaxMultiplier")]
         public float ProfileHorizontalMaxMultiplier { get; set; } = 1.70f;

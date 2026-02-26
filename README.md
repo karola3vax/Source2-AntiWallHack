@@ -95,8 +95,8 @@ Use these as starting profiles, then benchmark on your own hardware.
 | :--- | :---: | :---: | :---: | :--- |
 | **Competitive** | `2` | `0.30` | `10` | 5v5 / scrim |
 | **Casual** | `4` | `0.40` | `8` | 10v10 community |
-| **Large** | `8` | `0.50` | `8` | 20-24 players |
-| **High Population** | `10` | `1.0` | `8` | 30+ players |
+| **Large** | `8` | `0.50` | `6` | 20-24 players |
+| **High Population** | `10` | `1.0` | `4` | 30+ players |
 
 > [!TIP]
 > The first lever for CPU is `Core.UpdateFrequencyTicks`. Higher value = fewer full visibility updates per second.
@@ -117,7 +117,7 @@ Use these as starting profiles, then benchmark on your own hardware.
 | :--- | :---: | :--- |
 | `Core.Enabled` | `true` | Master on/off switch for the plugin |
 | `Core.UpdateFrequencyTicks` | `10` | How many ticks to spread viewer work across (higher = lower CPU, slower updates) |
-| `Trace.RayTracePoints` | `8` | Number of body sample points per target (`1..10`) |
+| `Trace.RayTracePoints` | `6` | Number of body sample points per target (`1..10`) |
 | `Trace.UseFovCulling` | `true` | Skip expensive checks for targets outside viewer cone |
 | `Trace.FovDegrees` | `200.0` | FOV cone size used by culling |
 | `Trace.AimRayHitRadius` | `100.0` | Reveal radius around aim-ray hit points |
@@ -141,8 +141,8 @@ Use these as starting profiles, then benchmark on your own hardware.
 | `Aabb.HorizontalScale` | `3.0` | Base horizontal target expansion for predictor path |
 | `Aabb.VerticalScale` | `2.0` | Base vertical target expansion for predictor path |
 | `Aabb.EnableAdaptiveProfile` | `true` | Increase expansion at higher movement speeds |
-| `Aabb.ProfileSpeedStart` | `40.0` | Speed where adaptive scaling starts |
-| `Aabb.ProfileSpeedFull` | `260.0` | Speed where adaptive scaling reaches full strength |
+| `Aabb.ProfileSpeedStart` | `80.0` | Speed where adaptive scaling starts |
+| `Aabb.ProfileSpeedFull` | `100.0` | Speed where adaptive scaling reaches full strength |
 | `Aabb.ProfileHorizontalMaxMultiplier` | `1.70` | Max horizontal multiplier at high speed |
 | `Aabb.ProfileVerticalMaxMultiplier` | `1.35` | Max vertical multiplier at high speed |
 | `Aabb.EnableDirectionalShift` | `true` | Shift predicted target volume toward movement direction |

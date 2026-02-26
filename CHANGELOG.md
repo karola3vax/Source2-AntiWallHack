@@ -2,14 +2,11 @@
 
 ## 3.0.1
 
-- **Better visibility in tricky angles:** Enemies are now less likely to be missed through tiny gaps and narrow peeks.
-- **More stable on busy servers:** Keeps safe behavior during temporary engine issues and stays optimized for 30+ player servers.
-- **Cleaner output:** Debug logs are easier to read in console.
-- **Clearer docs:** README and release text were rewritten to be easier to understand.
-- **New config options:** Added `Trace.AimRayHitRadius` (default `100.0`), `Trace.AimRaySpreadDegrees` (default `1.0`), and `Trace.GapSweepProximity` (default `72.0`).
-- **Lowered default `RayTracePoints` from `10` to `8`:** ~20% fewer ray traces with negligible accuracy impact, better suited for 30+ player servers.
-- **Fixed `RemoveTargetPlayerAndWeapons` return value:** Debug-off fast path now correctly tracks whether entities were actually removed instead of always returning `true`.
-- **Changed default `IncludeTeammates` to `false`:** Teammates are always transmitted by default, skipping unnecessary LOS checks for same-team players.
+- **Improved detection accuracy:** Enemies peeking through narrow gaps, thin slits, and tight corners are now detected more reliably thanks to refined aim-ray and gap-sweep probes.
+- **Better performance on large servers:** Default ray trace points lowered from 10 to 6, teammate visibility checks are skipped by default, and adaptive profile speed range tightened (`ProfileSpeedStart: 80`, `ProfileSpeedFull: 100`) for faster peek-assist response — all reducing CPU usage on 30+ player servers.
+- **New tuning options:** Added `AimRayHitRadius`, `AimRaySpreadDegrees`, and `GapSweepProximity` settings to give server operators finer control over detection sensitivity and performance balance.
+- **Bug fix:** Corrected an internal tracking issue where hidden entity removal could be misreported, improving diagnostic accuracy when debug counters are enabled.
+- **Cleaner logs and docs:** Debug console output is now easier to read, and the README has been rewritten with clearer installation steps and configuration guidance.
 
 ## 3.0.0
 
