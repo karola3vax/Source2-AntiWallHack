@@ -93,9 +93,9 @@ Use these as starting profiles, then benchmark on your own hardware.
 | Profile | `UpdateFrequencyTicks` | `RevealHoldSeconds` | `RayTracePoints` | Best For |
 | :--- | :---: | :---: | :---: | :--- |
 | **Competitive** | `2` | `0.30` | `10` | 5v5 / scrim |
-| **Casual** | `4` | `0.35` | `8` | 10v10 community |
-| **Large** | `8` | `0.45` | `6` | 20-24 players |
-| **High Population** | `12-16` | `0.50` | `4-5` | 30+ players |
+| **Casual** | `4` | `0.4` | `8` | 10v10 community |
+| **Large** | `8` | `0.5` | `6` | 20-24 players |
+| **High Population** | `10` | `1.0` | `4` | 30+ players |
 
 > [!TIP]
 > The first lever for CPU is `Core.UpdateFrequencyTicks`. Higher value = fewer full visibility updates per second.
