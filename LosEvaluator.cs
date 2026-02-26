@@ -152,7 +152,7 @@ public class LosEvaluator
             return VisibilityEval.UnknownTransient;
         }
 
-        // SLAYER method (expanded): 5 aim rays (center + cross) per viewer tick,
+        // SLAYER method (expanded): 5 aim rays (center + X pattern) per viewer tick,
         // then reveal targets near any hit point.
         float aimRayHitRadius = S2AWHState.Current.Trace.AimRayHitRadius;
         if (aimRayHitRadius > 0.0f &&

@@ -21,6 +21,9 @@ It runs on the server and only sends enemy data when that enemy should really be
 
 ---
 
+> [!IMPORTANT]
+> The plugin is server-side. Cheat software on the client cannot bypass data that was never sent.
+
 > [!CAUTION]
 >
 > ### Performance Notice
@@ -43,8 +46,6 @@ S2AWH uses a 4-stage visibility check:
 ```
 
 If all 4 stages fail, the target is treated as hidden and their important entity data is removed from transmit.
-
-The plugin is server-side. Cheat software on the client cannot bypass data that was never sent.
 
 > [!NOTE]
 > Safety behavior is fail-open on transient engine/plugin errors. In uncertain error states, S2AWH prefers transmitting instead of wrongly hiding players.
@@ -93,9 +94,9 @@ Use these as starting profiles, then benchmark on your own hardware.
 | Profile | `UpdateFrequencyTicks` | `RevealHoldSeconds` | `RayTracePoints` | Best For |
 | :--- | :---: | :---: | :---: | :--- |
 | **Competitive** | `2` | `0.30` | `10` | 5v5 / scrim |
-| **Casual** | `4` | `0.40` | `10` | 10v10 community |
-| **Large** | `8` | `0.50` | `8` | 20-24 players |
-| **High Population** | `10` | `1.0` | `8` | 30+ players |
+| **Casual** | `4` | `0.40` | `8` | 10v10 community |
+| **Large** | `8` | `0.50` | `6` | 20-24 players |
+| **High Population** | `10` | `1.0` | `4` | 30+ players |
 
 > [!TIP]
 > The first lever for CPU is `Core.UpdateFrequencyTicks`. Higher value = fewer full visibility updates per second.
@@ -187,4 +188,3 @@ Distributed under the **MIT License**. See [`LICENSE`](./LICENSE) for details.
   <i>S2AWH - Server-side visibility filtering for fair play.</i>
   <br><br>
 </div>
-
