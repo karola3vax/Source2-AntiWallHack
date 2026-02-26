@@ -70,20 +70,20 @@ If all 4 stages fail, the target is treated as hidden and their important entity
 
 [![Ray-Trace Installation Guide](https://raw.githubusercontent.com/karola3vax/server-assets/refs/heads/main/Screenshot_2.png)](https://github.com/FUNPLAY-pro-CS2/Ray-Trace/releases)
 
-4. Download the latest S2AWH release and place the plugin file:
+1. Download the latest S2AWH release and place the plugin file:
 
    ```
    \addons\counterstrikesharp\plugins\S2AWH\S2AWH.dll
    ```
 
-5. If upgrading from an older version, delete the old config file first:
+2. If upgrading from an older version, delete the old config file first:
 
    ```
    \addons\counterstrikesharp\configs\plugins\S2AWH\S2AWH.json
    ```
 
-6. Start the server. A new config file is generated automatically at the same path.
-7. Check server console logs to confirm the plugin is initialized.
+3. Start the server. A new config file is generated automatically at the same path.
+4. Check server console logs to confirm the plugin is initialized.
 
 ---
 
@@ -117,7 +117,7 @@ Use these as starting profiles, then benchmark on your own hardware.
 | :--- | :---: | :--- |
 | `Core.Enabled` | `true` | Master on/off switch for the plugin |
 | `Core.UpdateFrequencyTicks` | `10` | How many ticks to spread viewer work across (higher = lower CPU, slower updates) |
-| `Trace.RayTracePoints` | `10` | Number of body sample points per target (`1..10`) |
+| `Trace.RayTracePoints` | `8` | Number of body sample points per target (`1..10`) |
 | `Trace.UseFovCulling` | `true` | Skip expensive checks for targets outside viewer cone |
 | `Trace.FovDegrees` | `200.0` | FOV cone size used by culling |
 | `Trace.AimRayHitRadius` | `100.0` | Reveal radius around aim-ray hit points |

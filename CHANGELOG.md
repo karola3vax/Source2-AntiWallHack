@@ -2,14 +2,14 @@
 
 ## 3.0.1
 
-- **Precision Showcase:** Added configurable 5-ray X-pattern aim-proximity checks for better narrow-angle target pickup.
-- **Aim-Point Radius Method:** Implemented the "trace to aim hit, then evaluate targets around that hit radius" approach for tighter narrow-gap consistency.
-- **Tiny-Gap Fix:** Resolved the screenshot-reported issue where enemies could be missed at some thin slit/peek angles.
-- **Gap Handling Upgrade:** `Trace.GapSweepProximity` and `Trace.AimRaySpreadDegrees` tuning now drives slit/peek sensitivity directly.
-- **High-Pop Stability:** Fail-open safety behavior remains intact while improving consistency in edge-case visibility checks.
-- **30+ Player Focus:** Performance-oriented defaults and staggered evaluation model stay optimized for large servers.
-- **Cleaner Debug Output:** Simplified console debug logs to make diagnostics easier to read in live server operation.
-- **Documentation Overhaul:** README refreshed with clearer install steps, tuning guidance, and config descriptions.
+- **Better visibility in tricky angles:** Enemies are now less likely to be missed through tiny gaps and narrow peeks.
+- **More stable on busy servers:** Keeps safe behavior during temporary engine issues and stays optimized for 30+ player servers.
+- **Cleaner output:** Debug logs are easier to read in console.
+- **Clearer docs:** README and release text were rewritten to be easier to understand.
+- **New config options:** Added `Trace.AimRayHitRadius` (default `100.0`), `Trace.AimRaySpreadDegrees` (default `1.0`), and `Trace.GapSweepProximity` (default `72.0`).
+- **Lowered default `RayTracePoints` from `10` to `8`:** ~20% fewer ray traces with negligible accuracy impact, better suited for 30+ player servers.
+- **Fixed `RemoveTargetPlayerAndWeapons` return value:** Debug-off fast path now correctly tracks whether entities were actually removed instead of always returning `true`.
+- **Changed default `IncludeTeammates` to `false`:** Teammates are always transmitted by default, skipping unnecessary LOS checks for same-team players.
 
 ## 3.0.0
 

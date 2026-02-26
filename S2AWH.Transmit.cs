@@ -157,6 +157,7 @@ public partial class S2AWH
 
         if (!_collectDebugCounters)
         {
+            bool removed = false;
             for (int i = 0; i < entityCount; i++)
             {
                 uint entityHandleRaw = targetEntities.RawHandles[i];
@@ -166,8 +167,9 @@ public partial class S2AWH
                 }
 
                 info.TransmitEntities.Remove(entityIndex);
+                removed = true;
             }
-            return true;
+            return removed;
         }
 
         bool removedAny = false;

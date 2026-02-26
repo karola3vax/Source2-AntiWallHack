@@ -19,7 +19,7 @@ public sealed class S2AWHConfig : BasePluginConfig
     public sealed class TraceSettings
     {
         [JsonPropertyName("RayTracePoints")]
-        public int RayTracePoints { get; set; } = 10;
+        public int RayTracePoints { get; set; } = 8;
 
         [JsonPropertyName("UseFovCulling")]
         public bool UseFovCulling { get; set; } = true;
