@@ -7,6 +7,7 @@ internal sealed class TransmitFilter
     private const int SlotCount = 65;
     // Very close targets should never be culled by FOV; 75 units is roughly two player widths.
     private const float NearbyAlwaysVisibleDistanceSq = 75.0f * 75.0f;
+    private const float ViewerGroundProbeHeight = 8.0f;
     private readonly LosEvaluator _losEvaluator;
     private readonly PreloadPredictor _predictor;
     private int _cachedFovViewerSlot = -1;
@@ -122,8 +123,12 @@ internal sealed class TransmitFilter
         ref var t = ref transforms[targetSlot];
         if (!t.IsValid) return true;
 
+        float groundStartX = viewerSnapshot.OriginX;
+        float groundStartY = viewerSnapshot.OriginY;
+        float groundStartZ = viewerSnapshot.OriginZ + ViewerGroundProbeHeight;
+
         // Fast pass: origin
-        if (IsPointInFov(t.OriginX, t.OriginY, t.OriginZ, fovDotThreshold))
+        if (IsPointInFovFromAnyViewerStart(groundStartX, groundStartY, groundStartZ, t.OriginX, t.OriginY, t.OriginZ, fovDotThreshold))
         {
             return true;
         }
@@ -145,48 +150,51 @@ internal sealed class TransmitFilter
         // Conservative sphere-vs-cone check: if the AABB's bounding sphere overlaps the FOV cone,
         // do not cull here. False positives only cost extra LOS work; false negatives hide players.
         float halfFovRadians = (config.Trace.FovDegrees * 0.5f) * MathF.PI / 180.0f;
-        if (IsBoundsSphereInFov(centerX, centerY, centerZ, halfX, halfY, halfZ, halfFovRadians, fovDotThreshold))
+        if (IsBoundsSphereInFov(_cachedFovStartX, _cachedFovStartY, _cachedFovStartZ, centerX, centerY, centerZ, halfX, halfY, halfZ, halfFovRadians, fovDotThreshold) ||
+            IsBoundsSphereInFov(groundStartX, groundStartY, groundStartZ, centerX, centerY, centerZ, halfX, halfY, halfZ, halfFovRadians, fovDotThreshold))
         {
             return true;
         }
 
-        if (IsPointInFov(centerX, centerY, centerZ, fovDotThreshold))
+        if (IsPointInFov(_cachedFovStartX, _cachedFovStartY, _cachedFovStartZ, centerX, centerY, centerZ, fovDotThreshold) ||
+            IsPointInFov(groundStartX, groundStartY, groundStartZ, centerX, centerY, centerZ, fovDotThreshold))
         {
             return true;
         }
 
-        if (IsPointInFov(t.EyeX, t.EyeY, t.EyeZ, fovDotThreshold))
+        if (IsPointInFov(_cachedFovStartX, _cachedFovStartY, _cachedFovStartZ, t.EyeX, t.EyeY, t.EyeZ, fovDotThreshold) ||
+            IsPointInFov(groundStartX, groundStartY, groundStartZ, t.EyeX, t.EyeY, t.EyeZ, fovDotThreshold))
         {
             return true;
         }
 
         // Corners
-        if (IsPointInFov(minX, minY, minZ, fovDotThreshold) ||
-            IsPointInFov(maxX, minY, minZ, fovDotThreshold) ||
-            IsPointInFov(minX, maxY, minZ, fovDotThreshold) ||
-            IsPointInFov(maxX, maxY, minZ, fovDotThreshold) ||
-            IsPointInFov(minX, minY, maxZ, fovDotThreshold) ||
-            IsPointInFov(maxX, minY, maxZ, fovDotThreshold) ||
-            IsPointInFov(minX, maxY, maxZ, fovDotThreshold) ||
-            IsPointInFov(maxX, maxY, maxZ, fovDotThreshold))
+        if (IsPointInFovFromAnyViewerStart(groundStartX, groundStartY, groundStartZ, minX, minY, minZ, fovDotThreshold) ||
+            IsPointInFovFromAnyViewerStart(groundStartX, groundStartY, groundStartZ, maxX, minY, minZ, fovDotThreshold) ||
+            IsPointInFovFromAnyViewerStart(groundStartX, groundStartY, groundStartZ, minX, maxY, minZ, fovDotThreshold) ||
+            IsPointInFovFromAnyViewerStart(groundStartX, groundStartY, groundStartZ, maxX, maxY, minZ, fovDotThreshold) ||
+            IsPointInFovFromAnyViewerStart(groundStartX, groundStartY, groundStartZ, minX, minY, maxZ, fovDotThreshold) ||
+            IsPointInFovFromAnyViewerStart(groundStartX, groundStartY, groundStartZ, maxX, minY, maxZ, fovDotThreshold) ||
+            IsPointInFovFromAnyViewerStart(groundStartX, groundStartY, groundStartZ, minX, maxY, maxZ, fovDotThreshold) ||
+            IsPointInFovFromAnyViewerStart(groundStartX, groundStartY, groundStartZ, maxX, maxY, maxZ, fovDotThreshold))
         {
             return true;
         }
 
         // Lateral face centers (captures thin visible strips where corners can miss).
-        return IsPointInFov(minX, centerY, centerZ, fovDotThreshold) ||
-               IsPointInFov(maxX, centerY, centerZ, fovDotThreshold) ||
-               IsPointInFov(centerX, minY, centerZ, fovDotThreshold) ||
-               IsPointInFov(centerX, maxY, centerZ, fovDotThreshold) ||
-               IsPointInFov(centerX, centerY, minZ, fovDotThreshold) ||
-               IsPointInFov(centerX, centerY, maxZ, fovDotThreshold);
+        return IsPointInFovFromAnyViewerStart(groundStartX, groundStartY, groundStartZ, minX, centerY, centerZ, fovDotThreshold) ||
+               IsPointInFovFromAnyViewerStart(groundStartX, groundStartY, groundStartZ, maxX, centerY, centerZ, fovDotThreshold) ||
+               IsPointInFovFromAnyViewerStart(groundStartX, groundStartY, groundStartZ, centerX, minY, centerZ, fovDotThreshold) ||
+               IsPointInFovFromAnyViewerStart(groundStartX, groundStartY, groundStartZ, centerX, maxY, centerZ, fovDotThreshold) ||
+               IsPointInFovFromAnyViewerStart(groundStartX, groundStartY, groundStartZ, centerX, centerY, minZ, fovDotThreshold) ||
+               IsPointInFovFromAnyViewerStart(groundStartX, groundStartY, groundStartZ, centerX, centerY, maxZ, fovDotThreshold);
     }
 
-    private bool IsPointInFov(float pointX, float pointY, float pointZ, float fovDotThreshold)
+    private bool IsPointInFov(float startX, float startY, float startZ, float pointX, float pointY, float pointZ, float fovDotThreshold)
     {
-        float planeX = pointX - _cachedFovStartX;
-        float planeY = pointY - _cachedFovStartY;
-        float planeZ = pointZ - _cachedFovStartZ;
+        float planeX = pointX - startX;
+        float planeY = pointY - startY;
+        float planeZ = pointZ - startZ;
         float distanceSq = (planeX * planeX) + (planeY * planeY) + (planeZ * planeZ);
 
         // If they are closer than 75 units, always render even if behind.
@@ -224,7 +232,23 @@ internal sealed class TransmitFilter
         return (dot * dot) < thresholdSq;
     }
 
+    private bool IsPointInFovFromAnyViewerStart(
+        float groundStartX,
+        float groundStartY,
+        float groundStartZ,
+        float pointX,
+        float pointY,
+        float pointZ,
+        float fovDotThreshold)
+    {
+        return IsPointInFov(_cachedFovStartX, _cachedFovStartY, _cachedFovStartZ, pointX, pointY, pointZ, fovDotThreshold) ||
+               IsPointInFov(groundStartX, groundStartY, groundStartZ, pointX, pointY, pointZ, fovDotThreshold);
+    }
+
     private bool IsBoundsSphereInFov(
+        float startX,
+        float startY,
+        float startZ,
         float centerX,
         float centerY,
         float centerZ,
@@ -234,9 +258,9 @@ internal sealed class TransmitFilter
         float halfFovRadians,
         float fovDotThreshold)
     {
-        float planeX = centerX - _cachedFovStartX;
-        float planeY = centerY - _cachedFovStartY;
-        float planeZ = centerZ - _cachedFovStartZ;
+        float planeX = centerX - startX;
+        float planeY = centerY - startY;
+        float planeZ = centerZ - startZ;
         float distanceSq = (planeX * planeX) + (planeY * planeY) + (planeZ * planeZ);
         if (distanceSq < NearbyAlwaysVisibleDistanceSq)
         {
@@ -246,7 +270,7 @@ internal sealed class TransmitFilter
         float radiusSq = (halfX * halfX) + (halfY * halfY) + (halfZ * halfZ);
         if (radiusSq <= 0.0001f)
         {
-            return IsPointInFov(centerX, centerY, centerZ, fovDotThreshold);
+            return IsPointInFov(startX, startY, startZ, centerX, centerY, centerZ, fovDotThreshold);
         }
 
         if (distanceSq <= radiusSq)

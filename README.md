@@ -103,6 +103,21 @@ If your workspace layout is different, override `CssApiPath`, `LoggingAbstractio
 The repo also ships a commented example config at [`configs/plugins/S2AWH/S2AWH.example.json`](./configs/plugins/S2AWH/S2AWH.example.json).
 It is written in plain language so server owners can understand each setting without reading source code.
 
+### Release Packaging
+
+To build the GitHub release zip locally:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\package-release.ps1
+```
+
+This creates:
+
+- `release_staging/S2AWH-3.0.2/`
+- `release_staging/S2AWH-3.0.2.zip`
+
+The zip already contains the plugin DLL, example config, license, changelog, and release notes.
+
 ---
 
 ## Performance Tuning
