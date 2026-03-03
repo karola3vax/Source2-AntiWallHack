@@ -6,27 +6,49 @@ using RayTraceAPI;
 
 namespace S2AWH;
 
+internal enum DebugAabbKind : byte
+{
+    None = 0,
+    Los = 1,
+    PredictorCurrent = 2,
+    PredictorPredicted = 3
+}
+
+internal enum DebugTraceKind : byte
+{
+    AimRay = 0,
+    MicroHull = 1,
+    LosSurface = 2
+}
+
 internal static class VisibilityGeometry
 {
-    public const int MaxTracePoints = 10;
-    // LOS needs AABB padding because the player visual model (arms, weapon,
-    // shoulders) extends beyond the tight collision box, AND because rays need
-    // to approach narrow gaps/slits at diverse enough angles to thread through.
-    // 1.5x horizontal provides sufficient angle diversity without wall leaking.
-    private const float LosHorizontalPadding = 1.5f;
-    private const float LosVerticalPadding = 1.25f;
-    private static readonly Vector DefaultViewOffset = new(0, 0, 64);
     private static readonly QAngle BeamRotationZero = new(0.0f, 0.0f, 0.0f);
     private static readonly Vector BeamVelocityZero = new(0.0f, 0.0f, 0.0f);
-    private static readonly Color HumanDebugBeamColor = Color.FromArgb(255, 64, 160, 255);
-    private static readonly Color BotDebugBeamColor = Color.FromArgb(255, 80, 220, 80);
+    private static readonly Color LosSurfaceDebugBeamColor = Color.FromArgb(255, 190, 80, 255);
+    private static readonly Color AimRayDebugBeamColor = Color.FromArgb(255, 255, 255, 255);
+    private static readonly Color MicroHullDebugBeamColor = Color.FromArgb(255, 255, 96, 96);
+    private static readonly Color LosDebugAabbColor = Color.FromArgb(255, 255, 170, 0);
+    private static readonly Color PredictorCurrentDebugAabbColor = Color.FromArgb(255, 0, 225, 120);
+    private static readonly Color PredictorFutureDebugAabbColor = Color.FromArgb(255, 225, 80, 255);
     private const float DebugBeamWidth = 1.5f;
     private const float DebugBeamLifetimeSeconds = 0.08f;
+    private const float DebugAabbLineWidth = 1.2f;
+    private const float DebugAabbLifetimeSeconds = 0.08f;
+    private const int MaxDebugBeamEntitiesPerTick = 256;
+    private static readonly (int Start, int End)[] DebugAabbEdges = new[]
+    {
+        (0, 1), (1, 3), (3, 2), (2, 0), // lower ring
+        (4, 5), (5, 7), (7, 6), (6, 4), // upper ring
+        (0, 4), (1, 5), (2, 6), (3, 7)  // vertical edges
+    };
     // LOS should be blocked by world geometry, not by other player models standing in front.
     private static readonly TraceOptions VisibilityTraceOptions = new(
         (InteractionLayers)0,
         InteractionLayers.MASK_WORLD_ONLY
     );
+    private static int _debugBudgetTick = -1;
+    private static int _debugBeamEntitiesUsedThisTick;
 
     /// <summary>
     /// Returns shared trace options used by LOS checks.
@@ -53,17 +75,34 @@ internal static class VisibilityGeometry
     }
 
     /// <summary>
+    /// Returns whether debug AABB boxes should be rendered.
+    /// </summary>
+    public static bool ShouldDrawDebugAabbBox()
+    {
+        return S2AWHState.Current.Diagnostics.DrawDebugAabbBoxes;
+    }
+
+    /// <summary>
     /// Draws a short-lived debug beam for a single trace.
     /// </summary>
-    public static void DrawDebugTraceBeam(Vector start, Vector intendedEnd, in TraceResult traceResult, bool viewerIsBot)
+    public static void DrawDebugTraceBeam(
+        Vector start,
+        Vector intendedEnd,
+        in TraceResult traceResult,
+        DebugTraceKind traceKind)
     {
+        if (!TryConsumeDebugBeamBudget(1))
+        {
+            return;
+        }
+
         CBeam? beam = Utilities.CreateEntityByName<CBeam>("env_beam");
         if (beam == null || !beam.IsValid)
         {
             return;
         }
 
-        beam.Render = viewerIsBot ? BotDebugBeamColor : HumanDebugBeamColor;
+        beam.Render = ResolveDebugTraceColor(traceKind);
         beam.Width = DebugBeamWidth;
         beam.RenderMode = RenderMode_t.kRenderNormal;
         beam.RenderFX = RenderFx_t.kRenderFxNone;
@@ -87,93 +126,45 @@ internal static class VisibilityGeometry
         beam.AddEntityIOEvent("Kill", beam, beam, delay: DebugBeamLifetimeSeconds);
     }
 
-    private static float Lerp(float a, float b, float t) => a + ((b - a) * t);
-
-    private static float GetSpeed(Vector? velocity)
-    {
-        if (velocity == null)
-        {
-            return 0.0f;
-        }
-
-        return MathF.Sqrt(
-            (velocity.X * velocity.X) +
-            (velocity.Y * velocity.Y) +
-            (velocity.Z * velocity.Z)
-        );
-    }
-
-    private static float GetProfileAlpha(float speed, S2AWHConfig config)
-    {
-        if (!config.Aabb.EnableAdaptiveProfile)
-        {
-            return 0.0f;
-        }
-
-        float start = Math.Max(0.0f, config.Aabb.ProfileSpeedStart);
-        float full = Math.Max(start + 1.0f, config.Aabb.ProfileSpeedFull);
-
-        if (speed <= start)
-        {
-            return 0.0f;
-        }
-
-        if (speed >= full)
-        {
-            return 1.0f;
-        }
-
-        return (speed - start) / (full - start);
-    }
-
-    private static bool TryGetMovementDirection(
-        Vector? velocity,
-        out float directionX,
-        out float directionY,
-        out float directionZ)
-    {
-        directionX = 0.0f;
-        directionY = 0.0f;
-        directionZ = 0.0f;
-        if (velocity == null)
-        {
-            return false;
-        }
-
-        float horizontalLengthSquared = (velocity.X * velocity.X) + (velocity.Y * velocity.Y);
-        if (horizontalLengthSquared > 0.0001f)
-        {
-            float invLength = 1.0f / MathF.Sqrt(horizontalLengthSquared);
-            directionX = velocity.X * invLength;
-            directionY = velocity.Y * invLength;
-            return true;
-        }
-
-        float fullLengthSquared = horizontalLengthSquared + (velocity.Z * velocity.Z);
-        if (fullLengthSquared > 0.0001f)
-        {
-            float invLength = 1.0f / MathF.Sqrt(fullLengthSquared);
-            directionX = velocity.X * invLength;
-            directionY = velocity.Y * invLength;
-            directionZ = velocity.Z * invLength;
-            return true;
-        }
-
-        return false;
-    }
-
     /// <summary>
-    /// Creates a reusable fixed-size point buffer used by target sampling.
+    /// Draws a short-lived wireframe AABB using 12 beam edges.
     /// </summary>
-    public static Vector[] CreatePointBuffer()
+    public static void DrawDebugAabbBox(
+        float minX,
+        float minY,
+        float minZ,
+        float maxX,
+        float maxY,
+        float maxZ,
+        DebugAabbKind kind)
     {
-        Vector[] buffer = new Vector[MaxTracePoints];
-        for (int i = 0; i < buffer.Length; i++)
+        if (kind == DebugAabbKind.None || !ShouldDrawDebugAabbBox())
         {
-            buffer[i] = new Vector(0.0f, 0.0f, 0.0f);
+            return;
         }
 
-        return buffer;
+        if (!TryConsumeDebugBeamBudget(DebugAabbEdges.Length))
+        {
+            return;
+        }
+
+        Color color = ResolveDebugAabbColor(kind);
+        Vector[] cornerBuffer = CreateDebugAabbCornerBuffer();
+
+        SetPoint(cornerBuffer, 0, minX, minY, minZ);
+        SetPoint(cornerBuffer, 1, maxX, minY, minZ);
+        SetPoint(cornerBuffer, 2, minX, maxY, minZ);
+        SetPoint(cornerBuffer, 3, maxX, maxY, minZ);
+        SetPoint(cornerBuffer, 4, minX, minY, maxZ);
+        SetPoint(cornerBuffer, 5, maxX, minY, maxZ);
+        SetPoint(cornerBuffer, 6, minX, maxY, maxZ);
+        SetPoint(cornerBuffer, 7, maxX, maxY, maxZ);
+
+        for (int i = 0; i < DebugAabbEdges.Length; i++)
+        {
+            var edge = DebugAabbEdges[i];
+            DrawDebugLine(cornerBuffer[edge.Start], cornerBuffer[edge.End], color, DebugAabbLineWidth, DebugAabbLifetimeSeconds);
+        }
     }
 
     private static void SetPoint(Vector[] pointBuffer, int index, float x, float y, float z)
@@ -184,157 +175,76 @@ internal static class VisibilityGeometry
         point.Z = z;
     }
 
-    /// <summary>
-    /// Resolves the pawn eye position into the supplied output vector.
-    /// </summary>
-    public static bool TryFillEyePosition(CBasePlayerPawn pawn, Vector eyePosition)
+    private static Vector[] CreateDebugAabbCornerBuffer()
     {
-        var origin = pawn.AbsOrigin;
-        if (origin == null)
+        Vector[] corners = new Vector[8];
+        for (int i = 0; i < corners.Length; i++)
+        {
+            corners[i] = new Vector(0.0f, 0.0f, 0.0f);
+        }
+
+        return corners;
+    }
+
+    private static void DrawDebugLine(Vector start, Vector end, Color color, float width, float lifetime)
+    {
+        CBeam? beam = Utilities.CreateEntityByName<CBeam>("env_beam");
+        if (beam == null || !beam.IsValid)
+        {
+            return;
+        }
+
+        beam.Render = color;
+        beam.Width = width;
+        beam.RenderMode = RenderMode_t.kRenderNormal;
+        beam.RenderFX = RenderFx_t.kRenderFxNone;
+
+        beam.Teleport(start, BeamRotationZero, BeamVelocityZero);
+        beam.EndPos.X = end.X;
+        beam.EndPos.Y = end.Y;
+        beam.EndPos.Z = end.Z;
+
+        beam.DispatchSpawn();
+        beam.AddEntityIOEvent("Kill", beam, beam, delay: lifetime);
+    }
+
+    private static bool TryConsumeDebugBeamBudget(int amount)
+    {
+        int nowTick = Server.TickCount;
+        if (_debugBudgetTick != nowTick)
+        {
+            _debugBudgetTick = nowTick;
+            _debugBeamEntitiesUsedThisTick = 0;
+        }
+
+        if ((_debugBeamEntitiesUsedThisTick + amount) > MaxDebugBeamEntitiesPerTick)
         {
             return false;
         }
 
-        var viewOffset = pawn.ViewOffset;
-        if (viewOffset != null)
-        {
-            eyePosition.X = origin.X + viewOffset.X;
-            eyePosition.Y = origin.Y + viewOffset.Y;
-            eyePosition.Z = origin.Z + viewOffset.Z;
-            return true;
-        }
-
-        eyePosition.X = origin.X + DefaultViewOffset.X;
-        eyePosition.Y = origin.Y + DefaultViewOffset.Y;
-        eyePosition.Z = origin.Z + DefaultViewOffset.Z;
+        _debugBeamEntitiesUsedThisTick += amount;
         return true;
     }
 
-    /// <summary>
-    /// Fills sampled target points for LOS/prediction and returns the number of points written.
-    /// </summary>
-    public static int FillTargetPoints(
-        CBasePlayerPawn pawn,
-        Vector[] pointBuffer,
-        Vector? originOverride = null,
-        bool isPredictorPath = false,
-        bool applyConfiguredLimit = true)
+    private static Color ResolveDebugAabbColor(DebugAabbKind kind)
     {
-        if (pointBuffer.Length < MaxTracePoints)
+        return kind switch
         {
-            throw new ArgumentException($"pointBuffer length must be at least {MaxTracePoints}.", nameof(pointBuffer));
-        }
+            DebugAabbKind.Los => LosDebugAabbColor,
+            DebugAabbKind.PredictorCurrent => PredictorCurrentDebugAabbColor,
+            DebugAabbKind.PredictorPredicted => PredictorFutureDebugAabbColor,
+            _ => LosDebugAabbColor
+        };
+    }
 
-        var config = S2AWHState.Current;
-        Vector? origin = originOverride ?? pawn.AbsOrigin;
-
-        if (origin == null)
+    private static Color ResolveDebugTraceColor(DebugTraceKind traceKind)
+    {
+        return traceKind switch
         {
-            return 0;
-        }
-
-        int pointCount = 0;
-        var viewOffset = pawn.ViewOffset;
-        float viewOffsetX = viewOffset?.X ?? DefaultViewOffset.X;
-        float viewOffsetY = viewOffset?.Y ?? DefaultViewOffset.Y;
-        float viewOffsetZ = viewOffset?.Z ?? DefaultViewOffset.Z;
-
-        SetPoint(pointBuffer, pointCount++, origin.X + viewOffsetX, origin.Y + viewOffsetY, origin.Z + viewOffsetZ);
-
-        var collision = pawn.Collision;
-        if (collision != null && collision.Mins != null && collision.Maxs != null)
-        {
-            var mins = collision.Mins;
-            var maxs = collision.Maxs;
-            float horizontalScale = isPredictorPath ? 1.0f : LosHorizontalPadding;
-            float verticalScale = isPredictorPath ? 1.0f : LosVerticalPadding;
-
-            float centerX = (mins.X + maxs.X) * 0.5f;
-            float centerY = (mins.Y + maxs.Y) * 0.5f;
-            float centerZ = (mins.Z + maxs.Z) * 0.5f;
-
-            if (isPredictorPath)
-            {
-                var velocity = pawn.AbsVelocity;
-                float speed = GetSpeed(velocity);
-                float alpha = GetProfileAlpha(speed, config);
-
-                float profileHorizontalMultiplier = Lerp(1.0f, config.Aabb.ProfileHorizontalMaxMultiplier, alpha);
-                float profileVerticalMultiplier = Lerp(1.0f, config.Aabb.ProfileVerticalMaxMultiplier, alpha);
-                horizontalScale = config.Aabb.HorizontalScale * profileHorizontalMultiplier;
-                verticalScale = config.Aabb.VerticalScale * profileVerticalMultiplier;
-
-                if (config.Aabb.EnableDirectionalShift &&
-                    alpha > 0.0f &&
-                    TryGetMovementDirection(velocity, out float movementDirX, out float movementDirY, out float movementDirZ))
-                {
-                    float shiftUnits = config.Aabb.DirectionalForwardShiftMaxUnits * alpha;
-                    shiftUnits *= config.Aabb.DirectionalPredictorShiftFactor;
-
-                    centerX += movementDirX * shiftUnits;
-                    centerY += movementDirY * shiftUnits;
-                    centerZ += movementDirZ * shiftUnits;
-                }
-            }
-
-            float halfX = (maxs.X - mins.X) * 0.5f * horizontalScale;
-            float halfY = (maxs.Y - mins.Y) * 0.5f * horizontalScale;
-            float halfZ = (maxs.Z - mins.Z) * 0.5f * verticalScale;
-
-            float expandedMinX = centerX - halfX;
-            float expandedMaxX = centerX + halfX;
-            float expandedMinY = centerY - halfY;
-            float expandedMaxY = centerY + halfY;
-            float expandedMinZ = centerZ - halfZ;
-            float expandedMaxZ = centerZ + halfZ;
-
-            SetPoint(pointBuffer, pointCount++, origin.X + centerX, origin.Y + centerY, origin.Z + centerZ);
-
-            if (isPredictorPath)
-            {
-                SetPoint(pointBuffer, pointCount++, origin.X + expandedMinX, origin.Y + expandedMinY, origin.Z + expandedMinZ);
-                SetPoint(pointBuffer, pointCount++, origin.X + expandedMaxX, origin.Y + expandedMinY, origin.Z + expandedMinZ);
-                SetPoint(pointBuffer, pointCount++, origin.X + expandedMinX, origin.Y + expandedMaxY, origin.Z + expandedMinZ);
-                SetPoint(pointBuffer, pointCount++, origin.X + expandedMaxX, origin.Y + expandedMaxY, origin.Z + expandedMinZ);
-
-                SetPoint(pointBuffer, pointCount++, origin.X + expandedMinX, origin.Y + expandedMinY, origin.Z + expandedMaxZ);
-                SetPoint(pointBuffer, pointCount++, origin.X + expandedMaxX, origin.Y + expandedMinY, origin.Z + expandedMaxZ);
-                SetPoint(pointBuffer, pointCount++, origin.X + expandedMinX, origin.Y + expandedMaxY, origin.Z + expandedMaxZ);
-                SetPoint(pointBuffer, pointCount++, origin.X + expandedMaxX, origin.Y + expandedMaxY, origin.Z + expandedMaxZ);
-            }
-            else
-            {
-                // LOS path: use full 8-corner AABB sampling to cover diagonal/oblique angles.
-                // Z levels are spread wide apart (75% below / 85% above center) so that rays
-                // approach from maximally different angles. This is critical for narrow gaps
-                // where only one specific angle can thread through the opening.
-                float lowerZ = Math.Clamp(centerZ - (halfZ * 0.75f), expandedMinZ, expandedMaxZ);
-                float upperZ = Math.Clamp(centerZ + (halfZ * 0.85f), expandedMinZ, expandedMaxZ);
-
-                // Lower ring (4 corners)
-                SetPoint(pointBuffer, pointCount++, origin.X + centerX + halfX, origin.Y + centerY + halfY, origin.Z + lowerZ);
-                SetPoint(pointBuffer, pointCount++, origin.X + centerX - halfX, origin.Y + centerY + halfY, origin.Z + lowerZ);
-                SetPoint(pointBuffer, pointCount++, origin.X + centerX + halfX, origin.Y + centerY - halfY, origin.Z + lowerZ);
-                SetPoint(pointBuffer, pointCount++, origin.X + centerX - halfX, origin.Y + centerY - halfY, origin.Z + lowerZ);
-
-                // Upper ring (4 corners)
-                SetPoint(pointBuffer, pointCount++, origin.X + centerX + halfX, origin.Y + centerY + halfY, origin.Z + upperZ);
-                SetPoint(pointBuffer, pointCount++, origin.X + centerX - halfX, origin.Y + centerY + halfY, origin.Z + upperZ);
-                SetPoint(pointBuffer, pointCount++, origin.X + centerX + halfX, origin.Y + centerY - halfY, origin.Z + upperZ);
-                SetPoint(pointBuffer, pointCount++, origin.X + centerX - halfX, origin.Y + centerY - halfY, origin.Z + upperZ);
-            }
-        }
-        else
-        {
-            SetPoint(pointBuffer, pointCount++, origin.X, origin.Y, origin.Z + (viewOffsetZ / 2));
-        }
-
-        if (!applyConfiguredLimit)
-        {
-            return pointCount;
-        }
-
-        int configuredPointCount = Math.Clamp(config.Trace.RayTracePoints, 1, MaxTracePoints);
-        return Math.Min(pointCount, configuredPointCount);
+            DebugTraceKind.LosSurface => LosSurfaceDebugBeamColor,
+            DebugTraceKind.AimRay => AimRayDebugBeamColor,
+            DebugTraceKind.MicroHull => MicroHullDebugBeamColor,
+            _ => throw new ArgumentOutOfRangeException(nameof(traceKind), traceKind, "Unknown debug trace kind.")
+        };
     }
 }

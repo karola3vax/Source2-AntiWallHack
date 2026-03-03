@@ -3,6 +3,7 @@ using CounterStrikeSharp.API.Core;
 
 namespace S2AWH;
 
+#pragma warning disable CA1034 // Nested settings types intentionally mirror JSON sections.
 public sealed class S2AWHConfig : BasePluginConfig
 {
     private float _fovDotThreshold = ComputeFovDotThreshold(200.0f);
@@ -13,14 +14,11 @@ public sealed class S2AWHConfig : BasePluginConfig
         public bool Enabled { get; set; } = true;
 
         [JsonPropertyName("UpdateFrequencyTicks")]
-        public int UpdateFrequencyTicks { get; set; } = 10;
+        public int UpdateFrequencyTicks { get; set; } = 16;
     }
 
     public sealed class TraceSettings
     {
-        [JsonPropertyName("RayTracePoints")]
-        public int RayTracePoints { get; set; } = 6;
-
         [JsonPropertyName("UseFovCulling")]
         public bool UseFovCulling { get; set; } = true;
 
@@ -33,17 +31,32 @@ public sealed class S2AWHConfig : BasePluginConfig
         [JsonPropertyName("AimRaySpreadDegrees")]
         public float AimRaySpreadDegrees { get; set; } = 1.0f;
 
-        [JsonPropertyName("GapSweepProximity")]
-        public float GapSweepProximity { get; set; } = 72.0f;
+        [JsonPropertyName("AimRayCount")]
+        public int AimRayCount { get; set; } = 1;
+
+        [JsonPropertyName("AimRayMaxDistance")]
+        public float AimRayMaxDistance { get; set; } = 2200.0f;
     }
 
     public sealed class PreloadSettings
     {
+        [JsonPropertyName("EnablePreload")]
+        public bool EnablePreload { get; set; } = true;
+
+        [JsonPropertyName("SurfaceProbeHitRadius")]
+        public float SurfaceProbeHitRadius { get; set; } = 64.0f;
+
+        [JsonPropertyName("SurfaceProbeRows")]
+        public int SurfaceProbeRows { get; set; } = 2;
+
         [JsonPropertyName("PredictorDistance")]
         public float PredictorDistance { get; set; } = 150.0f;
 
         [JsonPropertyName("PredictorMinSpeed")]
         public float PredictorMinSpeed { get; set; } = 1.0f;
+
+        [JsonPropertyName("PredictorFullSpeed")]
+        public float PredictorFullSpeed { get; set; } = 100.0f;
 
         [JsonPropertyName("EnableViewerPeekAssist")]
         public bool EnableViewerPeekAssist { get; set; } = true;
@@ -53,24 +66,88 @@ public sealed class S2AWHConfig : BasePluginConfig
 
         [JsonPropertyName("RevealHoldSeconds")]
         public float RevealHoldSeconds { get; set; } = 0.30f;
+
+        [JsonExtensionData]
+        public Dictionary<string, System.Text.Json.JsonElement>? ExtraJson { get; set; }
+
+        public bool TryConsumeLegacyPreloadAlias(out bool enabled, out string aliasName)
+        {
+            aliasName = string.Empty;
+            enabled = false;
+            if (ExtraJson == null)
+            {
+                return false;
+            }
+
+            if (ExtraJson.TryGetValue("EnableProbePreload", out var probeValue))
+            {
+                aliasName = "Preload.EnableProbePreload";
+                return TryReadLegacyBoolValue(probeValue, out enabled);
+            }
+
+            if (!ExtraJson.TryGetValue("EnableSurfacePreload", out var value))
+            {
+                return false;
+            }
+
+            aliasName = "Preload.EnableSurfacePreload";
+            return TryReadLegacyBoolValue(value, out enabled);
+        }
+
+        private static bool TryReadLegacyBoolValue(System.Text.Json.JsonElement value, out bool enabled)
+        {
+            enabled = false;
+            if (value.ValueKind == System.Text.Json.JsonValueKind.True)
+            {
+                enabled = true;
+                return true;
+            }
+
+            if (value.ValueKind == System.Text.Json.JsonValueKind.False)
+            {
+                enabled = false;
+                return true;
+            }
+
+            if (value.ValueKind == System.Text.Json.JsonValueKind.String &&
+                bool.TryParse(value.GetString(), out bool parsed))
+            {
+                enabled = parsed;
+                return true;
+            }
+
+            return true;
+        }
     }
 
     public sealed class AabbSettings
     {
-        [JsonPropertyName("HorizontalScale")]
-        public float HorizontalScale { get; set; } = 3.0f;
+        [JsonPropertyName("LosHorizontalScale")]
+        public float LosHorizontalScale { get; set; } = 1.0f;
 
-        [JsonPropertyName("VerticalScale")]
-        public float VerticalScale { get; set; } = 2.0f;
+        [JsonPropertyName("LosVerticalScale")]
+        public float LosVerticalScale { get; set; } = 1.0f;
+
+        [JsonPropertyName("PredictorHorizontalScale")]
+        public float PredictorHorizontalScale { get; set; } = 1.0f;
+
+        [JsonPropertyName("PredictorVerticalScale")]
+        public float PredictorVerticalScale { get; set; } = 1.0f;
+
+        [JsonPropertyName("PredictorScaleStartSpeed")]
+        public float PredictorScaleStartSpeed { get; set; } = 80.0f;
+
+        [JsonPropertyName("PredictorScaleFullSpeed")]
+        public float PredictorScaleFullSpeed { get; set; } = 200.0f;
 
         [JsonPropertyName("EnableAdaptiveProfile")]
         public bool EnableAdaptiveProfile { get; set; } = true;
 
         [JsonPropertyName("ProfileSpeedStart")]
-        public float ProfileSpeedStart { get; set; } = 80.0f;
+        public float ProfileSpeedStart { get; set; } = 140.0f;
 
         [JsonPropertyName("ProfileSpeedFull")]
-        public float ProfileSpeedFull { get; set; } = 100.0f;
+        public float ProfileSpeedFull { get; set; } = 260.0f;
 
         [JsonPropertyName("ProfileHorizontalMaxMultiplier")]
         public float ProfileHorizontalMaxMultiplier { get; set; } = 1.70f;
@@ -86,6 +163,15 @@ public sealed class S2AWHConfig : BasePluginConfig
 
         [JsonPropertyName("DirectionalPredictorShiftFactor")]
         public float DirectionalPredictorShiftFactor { get; set; } = 0.65f;
+
+        [JsonPropertyName("LosSurfaceProbeHitRadius")]
+        public float LosSurfaceProbeHitRadius { get; set; } = 64.0f;
+
+        [JsonPropertyName("LosSurfaceProbeRows")]
+        public int LosSurfaceProbeRows { get; set; } = 2;
+
+        [JsonPropertyName("MicroHullMaxDistance")]
+        public float MicroHullMaxDistance { get; set; } = 2000.0f;
     }
 
     public sealed class VisibilitySettings
@@ -107,6 +193,9 @@ public sealed class S2AWHConfig : BasePluginConfig
 
         [JsonPropertyName("DrawDebugTraceBeams")]
         public bool DrawDebugTraceBeams { get; set; } = false;
+
+        [JsonPropertyName("DrawDebugAabbBoxes")]
+        public bool DrawDebugAabbBoxes { get; set; } = false;
 
         [JsonPropertyName("DrawDebugTraceBeamsForHumans")]
         public bool DrawDebugTraceBeamsForHumans { get; set; } = true;
@@ -151,10 +240,6 @@ public sealed class S2AWHConfig : BasePluginConfig
         List<string> warnings = new();
 
         // --- Trace ---
-        int rayTracePoints = Trace.RayTracePoints;
-        ClampWithWarning(ref rayTracePoints, 1, 10, "Trace.RayTracePoints", warnings);
-        Trace.RayTracePoints = rayTracePoints;
-
         float fovDegrees = Trace.FovDegrees;
         ClampWithWarning(ref fovDegrees, 1.0f, 359.0f, "Trace.FovDegrees", warnings);
         Trace.FovDegrees = fovDegrees;
@@ -167,9 +252,13 @@ public sealed class S2AWHConfig : BasePluginConfig
         ClampWithWarning(ref aimRaySpreadDegrees, 0.0f, 5.0f, "Trace.AimRaySpreadDegrees", warnings);
         Trace.AimRaySpreadDegrees = aimRaySpreadDegrees;
 
-        float gapSweepProximity = Trace.GapSweepProximity;
-        ClampWithWarning(ref gapSweepProximity, 20.0f, 200.0f, "Trace.GapSweepProximity", warnings);
-        Trace.GapSweepProximity = gapSweepProximity;
+        int aimRayCount = Trace.AimRayCount;
+        ClampWithWarning(ref aimRayCount, 1, 5, "Trace.AimRayCount", warnings);
+        Trace.AimRayCount = aimRayCount;
+
+        float aimRayMaxDistance = Trace.AimRayMaxDistance;
+        ClampWithWarning(ref aimRayMaxDistance, 0.0f, 8192.0f, "Trace.AimRayMaxDistance", warnings);
+        Trace.AimRayMaxDistance = aimRayMaxDistance;
 
         // --- Core ---
         int updateFrequencyTicks = Core.UpdateFrequencyTicks;
@@ -181,9 +270,25 @@ public sealed class S2AWHConfig : BasePluginConfig
         ClampWithWarning(ref predictorDistance, 0.0f, float.MaxValue, "Preload.PredictorDistance", warnings);
         Preload.PredictorDistance = predictorDistance;
 
+        float surfaceProbeHitRadius = Preload.SurfaceProbeHitRadius;
+        ClampWithWarning(ref surfaceProbeHitRadius, 0.0f, 200.0f, "Preload.SurfaceProbeHitRadius", warnings);
+        Preload.SurfaceProbeHitRadius = surfaceProbeHitRadius;
+
+        int surfaceProbeRows = Preload.SurfaceProbeRows;
+        ClampWithWarning(ref surfaceProbeRows, 1, 3, "Preload.SurfaceProbeRows", warnings);
+        Preload.SurfaceProbeRows = surfaceProbeRows;
+
         float predictorMinSpeed = Preload.PredictorMinSpeed;
         ClampWithWarning(ref predictorMinSpeed, 0.0f, 100.0f, "Preload.PredictorMinSpeed", warnings);
         Preload.PredictorMinSpeed = predictorMinSpeed;
+
+        float minPredictorFullSpeed = Preload.PredictorMinSpeed + 1.0f;
+        if (Preload.PredictorFullSpeed < minPredictorFullSpeed)
+        {
+            float invalidValue = Preload.PredictorFullSpeed;
+            Preload.PredictorFullSpeed = minPredictorFullSpeed;
+            warnings.Add($"Preload.PredictorFullSpeed was {invalidValue}. Because it must be at least PredictorMinSpeed + 1, the plugin now uses {Preload.PredictorFullSpeed}.");
+        }
 
         float viewerPredictorDistanceFactor = Preload.ViewerPredictorDistanceFactor;
         ClampWithWarning(ref viewerPredictorDistanceFactor, 0.0f, 2.0f, "Preload.ViewerPredictorDistanceFactor", warnings);
@@ -193,20 +298,54 @@ public sealed class S2AWHConfig : BasePluginConfig
         ClampWithWarning(ref revealHoldSeconds, 0.0f, 1.0f, "Preload.RevealHoldSeconds", warnings);
         Preload.RevealHoldSeconds = revealHoldSeconds;
 
-        // --- Aabb ---
-        float horizontalScale = Aabb.HorizontalScale;
-        ClampWithWarning(ref horizontalScale, 1.0f, 10.0f, "Aabb.HorizontalScale", warnings);
-        Aabb.HorizontalScale = horizontalScale;
+        // Legacy compatibility: accept old key, but keep generated config surface clean.
+        if (Preload.TryConsumeLegacyPreloadAlias(out bool enablePreloadAlias, out string preloadAliasName))
+        {
+            Preload.EnablePreload = enablePreloadAlias;
+            warnings.Add($"{preloadAliasName} is a legacy key. The plugin maps it to Preload.EnablePreload, but new auto-generated configs no longer include the old name.");
+        }
 
-        float verticalScale = Aabb.VerticalScale;
-        ClampWithWarning(ref verticalScale, 1.0f, 10.0f, "Aabb.VerticalScale", warnings);
-        Aabb.VerticalScale = verticalScale;
+        // --- Aabb ---
+        float losHorizontalScale = Aabb.LosHorizontalScale;
+        ClampWithWarning(ref losHorizontalScale, 1.0f, 10.0f, "Aabb.LosHorizontalScale", warnings);
+        Aabb.LosHorizontalScale = losHorizontalScale;
+
+        float losVerticalScale = Aabb.LosVerticalScale;
+        ClampWithWarning(ref losVerticalScale, 1.0f, 10.0f, "Aabb.LosVerticalScale", warnings);
+        Aabb.LosVerticalScale = losVerticalScale;
+
+        float predictorHorizontalScale = Aabb.PredictorHorizontalScale;
+        ClampWithWarning(ref predictorHorizontalScale, 1.0f, 10.0f, "Aabb.PredictorHorizontalScale", warnings);
+        Aabb.PredictorHorizontalScale = predictorHorizontalScale;
+
+        float predictorVerticalScale = Aabb.PredictorVerticalScale;
+        ClampWithWarning(ref predictorVerticalScale, 1.0f, 10.0f, "Aabb.PredictorVerticalScale", warnings);
+        Aabb.PredictorVerticalScale = predictorVerticalScale;
+
+        float predictorScaleStartSpeed = Aabb.PredictorScaleStartSpeed;
+        ClampWithWarning(ref predictorScaleStartSpeed, 0.0f, float.MaxValue, "Aabb.PredictorScaleStartSpeed", warnings);
+        Aabb.PredictorScaleStartSpeed = predictorScaleStartSpeed;
+
+        float minPredictorScaleFullSpeed = Aabb.PredictorScaleStartSpeed + 1.0f;
+        if (Aabb.PredictorScaleFullSpeed < minPredictorScaleFullSpeed)
+        {
+            float invalidValue = Aabb.PredictorScaleFullSpeed;
+            Aabb.PredictorScaleFullSpeed = minPredictorScaleFullSpeed;
+            warnings.Add($"Aabb.PredictorScaleFullSpeed was {invalidValue}. Because it must be at least PredictorScaleStartSpeed + 1, the plugin now uses {Aabb.PredictorScaleFullSpeed}.");
+        }
+
+        // Migrate old aggressive adaptive-profile defaults that made predictor AABB hit max size too early.
+        if (Aabb.ProfileSpeedStart == 80.0f && Aabb.ProfileSpeedFull == 100.0f)
+        {
+            Aabb.ProfileSpeedStart = 140.0f;
+            Aabb.ProfileSpeedFull = 260.0f;
+            warnings.Add("Aabb.ProfileSpeedStart/ProfileSpeedFull were using the old 80/100 defaults. The plugin upgraded them to 140/260 to avoid instant maximum predictor size on normal movement.");
+        }
 
         float profileSpeedStart = Aabb.ProfileSpeedStart;
         ClampWithWarning(ref profileSpeedStart, 0.0f, float.MaxValue, "Aabb.ProfileSpeedStart", warnings);
         Aabb.ProfileSpeedStart = profileSpeedStart;
 
-        // ProfileSpeedFull must be at least ProfileSpeedStart + 1 (special logic).
         float minProfileSpeedFull = Aabb.ProfileSpeedStart + 1.0f;
         if (Aabb.ProfileSpeedFull < minProfileSpeedFull)
         {
@@ -228,8 +367,20 @@ public sealed class S2AWHConfig : BasePluginConfig
         Aabb.DirectionalForwardShiftMaxUnits = directionalForwardShiftMaxUnits;
 
         float directionalPredictorShiftFactor = Aabb.DirectionalPredictorShiftFactor;
-        ClampWithWarning(ref directionalPredictorShiftFactor, 0.0f, 1.0f, "Aabb.DirectionalPredictorShiftFactor", warnings);
+        ClampWithWarning(ref directionalPredictorShiftFactor, 0.0f, 2.0f, "Aabb.DirectionalPredictorShiftFactor", warnings);
         Aabb.DirectionalPredictorShiftFactor = directionalPredictorShiftFactor;
+
+        float losSurfaceProbeHitRadius = Aabb.LosSurfaceProbeHitRadius;
+        ClampWithWarning(ref losSurfaceProbeHitRadius, 0.0f, 200.0f, "Aabb.LosSurfaceProbeHitRadius", warnings);
+        Aabb.LosSurfaceProbeHitRadius = losSurfaceProbeHitRadius;
+
+        int losSurfaceProbeRows = Aabb.LosSurfaceProbeRows;
+        ClampWithWarning(ref losSurfaceProbeRows, 1, 3, "Aabb.LosSurfaceProbeRows", warnings);
+        Aabb.LosSurfaceProbeRows = losSurfaceProbeRows;
+
+        float microHullMaxDistance = Aabb.MicroHullMaxDistance;
+        ClampWithWarning(ref microHullMaxDistance, 0.0f, 8192.0f, "Aabb.MicroHullMaxDistance", warnings);
+        Aabb.MicroHullMaxDistance = microHullMaxDistance;
 
         _fovDotThreshold = ComputeFovDotThreshold(Trace.FovDegrees);
         return warnings;
@@ -253,7 +404,13 @@ public sealed class S2AWHConfig : BasePluginConfig
 
     private static void ClampWithWarning(ref float value, float min, float max, string paramName, List<string> warnings)
     {
-        if (value < min)
+        if (float.IsNaN(value) || float.IsInfinity(value))
+        {
+            float invalid = value;
+            value = min;
+            warnings.Add($"{paramName} was {invalid} (Not a Number or Infinity). The plugin has reset it to {min}.");
+        }
+        else if (value < min)
         {
             float invalid = value;
             value = min;
@@ -274,8 +431,9 @@ public sealed class S2AWHConfig : BasePluginConfig
         return MathF.Cos(halfFovRadians);
     }
 }
+#pragma warning restore CA1034
 
-public static class S2AWHState
+internal static class S2AWHState
 {
     public static S2AWHConfig Current { get; set; } = new();
 }

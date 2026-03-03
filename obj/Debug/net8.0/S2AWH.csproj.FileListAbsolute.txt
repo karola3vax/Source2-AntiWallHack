@@ -1,0 +1,10 @@
+C:\Users\Admin\Desktop\S2AWH\S2AWH\obj\Debug\net8.0\S2AWH.csproj.AssemblyReference.cache
+C:\Users\Admin\Desktop\S2AWH\S2AWH\obj\Debug\net8.0\S2AWH.GeneratedMSBuildEditorConfig.editorconfig
+C:\Users\Admin\Desktop\S2AWH\S2AWH\obj\Debug\net8.0\S2AWH.csproj.CoreCompileInputs.cache
+C:\Users\Admin\Desktop\S2AWH\S2AWH\bin\Debug\net8.0\S2AWH.deps.json
+C:\Users\Admin\Desktop\S2AWH\S2AWH\bin\Debug\net8.0\S2AWH.dll
+C:\Users\Admin\Desktop\S2AWH\S2AWH\bin\Debug\net8.0\S2AWH.pdb
+C:\Users\Admin\Desktop\S2AWH\S2AWH\obj\Debug\net8.0\S2AWH.dll
+C:\Users\Admin\Desktop\S2AWH\S2AWH\obj\Debug\net8.0\refint\S2AWH.dll
+C:\Users\Admin\Desktop\S2AWH\S2AWH\obj\Debug\net8.0\S2AWH.pdb
+C:\Users\Admin\Desktop\S2AWH\S2AWH\obj\Debug\net8.0\ref\S2AWH.dll

@@ -40,10 +40,10 @@ It runs on the server and only sends enemy data when that enemy should really be
 S2AWH uses a 4-stage visibility check:
 
 ```
-1. AABB Point Traces    - Multiple body-point checks against world geometry
-2. Aim-Ray Proximity    - 5-ray X pattern from crosshair, reveal targets near hit points
-3. Gap-Sweep Fan        - Extra angle rays to catch narrow slit visibility
-4. Micro-Hull Fallback  - Small hull traces for edge-case thin angles
+1. AABB Surface Probes  - Face probes with near-hit radius tolerance for thin visible slivers
+2. Aim-Ray Proximity    - X pattern from crosshair, reveal targets near hit points
+3. Micro-Hull Fallback  - Small hull traces for edge-case thin angles
+4. Predictive Preload   - Point + surface look-ahead to reduce pop-in while peeking
 ```
 
 If all 4 stages fail, the target is treated as hidden and their important entity data is removed from transmit.
@@ -71,20 +71,36 @@ If all 4 stages fail, the target is treated as hidden and their important entity
 
 [![Ray-Trace Installation Guide](https://raw.githubusercontent.com/karola3vax/server-assets/refs/heads/main/Screenshot_2.png)](https://github.com/FUNPLAY-pro-CS2/Ray-Trace/releases)
 
-1. Download the latest S2AWH release and place the plugin file:
+4. Download the latest S2AWH release and place the plugin file:
 
    ```
    \addons\counterstrikesharp\plugins\S2AWH\S2AWH.dll
    ```
 
-2. If upgrading from an older version, delete the old config file first:
+5. If upgrading from an older version, delete the old config file first:
 
    ```
    \addons\counterstrikesharp\configs\plugins\S2AWH\S2AWH.json
    ```
 
-3. Start the server. A new config file is generated automatically at the same path.
-4. Check server console logs to confirm the plugin is initialized.
+6. Start the server. If `S2AWH.example.json` is present, CounterStrikeSharp copies it to `S2AWH.json` first.
+7. If no example file is present, CounterStrikeSharp generates a plain default config automatically.
+8. Check server console logs to confirm the plugin is initialized.
+
+## Development
+
+S2AWH builds against local `CounterStrikeSharp.API.dll` and `RayTraceApi.dll` references.
+The project validates these local dependency paths before compilation in [`S2AWH.csproj`](./S2AWH.csproj).
+
+Default local lookup order:
+
+1. `..\Dependencies\CounterStrikeSharp-main\managed\CounterStrikeSharp.API\bin\Release\net8.0\CounterStrikeSharp.API.dll`
+2. `..\Dependencies\Ray-Trace-main\managed\RayTrace\RayTraceApi\bin\Release\net8.0\RayTraceApi.dll`
+
+If your workspace layout is different, override `CssApiPath` and `RayTraceApiPath` at build time.
+
+The repo also ships a commented example config at [`configs/plugins/S2AWH/S2AWH.example.json`](./configs/plugins/S2AWH/S2AWH.example.json).
+It is written in plain language so server owners can understand each setting without reading source code.
 
 ---
 
@@ -92,18 +108,21 @@ If all 4 stages fail, the target is treated as hidden and their important entity
 
 Use these as starting profiles, then benchmark on your own hardware.
 
-| Profile | `UpdateFrequencyTicks` | `RevealHoldSeconds` | `RayTracePoints` | Best For |
+| Profile | `UpdateFrequencyTicks` | `RevealHoldSeconds` | `Preload.SurfaceProbeRows` | Best For |
 | :--- | :---: | :---: | :---: | :--- |
-| **Competitive** | `2` | `0.30` | `10` | 5v5 / scrim |
-| **Casual** | `4` | `0.40` | `8` | 10v10 community |
-| **Large** | `8` | `0.50` | `6` | 20-24 players |
-| **High Population** | `10` | `1.0` | `4` | 30+ players |
+| **Competitive** | `2` | `0.30` | `3` | 5v5 / scrim |
+| **Casual** | `4` | `0.40` | `2` | 10v10 community |
+| **Large** | `8` | `0.50` | `2` | 20-24 players |
+| **High Population** | `16` | `1.0` | `1` | 30+ players |
 
 > [!TIP]
 > The first lever for CPU is `Core.UpdateFrequencyTicks`. Higher value = fewer full visibility updates per second.
 
 > [!TIP]
-> If CPU is still high, lower `Trace.RayTracePoints` before disabling core visibility logic.
+> If CPU is still high, lower `Preload.SurfaceProbeRows` and `Trace.AimRayCount`.
+
+> [!TIP]
+> For 64-player servers, start with `Preload.EnablePreload = false` and increase `Core.UpdateFrequencyTicks`.
 
 ---
 
@@ -117,38 +136,52 @@ Use these as starting profiles, then benchmark on your own hardware.
 | Key | Default | Description |
 | :--- | :---: | :--- |
 | `Core.Enabled` | `true` | Master on/off switch for the plugin |
-| `Core.UpdateFrequencyTicks` | `10` | How many ticks to spread viewer work across (higher = lower CPU, slower updates) |
-| `Trace.RayTracePoints` | `6` | Number of body sample points per target (`1..10`) |
+| `Core.UpdateFrequencyTicks` | `16` | How many ticks to spread viewer work across (higher = lower CPU, slower updates) |
 | `Trace.UseFovCulling` | `true` | Skip expensive checks for targets outside viewer cone |
 | `Trace.FovDegrees` | `220.0` | FOV cone size used by culling |
 | `Trace.AimRayHitRadius` | `100.0` | Reveal radius around aim-ray hit points |
-| `Trace.AimRaySpreadDegrees` | `1.0` | Angular spacing for 5-ray X aim pattern |
-| `Trace.GapSweepProximity` | `72.0` | Max distance from target center for gap-sweep hit to count (`20..200`) |
+| `Trace.AimRaySpreadDegrees` | `1.0` | Angular spacing for the aim-ray X pattern |
+| `Trace.AimRayCount` | `1` | Number of aim rays to cast per viewer (`1..5`) |
+| `Trace.AimRayMaxDistance` | `2200.0` | Skip aim-ray proximity checks for targets farther than this distance (`0` disables) |
 
 ### Prediction & Peek-Assist
 
 | Key | Default | Description |
 | :--- | :---: | :--- |
-| `Preload.PredictorDistance` | `150.0` | Forward look-ahead distance for prediction |
+| `Preload.EnablePreload` | `true` | Master switch for the whole preload system: predictor points, surface probes, and viewer peek assist |
+| `Preload.SurfaceProbeHitRadius` | `64.0` | Accepts near-hit preload probes within this radius (`0..200`) |
+| `Preload.SurfaceProbeRows` | `2` | Probe rows per predictor face for preload surface probing (`1..3`, total cached probes = rows x 6) |
+| `Preload.PredictorDistance` | `150.0` | Maximum forward look-ahead distance for prediction. Real lead is also capped by target speed and update interval |
 | `Preload.PredictorMinSpeed` | `1.0` | Minimum speed needed before prediction starts |
+| `Preload.PredictorFullSpeed` | `100.0` | Speed where preload look-ahead reaches full configured distance |
 | `Preload.EnableViewerPeekAssist` | `true` | Adds viewer movement prediction to reduce pop-in on peeks |
 | `Preload.ViewerPredictorDistanceFactor` | `0.85` | Strength multiplier for viewer peek prediction |
 | `Preload.RevealHoldSeconds` | `0.30` | Keep a target visible briefly after LOS is lost |
+
+> [!NOTE]
+> Older configs that still contain `Preload.EnableProbePreload` or `Preload.EnableSurfacePreload` are accepted as legacy aliases, but new auto-generated configs use `Preload.EnablePreload`.
 
 ### AABB Scaling
 
 | Key | Default | Description |
 | :--- | :---: | :--- |
-| `Aabb.HorizontalScale` | `3.0` | Base horizontal target expansion for predictor path |
-| `Aabb.VerticalScale` | `2.0` | Base vertical target expansion for predictor path |
-| `Aabb.EnableAdaptiveProfile` | `true` | Increase expansion at higher movement speeds |
-| `Aabb.ProfileSpeedStart` | `80.0` | Speed where adaptive scaling starts |
-| `Aabb.ProfileSpeedFull` | `100.0` | Speed where adaptive scaling reaches full strength |
-| `Aabb.ProfileHorizontalMaxMultiplier` | `1.70` | Max horizontal multiplier at high speed |
-| `Aabb.ProfileVerticalMaxMultiplier` | `1.35` | Max vertical multiplier at high speed |
-| `Aabb.EnableDirectionalShift` | `true` | Shift predicted target volume toward movement direction |
-| `Aabb.DirectionalForwardShiftMaxUnits` | `34.0` | Maximum forward shift in units |
-| `Aabb.DirectionalPredictorShiftFactor` | `0.65` | Blend factor for directional shift |
+| `Aabb.LosHorizontalScale` | `1.0` | Horizontal expansion used by LOS AABB sampling (orange box) |
+| `Aabb.LosVerticalScale` | `1.0` | Vertical expansion used by LOS AABB sampling (orange box) |
+| `Aabb.PredictorHorizontalScale` | `1.0` | Maximum horizontal expansion used by preload predictor AABB at full movement speed (green/purple boxes) |
+| `Aabb.PredictorVerticalScale` | `1.0` | Maximum vertical expansion used by preload predictor AABB at full movement speed (green/purple boxes) |
+| `Aabb.PredictorScaleStartSpeed` | `80.0` | Speed where predictor AABB starts growing from LOS size toward predictor size |
+| `Aabb.PredictorScaleFullSpeed` | `200.0` | Speed where predictor AABB reaches full configured predictor size |
+| `Aabb.EnableAdaptiveProfile` | `true` | Expands predictor AABB further as target speed increases |
+| `Aabb.ProfileSpeedStart` | `140.0` | Speed where extra adaptive predictor growth begins |
+| `Aabb.ProfileSpeedFull` | `260.0` | Speed where extra adaptive predictor growth reaches full multiplier |
+| `Aabb.ProfileHorizontalMaxMultiplier` | `1.70` | Max horizontal multiplier applied by adaptive predictor profile |
+| `Aabb.ProfileVerticalMaxMultiplier` | `1.35` | Max vertical multiplier applied by adaptive predictor profile |
+| `Aabb.EnableDirectionalShift` | `true` | Shifts the current predictor AABB forward along movement direction without double-shifting the future predicted box |
+| `Aabb.DirectionalForwardShiftMaxUnits` | `34.0` | Maximum forward shift used by predictor AABB |
+| `Aabb.DirectionalPredictorShiftFactor` | `0.65` | Global multiplier for directional predictor shifting |
+| `Aabb.LosSurfaceProbeHitRadius` | `64.0` | If a surface probe is blocked but ends within this radius of the probe point, count as visible |
+| `Aabb.LosSurfaceProbeRows` | `2` | Probe rows per LOS face for surface probing (`1..3`, total cached probes = rows x 6) |
+| `Aabb.MicroHullMaxDistance` | `2000.0` | Skip LOS micro-hull fallback when target is farther than this distance (`0` disables) |
 
 ### Visibility Logic
 
@@ -163,7 +196,8 @@ Use these as starting profiles, then benchmark on your own hardware.
 | Key | Default | Description |
 | :--- | :---: | :--- |
 | `Diagnostics.ShowDebugInfo` | `true` | Enables periodic debug summary logs |
-| `Diagnostics.DrawDebugTraceBeams` | `false` | Draw trace beams in-game (debug only, expensive if overused) |
+| `Diagnostics.DrawDebugTraceBeams` | `false` | Draw trace beams in-game (debug only, expensive if overused; S2AWH also caps debug beam spawns per tick) |
+| `Diagnostics.DrawDebugAabbBoxes` | `false` | Draw LOS/predictor AABB wireframe boxes in-game (debug only, very expensive; uses the same per-tick debug beam cap) |
 | `Diagnostics.DrawDebugTraceBeamsForHumans` | `true` | Beam drawing toggle for human viewers |
 | `Diagnostics.DrawDebugTraceBeamsForBots` | `true` | Beam drawing toggle for bot viewers |
 

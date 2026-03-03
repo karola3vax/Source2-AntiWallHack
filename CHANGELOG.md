@@ -1,29 +1,52 @@
 # Changelog
 
+## Unreleased
+
+- Cleaned the generated config surface so new auto-created configs only contain live runtime keys.
+- Removed `Preload.EnableSurfacePreload` from newly generated configs while keeping legacy read compatibility.
+- Renamed the generated preload master switch to `Preload.EnablePreload` and kept `EnableProbePreload` / `EnableSurfacePreload` as legacy read aliases.
+- Added a commented `S2AWH.example.json` written in plain language for easier setup.
+- Moved plugin logs onto CounterStrikeSharp's logger pipeline instead of raw console writes.
+- Added a per-tick debug beam budget so trace/AABB debug drawing cannot spam unlimited `env_beam` entities.
+- Added `Aabb.PredictorScaleStartSpeed` and `Aabb.PredictorScaleFullSpeed` so predictor AABB growth is controlled separately from preload look-ahead.
+- Raised the default adaptive-profile speed band to stop the purple predictor AABB from hitting maximum size during normal walking.
+- Capped predictor lead by target speed and update interval so the future AABB does not jump unrealistically far ahead.
+- Restored real preload prediction: predictor eye/center/corner points are traced again and surface-probe preload is back in the runtime path.
+- Simplified preload internals by removing stale helper paths that were cached but never used in `WillBeVisible`.
+- Removed dead `Core.TransmitEntityRefreshTicks` config/docs; transmit entity lists are rebuilt per tick for safety.
+- Updated README/config documentation to match the current LOS/preload/runtime behavior.
+- Extracted shared AABB geometry helpers to reduce LOS/preload duplication.
+- Tightened snapshot bounds normalization with scored local/world candidate selection.
+- Stopped fully clearing snapshot arrays on every rebuild tick; live slots are overwritten and dead slots are already filtered out.
+- Removed static mutable debug AABB corner state.
+- Rebuilt missing `LosEvaluator` and aligned LOS/preload/transmit paths to slot-indexed snapshot flow.
+- Reduced hot-path overhead by switching live-slot checks from `HashSet<int>` to fixed `bool[65]`.
+- Moved live-slot flag population into the shared player-cache build so `OnCheckTransmit` no longer rebuilds the same slot bitmap again in the same tick.
+- Removed stale/dead helper paths in `VisibilityGeometry` that were no longer used after snapshot migration.
+- Simplified target cache refresh logic to avoid unreachable fallback allocation paths.
+- Fixed entity-handle validity bounds in transmit filtering (`< Utilities.MaxEdicts`) to match CounterStrikeSharp handle rules.
+- Cached viewer team once per viewer pass in rebuild loop to avoid repeated per-target interop reads.
+- Narrowed internal helper visibility (`LosEvaluator`, `PreloadPredictor`, `TransmitFilter`, `S2AWHState`) to reduce unnecessary public API surface.
+- Removed local build artifact logs from source tree and added `*.log` ignore rule for cleaner repository state.
+
 ## 3.0.1
 
-- **New feature:** The plugin now traces rays where your crosshair is pointing — if a ray hits a wall and an enemy is nearby that hit point, they're revealed. Added `AimRayHitRadius`, `AimRaySpreadDegrees`, and `GapSweepProximity` to control how this works.
-- **Better performance on large servers:** Reduced default body trace points from 10 to 6, teammates are no longer checked by default, and peek-assist now reacts faster at lower speeds — all saving CPU on 30+ player servers.
-- **Jump-peek support:** Players jumping to peek over walls now see enemies immediately — no more delayed pop-in during jump peeks. Falling does not leak info.
-- **Improved detection accuracy:** Enemies peeking through narrow gaps, thin slits, and tight corners are now caught more reliably.
-- **Wider FOV culling cone:** Default FOV increased from 200° to 220° to reduce edge cases where enemies at the screen border were briefly hidden.
-- **Bug fix:** Fixed an internal tracking issue that could misreport entity removal when debug counters were off.
-- **Cleaner logs and docs:** Simplified debug output and rewrote the README with clearer instructions.
+- Added aim-ray proximity visibility checks with configurable radius, spread, count, and max distance.
+- Reworked LOS around AABB surface probes plus micro-hull fallback to better handle thin-angle visibility.
+- Added preload surface probing to reduce pop-in on narrow peeks.
+- Removed legacy point-preload config knobs (`RayTracePoints`, `ProbePreloadOnly`, `PointPreloadFarDistance`) from the public config surface.
+- Added `Preload.PredictorFullSpeed` for explicit look-ahead speed scaling.
+- Simplified LOS micro-hull sampling to direct eye/center probes without array/point-count plumbing.
+- Improved transmit filtering performance with cheaper entity-handle validation and periodic weapon-list refresh.
+- Added and expanded debug diagnostics for trace beams, AABB boxes, and periodic runtime summaries.
+- Expanded config validation and normalization with clearer warning messages for auto-corrected values.
+- Updated README/config docs to match current behavior and defaults.
 
 ## 3.0.0
 
-- **Showcase Overhaul:** Complete performance optimization for 32+ player servers.
-- **Staggered Rebuild Engine:** Spreads visibility logic across multiple ticks to eliminate frame spikes.
-- **Peek-Assist Technology:** Zero-latency predictor for smoother corner peeks.
-- **Cache Reuse:** Intelligent stationary-visible pair caching to save CPU cycles.
-- **MathF Optimization:** Native hardware acceleration for trigonometric calculations.
-- **Professional README:** Comprehensive documentation with installation guides and config reference.
-- **Full Credits:** Proper attribution for all upstream dependencies.
-- **MIT License:** Standard open-source licensing.
-- Improved transmit entity sync set to include active/last/saved/inventory weapon handles.
-- Relaxed transient owner-resolution failures to reduce weapon desync side effects.
-- Standardized entity index validation with `Utilities.MaxEdicts`.
-- Added LOS/predictor target cache invalidation on disconnect and full cache clear.
-- Improved thin-gap LOS robustness with two-plane non-predictor sampling.
-- Added hidden-only micro-hull fallback with 2 strategic probes.
-- Preserved plugin behavior model (`Visible/Hidden/UnknownTransient` semantics unchanged).
+- Showcase overhaul focused on performance for 32+ player servers.
+- Staggered rebuild engine to spread visibility work across ticks.
+- Peek-assist predictor and stationary cache reuse improvements.
+- Transmit entity sync improvements for active/last/saved/inventory weapon handles.
+- Added LOS/predictor cache invalidation on disconnect and full cache clear.
+- Preserved visibility behavior model (`Visible`, `Hidden`, `UnknownTransient`).

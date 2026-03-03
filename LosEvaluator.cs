@@ -1,622 +1,806 @@
-using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
 using CounterStrikeSharp.API.Modules.Utils;
 using RayTraceAPI;
 
 namespace S2AWH;
 
-public class LosEvaluator
+internal sealed class LosEvaluator
 {
-    private const float MicroHullExtent = 5.0f;
-    private const float AimRayLength = 8192.0f;
-    private const int AimRayCount = 5;
-    private static readonly sbyte[] AimRayPitchOffsetSigns = {
-        0,
-        1, 1,
-        -1, -1
+    private const int SlotCount = 65;
+    private const int MaxAimRayCount = 5;
+    private const int SurfaceProbePointCount = 18; // max: 3 probe rows * 6 faces
+    private const int ViewerFacingFaceProbeGridSize = 3;
+    private const float DefaultAimRayDistance = 4096.0f;
+    private const float MinAimRayDistance = 256.0f;
+    private const float DegToRad = MathF.PI / 180.0f;
+    private const float MicroHullHalfExtent = 2.0f;
+    private static readonly (float PitchFactor, float YawFactor)[] AimRayPattern =
+    {
+        (0.0f, 0.0f),
+        (1.0f, 1.0f),
+        (-1.0f, -1.0f),
+        (1.0f, -1.0f),
+        (-1.0f, 1.0f)
     };
-    private static readonly sbyte[] AimRayYawOffsetSigns = {
-        0,
-        1, -1,
-        1, -1
-    };
-    // How close (in source units) the gap-sweep ray's hit point must be to the
-    // target's center to count as "reached the target area". Covers full player AABB.
-    // Configurable via Trace.GapSweepProximity (default 72.0, range 20-200).
-    // Gap-sweep fan: 8 probes at cardinal (+/-6 deg ~= 0.10472 rad) + diagonal (+/-4.2 deg ~= 0.07330 rad).
-    // Uses direction-to-target as center (crosshair-independent).
-    // Index 0 (center, 0 offset) is skipped because it duplicates the AABB center trace.
-    // +/-6 deg at 300 units covers +/-31 units of lateral sweep, well beyond the AABB grid.
-    private const int GapSweepFanCount = 9;
-    private const int GapSweepFanStart = 1; // skip index 0 = redundant center ray
-    // Pre-computed literal values (6 deg = 0.10471976f, 4.2 deg = 0.07330383f)
-    private static readonly float[] GapSweepPitchOffsets = {
-        0.0f,
-        0.10471976f, -0.10471976f, 0.0f, 0.0f,
-        0.07330383f, 0.07330383f, -0.07330383f, -0.07330383f
-    };
-    private static readonly float[] GapSweepYawOffsets = {
-        0.0f,
-        0.0f, 0.0f, 0.10471976f, -0.10471976f,
-        0.07330383f, -0.07330383f, 0.07330383f, -0.07330383f
-    };
-    // Precomputed sin/cos of each offset angle for angle-addition in the gap-sweep loop.
-    // Avoids calling MathF.SinCos 8 times per target (saves ~5820 trig calls/tick for 30 players).
-    private static readonly float[] GapSweepSinPitch = Array.ConvertAll(GapSweepPitchOffsets, MathF.Sin);
-    private static readonly float[] GapSweepCosPitch = Array.ConvertAll(GapSweepPitchOffsets, MathF.Cos);
-    private static readonly float[] GapSweepSinYaw = Array.ConvertAll(GapSweepYawOffsets, MathF.Sin);
-    private static readonly float[] GapSweepCosYaw = Array.ConvertAll(GapSweepYawOffsets, MathF.Cos);
 
-    private sealed class TargetPointCacheEntry
+    private sealed class ViewerAimRayCacheEntry
     {
         public int Tick = -1;
-        public int PawnIndex = -1;
+        public int HitCount;
+        public int AttemptedCount;
+        public int SuccessfulCount;
+        public Vector[] HitPoints = CreatePointBuffer(MaxAimRayCount);
+    }
+
+    private sealed class TargetSurfaceCacheEntry
+    {
+        public int Tick = -1;
         public int PointCount;
-        public Vector[] Points = VisibilityGeometry.CreatePointBuffer();
+        public Vector[] SurfacePoints = CreatePointBuffer(SurfaceProbePointCount);
     }
 
     private readonly CRayTraceInterface _rayTrace;
-    private readonly Vector _viewerEyeBuffer = new(0.0f, 0.0f, 0.0f);
-    private readonly Vector _microHullMins = new(-MicroHullExtent, -MicroHullExtent, -MicroHullExtent);
-    private readonly Vector _microHullMaxs = new(MicroHullExtent, MicroHullExtent, MicroHullExtent);
-    private readonly Vector _viewProbeEnd = new(0.0f, 0.0f, 0.0f);
     private readonly TraceOptions _cachedTraceOptions = VisibilityGeometry.GetVisibilityTraceOptions();
-    private readonly Vector[] _aimRayHitPoints = CreateAimRayPointBuffer();
-    private readonly bool[] _aimRayHitValid = new bool[AimRayCount];
-    private readonly Dictionary<int, TargetPointCacheEntry> _targetPointCacheBySlot = new(64);
-
-    // Per-tick viewer eye cache: avoids redundant TryFillEyePosition calls for the same viewer
-    // across N target evaluations. For 30 players, this eliminates ~840 native property reads/snapshot.
-    private int _cachedViewerPawnIndex = -1;
-    private int _cachedViewerTick = -1;
-    private bool _cachedViewerIsBot;
-    private bool _cachedDrawDebugBeams;
-    private int _cachedAimViewerPawnIndex = -1;
-    private int _cachedAimTick = -1;
-    private bool _cachedAimHasHitPoint;
+    private readonly ViewerAimRayCacheEntry?[] _viewerAimCacheBySlot = new ViewerAimRayCacheEntry?[SlotCount];
+    private readonly TargetSurfaceCacheEntry?[] _targetSurfaceCacheBySlot = new TargetSurfaceCacheEntry?[SlotCount];
+    private readonly Vector _traceStart = new(0.0f, 0.0f, 0.0f);
+    private readonly Vector _traceEnd = new(0.0f, 0.0f, 0.0f);
+    private readonly Vector _microHullMins = new(-MicroHullHalfExtent, -MicroHullHalfExtent, -MicroHullHalfExtent);
+    private readonly Vector _microHullMaxs = new(MicroHullHalfExtent, MicroHullHalfExtent, MicroHullHalfExtent);
 
     public LosEvaluator(CRayTraceInterface rayTrace)
     {
         _rayTrace = rayTrace;
     }
 
-    private static Vector[] CreateAimRayPointBuffer()
+    /// <summary>
+    /// Evaluates LOS for one viewer->target pair using only snapshot transforms and cached pawn references.
+    /// </summary>
+    internal VisibilityEval EvaluateLineOfSight(
+        int viewerSlot,
+        int targetSlot,
+        bool viewerIsBot,
+        int nowTick,
+        S2AWHConfig config,
+        PlayerTransformSnapshot[] transforms,
+        CBasePlayerPawn?[] pawnsBySlot)
     {
-        Vector[] buffer = new Vector[AimRayCount];
-        for (int i = 0; i < buffer.Length; i++)
+        if ((uint)viewerSlot >= SlotCount || (uint)targetSlot >= SlotCount || viewerSlot == targetSlot)
         {
-            buffer[i] = new Vector(0.0f, 0.0f, 0.0f);
+            return VisibilityEval.Visible;
         }
 
-        return buffer;
-    }
+        ref var viewerSnapshot = ref transforms[viewerSlot];
+        ref var targetSnapshot = ref transforms[targetSlot];
+        if (!viewerSnapshot.IsValid || !targetSnapshot.IsValid)
+        {
+            return VisibilityEval.Visible;
+        }
 
-    /// <summary>
-    /// Checks if viewer can see target. Uses 10-point AABB bounds,
-    /// a gap-sweep fan probe for narrow gaps, and a micro-hull fallback.
-    /// </summary>
-    internal VisibilityEval EvaluateLineOfSight(CCSPlayerController viewer, CCSPlayerController target, int nowTick)
-    {
-        var viewerPawn = viewer.PlayerPawn.Value;
-        var targetPawn = target.PlayerPawn.Value;
+        CBasePlayerPawn? viewerPawn = pawnsBySlot[viewerSlot];
+        CBasePlayerPawn? targetPawn = pawnsBySlot[targetSlot];
         if (viewerPawn == null || targetPawn == null)
         {
-            return VisibilityEval.UnknownTransient;
+            return VisibilityEval.Visible;
         }
 
-        int viewerPawnIndex = (int)viewerPawn.Index;
-        if (_cachedViewerPawnIndex != viewerPawnIndex || _cachedViewerTick != nowTick)
+        bool hasAnyTraceAttempt = false;
+        bool hasSuccessfulTraceCall = false;
+        bool drawDebugBeams = VisibilityGeometry.ShouldDrawDebugTraceBeam(viewerIsBot);
+        nint targetHandle = targetPawn.Handle;
+
+        SetVector(_traceStart, viewerSnapshot.EyeX, viewerSnapshot.EyeY, viewerSnapshot.EyeZ);
+        if (VisibilityGeometry.ShouldDrawDebugAabbBox())
         {
-            if (!VisibilityGeometry.TryFillEyePosition(viewerPawn, _viewerEyeBuffer))
-            {
-                return VisibilityEval.UnknownTransient;
-            }
-            _cachedViewerPawnIndex = viewerPawnIndex;
-            _cachedViewerTick = nowTick;
-            _cachedViewerIsBot = viewer.IsBot;
-            _cachedDrawDebugBeams = VisibilityGeometry.ShouldDrawDebugTraceBeam(_cachedViewerIsBot);
+            DrawLosDebugAabb(ref targetSnapshot, config);
         }
 
-        if (!TryGetTargetPoints(target.Slot, targetPawn, nowTick, out var targetPoints, out int targetPointCount))
-        {
-            return VisibilityEval.UnknownTransient;
-        }
-
-        var options = _cachedTraceOptions;
-        bool drawDebugBeams = _cachedDrawDebugBeams;
-        bool viewerIsBot = _cachedViewerIsBot;
-        var targetHandle = targetPawn.Handle;
-        bool hasSuccessfulTrace = false;
-
-        for (int i = 0; i < targetPointCount; i++)
-        {
-            var tPoint = targetPoints[i];
-            if (_rayTrace.TraceEndShape(_viewerEyeBuffer, tPoint, viewerPawn, options, out var result))
-            {
-                hasSuccessfulTrace = true;
-                if (drawDebugBeams)
-                {
-                    VisibilityGeometry.DrawDebugTraceBeam(_viewerEyeBuffer, tPoint, result, viewerIsBot);
-                }
-
-                // If the trace didn't hit anything, or it hit the target, line of sight is clear
-                if (!result.DidHit || result.HitEntity == targetHandle)
-                {
-                    return VisibilityEval.Visible;
-                }
-            }
-        }
-
-        if (!hasSuccessfulTrace)
-        {
-            return VisibilityEval.UnknownTransient;
-        }
-
-        // SLAYER method (expanded): 5 aim rays (center + X pattern) per viewer tick,
-        // then reveal targets near any hit point.
-        float aimRayHitRadius = S2AWHState.Current.Trace.AimRayHitRadius;
-        if (aimRayHitRadius > 0.0f &&
-            TryCacheAimRayHitPoints(viewerPawn, nowTick, options, drawDebugBeams, viewerIsBot) &&
-            IsTargetWithinRadiusOfAnyAimHitPoint(targetPawn, aimRayHitRadius))
+        if (TryNearestSurfaceProbeLos(
+            viewerPawn,
+            targetHandle,
+            ref viewerSnapshot,
+            ref targetSnapshot,
+            config,
+            drawDebugBeams,
+            ref hasAnyTraceAttempt,
+            ref hasSuccessfulTraceCall))
         {
             return VisibilityEval.Visible;
         }
 
-        // Gap-sweep probe: trace a fan of 9 rays centered on direction-to-target.
-        // These rays extend past the target at +/-6 deg angular offsets, creating spatial lines
-        // through different parts of the gap/wall geometry. Crosshair-independent.
-        if (TryGapSweepProbe(viewerPawn, targetPawn, options, drawDebugBeams, viewerIsBot))
+        if (TryViewerFacingFaceProbeLos(
+            viewerPawn,
+            targetHandle,
+            ref viewerSnapshot,
+            ref targetSnapshot,
+            config,
+            drawDebugBeams,
+            ref hasAnyTraceAttempt,
+            ref hasSuccessfulTraceCall))
         {
             return VisibilityEval.Visible;
         }
 
-        // Micro-hull fallback for thin-angle slits where point samples can miss.
-        if (TryMicroHullFallback(viewerPawn, targetHandle, targetPoints, targetPointCount, options, drawDebugBeams, viewerIsBot))
+        if (TryAabbSurfaceProbeLos(
+            viewerPawn,
+            targetHandle,
+            targetSlot,
+            nowTick,
+            ref targetSnapshot,
+            config,
+            drawDebugBeams,
+            ref hasAnyTraceAttempt,
+            ref hasSuccessfulTraceCall))
         {
             return VisibilityEval.Visible;
+        }
+
+        if (TryAimRayProximityFallback(
+            viewerPawn,
+            viewerSlot,
+            targetSlot,
+            nowTick,
+            ref viewerSnapshot,
+            ref targetSnapshot,
+            config,
+            drawDebugBeams,
+            ref hasAnyTraceAttempt,
+            ref hasSuccessfulTraceCall))
+        {
+            return VisibilityEval.Visible;
+        }
+
+        if (TryMicroHullFallback(
+            viewerPawn,
+            targetHandle,
+            ref viewerSnapshot,
+            ref targetSnapshot,
+            config,
+            drawDebugBeams,
+            ref hasAnyTraceAttempt,
+            ref hasSuccessfulTraceCall))
+        {
+            return VisibilityEval.Visible;
+        }
+
+        if (hasAnyTraceAttempt && !hasSuccessfulTraceCall)
+        {
+            return VisibilityEval.UnknownTransient;
         }
 
         return VisibilityEval.Hidden;
     }
 
-    /// <summary>
-    /// Sweeps a fan of 9 rays centered on the direction from viewer eye to target center.
-    /// Unlike the AABB traces (which target fixed body points), these rays extend PAST the
-    /// target at angular offsets (+/-6 deg), creating spatial lines through different parts of
-    /// the gap/wall geometry. Crosshair-independent and works regardless of look direction.
-    /// </summary>
-    private bool TryGapSweepProbe(
-        CCSPlayerPawn viewerPawn,
-        CCSPlayerPawn targetPawn,
-        TraceOptions options,
+    private bool TryNearestSurfaceProbeLos(
+        CBasePlayerPawn viewerPawn,
+        nint targetHandle,
+        ref PlayerTransformSnapshot viewerSnapshot,
+        ref PlayerTransformSnapshot targetSnapshot,
+        S2AWHConfig config,
         bool drawDebugBeams,
-        bool viewerIsBot)
+        ref bool hasAnyTraceAttempt,
+        ref bool hasSuccessfulTraceCall)
     {
-        var targetOrigin = targetPawn.AbsOrigin;
-        if (targetOrigin == null)
+        GetExpandedWorldBounds(ref targetSnapshot, config, out float minX, out float minY, out float minZ, out float maxX, out float maxY, out float maxZ);
+        AabbGeometry.GetClosestPointOnSurface(
+            viewerSnapshot.EyeX,
+            viewerSnapshot.EyeY,
+            viewerSnapshot.EyeZ,
+            minX,
+            minY,
+            minZ,
+            maxX,
+            maxY,
+            maxZ,
+            out float probeX,
+            out float probeY,
+            out float probeZ);
+
+        SetVector(_traceEnd, probeX, probeY, probeZ);
+        hasAnyTraceAttempt = true;
+        if (!_rayTrace.TraceEndShape(_traceStart, _traceEnd, viewerPawn, _cachedTraceOptions, out var result))
         {
             return false;
         }
 
-        // Estimate the target's vertical center (origin is at feet).
-        float targetCenterZ = targetOrigin.Z;
-        var targetCollision = targetPawn.Collision;
-        if (targetCollision?.Mins != null && targetCollision?.Maxs != null)
+        hasSuccessfulTraceCall = true;
+        if (drawDebugBeams)
         {
-            targetCenterZ += (targetCollision.Mins.Z + targetCollision.Maxs.Z) * 0.5f;
-        }
-        else
-        {
-            targetCenterZ += 36.0f;
+            VisibilityGeometry.DrawDebugTraceBeam(_traceStart, _traceEnd, result, DebugTraceKind.LosSurface);
         }
 
-        // Direction from viewer eye to target center.
-        float toTargetX = targetOrigin.X - _viewerEyeBuffer.X;
-        float toTargetY = targetOrigin.Y - _viewerEyeBuffer.Y;
-        float toTargetZ = targetCenterZ - _viewerEyeBuffer.Z;
-        float distSq = (toTargetX * toTargetX) + (toTargetY * toTargetY) + (toTargetZ * toTargetZ);
-        if (distSq <= 1.0f)
+        if (!result.DidHit || result.HitEntity == targetHandle)
+        {
+            return true;
+        }
+
+        float hitRadius = config.Aabb.LosSurfaceProbeHitRadius;
+        if (hitRadius <= 0.0f)
         {
             return false;
         }
 
-        float dist = MathF.Sqrt(distSq);
-        float invDist = 1.0f / dist;
+        float dx = probeX - result.EndPosX;
+        float dy = probeY - result.EndPosY;
+        float dz = probeZ - result.EndPosZ;
+        float hitRadiusSq = hitRadius * hitRadius;
+        return (dx * dx) + (dy * dy) + (dz * dz) <= hitRadiusSq;
+    }
 
-        // Derive pitch/yaw from the geometric direction to target (NOT from EyeAngles).
-        // This makes the fan crosshair-independent.
-        float dirX = toTargetX * invDist;
-        float dirY = toTargetY * invDist;
-        float dirZ = toTargetZ * invDist;
+    private bool TryViewerFacingFaceProbeLos(
+        CBasePlayerPawn viewerPawn,
+        nint targetHandle,
+        ref PlayerTransformSnapshot viewerSnapshot,
+        ref PlayerTransformSnapshot targetSnapshot,
+        S2AWHConfig config,
+        bool drawDebugBeams,
+        ref bool hasAnyTraceAttempt,
+        ref bool hasSuccessfulTraceCall)
+    {
+        GetExpandedWorldBounds(ref targetSnapshot, config, out float minX, out float minY, out float minZ, out float maxX, out float maxY, out float maxZ);
 
-        float basePitchRad = -MathF.Asin(dirZ);
-        float baseYawRad = MathF.Atan2(dirY, dirX);
+        float centerX = (minX + maxX) * 0.5f;
+        float centerY = (minY + maxY) * 0.5f;
+        float centerZ = (minZ + maxZ) * 0.5f;
 
-        float traceLen = dist * 1.15f;
-        float gapProximity = S2AWHState.Current.Trace.GapSweepProximity;
-        float gapProximitySq = gapProximity * gapProximity;
+        float faceX = viewerSnapshot.EyeX <= centerX ? minX : maxX;
+        float faceY = viewerSnapshot.EyeY <= centerY ? minY : maxY;
+        float faceZ = viewerSnapshot.EyeZ <= centerZ ? minZ : maxZ;
+        float hitRadiusSq = config.Aabb.LosSurfaceProbeHitRadius * config.Aabb.LosSurfaceProbeHitRadius;
 
-        // Precompute base sin/cos once for angle-addition in the fan loop.
-        (float baseSinPitch, float baseCosPitch) = MathF.SinCos(basePitchRad);
-        (float baseSinYaw, float baseCosYaw) = MathF.SinCos(baseYawRad);
+        return TraceFaceGrid(viewerPawn, targetHandle, faceX, minY, maxY, minZ, maxZ, AabbFaceAxis.X, hitRadiusSq, drawDebugBeams, ref hasAnyTraceAttempt, ref hasSuccessfulTraceCall) ||
+               TraceFaceGrid(viewerPawn, targetHandle, faceY, minX, maxX, minZ, maxZ, AabbFaceAxis.Y, hitRadiusSq, drawDebugBeams, ref hasAnyTraceAttempt, ref hasSuccessfulTraceCall) ||
+               TraceFaceGrid(viewerPawn, targetHandle, faceZ, minX, maxX, minY, maxY, AabbFaceAxis.Z, hitRadiusSq, drawDebugBeams, ref hasAnyTraceAttempt, ref hasSuccessfulTraceCall);
+    }
 
-        // Fan pattern: 8 offset rays around the direction to target (index 0 skipped = AABB center duplicate).
-        for (int fanIndex = GapSweepFanStart; fanIndex < GapSweepFanCount; fanIndex++)
+    private bool TryAabbSurfaceProbeLos(
+        CBasePlayerPawn viewerPawn,
+        nint targetHandle,
+        int targetSlot,
+        int nowTick,
+        ref PlayerTransformSnapshot targetSnapshot,
+        S2AWHConfig config,
+        bool drawDebugBeams,
+        ref bool hasAnyTraceAttempt,
+        ref bool hasSuccessfulTraceCall)
+    {
+        int pointCount = GetOrRefreshSurfaceProbeCache(targetSlot, nowTick, ref targetSnapshot, config, out Vector[] points);
+        if (pointCount <= 0)
         {
-            // Angle-addition: sin(a+b) = sin(a)cos(b) + cos(a)sin(b)
-            //                 cos(a+b) = cos(a)cos(b) - sin(a)sin(b)
-            float sinPitch = baseSinPitch * GapSweepCosPitch[fanIndex] + baseCosPitch * GapSweepSinPitch[fanIndex];
-            float cosPitch = baseCosPitch * GapSweepCosPitch[fanIndex] - baseSinPitch * GapSweepSinPitch[fanIndex];
-            float sinYaw = baseSinYaw * GapSweepCosYaw[fanIndex] + baseCosYaw * GapSweepSinYaw[fanIndex];
-            float cosYaw = baseCosYaw * GapSweepCosYaw[fanIndex] - baseSinYaw * GapSweepSinYaw[fanIndex];
-            float fwdX = cosPitch * cosYaw;
-            float fwdY = cosPitch * sinYaw;
-            float fwdZ = -sinPitch;
+            return false;
+        }
 
-            _viewProbeEnd.X = _viewerEyeBuffer.X + (fwdX * traceLen);
-            _viewProbeEnd.Y = _viewerEyeBuffer.Y + (fwdY * traceLen);
-            _viewProbeEnd.Z = _viewerEyeBuffer.Z + (fwdZ * traceLen);
-
-            if (!_rayTrace.TraceEndShape(_viewerEyeBuffer, _viewProbeEnd, viewerPawn, options, out var result))
+        float hitRadiusSq = config.Aabb.LosSurfaceProbeHitRadius * config.Aabb.LosSurfaceProbeHitRadius;
+        for (int i = 0; i < pointCount; i++)
+        {
+            Vector point = points[i];
+            hasAnyTraceAttempt = true;
+            if (!_rayTrace.TraceEndShape(_traceStart, point, viewerPawn, _cachedTraceOptions, out var result))
             {
                 continue;
             }
 
+            hasSuccessfulTraceCall = true;
             if (drawDebugBeams)
             {
-                VisibilityGeometry.DrawDebugTraceBeam(_viewerEyeBuffer, _viewProbeEnd, result, viewerIsBot);
+                VisibilityGeometry.DrawDebugTraceBeam(_traceStart, point, result, DebugTraceKind.LosSurface);
             }
 
-            if (IsGapSweepHitNearTarget(result, traceLen, dist, _viewProbeEnd, targetOrigin.X, targetOrigin.Y, targetCenterZ, gapProximitySq))
+            if (!result.DidHit || result.HitEntity == targetHandle)
             {
                 return true;
             }
-        }
 
-        return false;
-    }
-
-    private bool TryCacheAimRayHitPoints(
-        CCSPlayerPawn viewerPawn,
-        int nowTick,
-        TraceOptions options,
-        bool drawDebugBeams,
-        bool viewerIsBot)
-    {
-        int viewerPawnIndex = (int)viewerPawn.Index;
-        if (_cachedAimViewerPawnIndex != viewerPawnIndex || _cachedAimTick != nowTick)
-        {
-            _cachedAimViewerPawnIndex = viewerPawnIndex;
-            _cachedAimTick = nowTick;
-            _cachedAimHasHitPoint = false;
-            Array.Clear(_aimRayHitValid, 0, _aimRayHitValid.Length);
-
-            var eyeAngles = viewerPawn.EyeAngles;
-            if (eyeAngles == null)
+            if (hitRadiusSq > 0.0f)
             {
-                return false;
-            }
-
-            float basePitchRad = eyeAngles.X * (MathF.PI / 180.0f);
-            float baseYawRad = eyeAngles.Y * (MathF.PI / 180.0f);
-            float aimRaySpreadDegrees = Math.Clamp(S2AWHState.Current.Trace.AimRaySpreadDegrees, 0.0f, 5.0f);
-            (float baseSinPitch, float baseCosPitch) = MathF.SinCos(basePitchRad);
-            (float baseSinYaw, float baseCosYaw) = MathF.SinCos(baseYawRad);
-
-            // Spread zero means all 5 rays collapse to one center ray.
-            if (aimRaySpreadDegrees <= 0.0001f)
-            {
-                TraceAimRay(
-                    viewerPawn,
-                    options,
-                    drawDebugBeams,
-                    viewerIsBot,
-                    baseSinPitch,
-                    baseCosPitch,
-                    baseSinYaw,
-                    baseCosYaw,
-                    rayIndex: 0);
-            }
-            else
-            {
-                float aimRaySpreadRad = aimRaySpreadDegrees * (MathF.PI / 180.0f);
-                (float spreadSin, float spreadCos) = MathF.SinCos(aimRaySpreadRad);
-
-                for (int i = 0; i < AimRayCount; i++)
+                float dx = point.X - result.EndPosX;
+                float dy = point.Y - result.EndPosY;
+                float dz = point.Z - result.EndPosZ;
+                if ((dx * dx) + (dy * dy) + (dz * dz) <= hitRadiusSq)
                 {
-                    ApplySignedOffset(
-                        baseSinPitch,
-                        baseCosPitch,
-                        spreadSin,
-                        spreadCos,
-                        AimRayPitchOffsetSigns[i],
-                        out float sinPitch,
-                        out float cosPitch);
-                    ApplySignedOffset(
-                        baseSinYaw,
-                        baseCosYaw,
-                        spreadSin,
-                        spreadCos,
-                        AimRayYawOffsetSigns[i],
-                        out float sinYaw,
-                        out float cosYaw);
-
-                    TraceAimRay(
-                        viewerPawn,
-                        options,
-                        drawDebugBeams,
-                        viewerIsBot,
-                        sinPitch,
-                        cosPitch,
-                        sinYaw,
-                        cosYaw,
-                        i);
+                    return true;
                 }
             }
         }
 
-        return _cachedAimHasHitPoint;
+        return false;
     }
 
-    private static void ApplySignedOffset(
-        float baseSin,
-        float baseCos,
-        float spreadSin,
-        float spreadCos,
-        sbyte sign,
-        out float resultSin,
-        out float resultCos)
-    {
-        if (sign == 0)
-        {
-            resultSin = baseSin;
-            resultCos = baseCos;
-            return;
-        }
-
-        if (sign > 0)
-        {
-            resultSin = (baseSin * spreadCos) + (baseCos * spreadSin);
-            resultCos = (baseCos * spreadCos) - (baseSin * spreadSin);
-            return;
-        }
-
-        // a - b
-        resultSin = (baseSin * spreadCos) - (baseCos * spreadSin);
-        resultCos = (baseCos * spreadCos) + (baseSin * spreadSin);
-    }
-
-    private void TraceAimRay(
-        CCSPlayerPawn viewerPawn,
-        TraceOptions options,
+    private bool TryAimRayProximityFallback(
+        CBasePlayerPawn viewerPawn,
+        int viewerSlot,
+        int targetSlot,
+        int nowTick,
+        ref PlayerTransformSnapshot viewerSnapshot,
+        ref PlayerTransformSnapshot targetSnapshot,
+        S2AWHConfig config,
         bool drawDebugBeams,
-        bool viewerIsBot,
-        float sinPitch,
-        float cosPitch,
-        float sinYaw,
-        float cosYaw,
-        int rayIndex)
+        ref bool hasAnyTraceAttempt,
+        ref bool hasSuccessfulTraceCall)
     {
-        float dirX = cosPitch * cosYaw;
-        float dirY = cosPitch * sinYaw;
-        float dirZ = -sinPitch;
-
-        _viewProbeEnd.X = _viewerEyeBuffer.X + (dirX * AimRayLength);
-        _viewProbeEnd.Y = _viewerEyeBuffer.Y + (dirY * AimRayLength);
-        _viewProbeEnd.Z = _viewerEyeBuffer.Z + (dirZ * AimRayLength);
-
-        if (!_rayTrace.TraceEndShape(_viewerEyeBuffer, _viewProbeEnd, viewerPawn, options, out var result))
+        float maxDistance = config.Trace.AimRayMaxDistance;
+        if (maxDistance > 0.0f)
         {
-            return;
+            float targetCenterX = targetSnapshot.OriginX + targetSnapshot.CenterX;
+            float targetCenterY = targetSnapshot.OriginY + targetSnapshot.CenterY;
+            float targetCenterZ = targetSnapshot.OriginZ + targetSnapshot.CenterZ;
+            float dx = targetCenterX - viewerSnapshot.EyeX;
+            float dy = targetCenterY - viewerSnapshot.EyeY;
+            float dz = targetCenterZ - viewerSnapshot.EyeZ;
+            float distanceSq = (dx * dx) + (dy * dy) + (dz * dz);
+            float maxDistanceSq = maxDistance * maxDistance;
+            if (distanceSq > maxDistanceSq)
+            {
+                return false;
+            }
         }
 
-        if (drawDebugBeams)
+        EnsureAimRayCache(
+            viewerSlot,
+            nowTick,
+            ref viewerSnapshot,
+            viewerPawn,
+            config,
+            drawDebugBeams,
+            out var aimCache);
+
+        if (aimCache.AttemptedCount > 0)
         {
-            VisibilityGeometry.DrawDebugTraceBeam(_viewerEyeBuffer, _viewProbeEnd, result, viewerIsBot);
+            hasAnyTraceAttempt = true;
         }
 
-        if (!result.DidHit)
+        if (aimCache.SuccessfulCount > 0)
         {
-            return;
+            hasSuccessfulTraceCall = true;
         }
 
-        _aimRayHitPoints[rayIndex].X = result.EndPosX;
-        _aimRayHitPoints[rayIndex].Y = result.EndPosY;
-        _aimRayHitPoints[rayIndex].Z = result.EndPosZ;
-        _aimRayHitValid[rayIndex] = true;
-        _cachedAimHasHitPoint = true;
-    }
-
-    private bool IsTargetWithinRadiusOfAnyAimHitPoint(
-        CCSPlayerPawn targetPawn,
-        float radius)
-    {
-        var targetOrigin = targetPawn.AbsOrigin;
-        if (targetOrigin == null)
+        if (aimCache.HitCount <= 0)
         {
             return false;
         }
 
-        float centerX = targetOrigin.X;
-        float centerY = targetOrigin.Y;
-        float centerZ = targetOrigin.Z;
-
-        var targetCollision = targetPawn.Collision;
-        if (targetCollision?.Mins != null && targetCollision?.Maxs != null)
+        float hitRadius = config.Trace.AimRayHitRadius;
+        if (hitRadius <= 0.0f)
         {
-            centerX += (targetCollision.Mins.X + targetCollision.Maxs.X) * 0.5f;
-            centerY += (targetCollision.Mins.Y + targetCollision.Maxs.Y) * 0.5f;
-            centerZ += (targetCollision.Mins.Z + targetCollision.Maxs.Z) * 0.5f;
-        }
-        else
-        {
-            centerZ += 36.0f;
+            return false;
         }
 
-        float radiusSq = radius * radius;
-        for (int i = 0; i < AimRayCount; i++)
+        float hitRadiusSq = hitRadius * hitRadius;
+        GetExpandedWorldBounds(ref targetSnapshot, config, out float minX, out float minY, out float minZ, out float maxX, out float maxY, out float maxZ);
+
+        for (int i = 0; i < aimCache.HitCount; i++)
         {
-            if (!_aimRayHitValid[i])
+            Vector hitPoint = aimCache.HitPoints[i];
+            if (SegmentIntersectsAabb(
+                viewerSnapshot.EyeX,
+                viewerSnapshot.EyeY,
+                viewerSnapshot.EyeZ,
+                hitPoint.X,
+                hitPoint.Y,
+                hitPoint.Z,
+                minX,
+                minY,
+                minZ,
+                maxX,
+                maxY,
+                maxZ))
+            {
+                return true;
+            }
+
+            float closestX = Math.Clamp(hitPoint.X, minX, maxX);
+            float closestY = Math.Clamp(hitPoint.Y, minY, maxY);
+            float closestZ = Math.Clamp(hitPoint.Z, minZ, maxZ);
+            float dx = hitPoint.X - closestX;
+            float dy = hitPoint.Y - closestY;
+            float dz = hitPoint.Z - closestZ;
+            if ((dx * dx) + (dy * dy) + (dz * dz) <= hitRadiusSq)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool SegmentIntersectsAabb(
+        float startX,
+        float startY,
+        float startZ,
+        float endX,
+        float endY,
+        float endZ,
+        float minX,
+        float minY,
+        float minZ,
+        float maxX,
+        float maxY,
+        float maxZ)
+    {
+        float tMin = 0.0f;
+        float tMax = 1.0f;
+        float dirX = endX - startX;
+        float dirY = endY - startY;
+        float dirZ = endZ - startZ;
+
+        return ClipSegmentAxis(startX, dirX, minX, maxX, ref tMin, ref tMax) &&
+               ClipSegmentAxis(startY, dirY, minY, maxY, ref tMin, ref tMax) &&
+               ClipSegmentAxis(startZ, dirZ, minZ, maxZ, ref tMin, ref tMax);
+    }
+
+    private bool TraceFaceGrid(
+        CBasePlayerPawn viewerPawn,
+        nint targetHandle,
+        float fixedAxisValue,
+        float range1Min,
+        float range1Max,
+        float range2Min,
+        float range2Max,
+        AabbFaceAxis faceAxis,
+        float hitRadiusSq,
+        bool drawDebugBeams,
+        ref bool hasAnyTraceAttempt,
+        ref bool hasSuccessfulTraceCall)
+    {
+        float step1 = ViewerFacingFaceProbeGridSize > 1 ? (range1Max - range1Min) / (ViewerFacingFaceProbeGridSize - 1) : 0.0f;
+        float step2 = ViewerFacingFaceProbeGridSize > 1 ? (range2Max - range2Min) / (ViewerFacingFaceProbeGridSize - 1) : 0.0f;
+
+        for (int i = 0; i < ViewerFacingFaceProbeGridSize; i++)
+        {
+            float axis1 = range1Min + (step1 * i);
+            for (int j = 0; j < ViewerFacingFaceProbeGridSize; j++)
+            {
+                float axis2 = range2Min + (step2 * j);
+                AabbGeometry.SetFacePoint(_traceEnd, fixedAxisValue, axis1, axis2, faceAxis);
+
+                hasAnyTraceAttempt = true;
+                if (!_rayTrace.TraceEndShape(_traceStart, _traceEnd, viewerPawn, _cachedTraceOptions, out var result))
+                {
+                    continue;
+                }
+
+                hasSuccessfulTraceCall = true;
+                if (drawDebugBeams)
+                {
+                    VisibilityGeometry.DrawDebugTraceBeam(_traceStart, _traceEnd, result, DebugTraceKind.LosSurface);
+                }
+
+                if (!result.DidHit || result.HitEntity == targetHandle)
+                {
+                    return true;
+                }
+
+                if (hitRadiusSq > 0.0f)
+                {
+                    float dx = _traceEnd.X - result.EndPosX;
+                    float dy = _traceEnd.Y - result.EndPosY;
+                    float dz = _traceEnd.Z - result.EndPosZ;
+                    if ((dx * dx) + (dy * dy) + (dz * dz) <= hitRadiusSq)
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static bool ClipSegmentAxis(
+        float start,
+        float direction,
+        float min,
+        float max,
+        ref float tMin,
+        ref float tMax)
+    {
+        const float epsilon = 0.0001f;
+        if (MathF.Abs(direction) <= epsilon)
+        {
+            return start >= min && start <= max;
+        }
+
+        float inverseDirection = 1.0f / direction;
+        float t1 = (min - start) * inverseDirection;
+        float t2 = (max - start) * inverseDirection;
+        if (t1 > t2)
+        {
+            (t1, t2) = (t2, t1);
+        }
+
+        if (t1 > tMin)
+        {
+            tMin = t1;
+        }
+
+        if (t2 < tMax)
+        {
+            tMax = t2;
+        }
+
+        return tMin <= tMax && tMax >= 0.0f && tMin <= 1.0f;
+    }
+
+    private bool TryMicroHullFallback(
+        CBasePlayerPawn viewerPawn,
+        nint targetHandle,
+        ref PlayerTransformSnapshot viewerSnapshot,
+        ref PlayerTransformSnapshot targetSnapshot,
+        S2AWHConfig config,
+        bool drawDebugBeams,
+        ref bool hasAnyTraceAttempt,
+        ref bool hasSuccessfulTraceCall)
+    {
+        float microHullMaxDistance = config.Aabb.MicroHullMaxDistance;
+        if (microHullMaxDistance <= 0.0f)
+        {
+            return false;
+        }
+
+        float targetCenterX = targetSnapshot.OriginX + targetSnapshot.CenterX;
+        float targetCenterY = targetSnapshot.OriginY + targetSnapshot.CenterY;
+        float targetCenterZ = targetSnapshot.OriginZ + targetSnapshot.CenterZ;
+        float dx = targetCenterX - viewerSnapshot.EyeX;
+        float dy = targetCenterY - viewerSnapshot.EyeY;
+        float dz = targetCenterZ - viewerSnapshot.EyeZ;
+        float distanceSq = (dx * dx) + (dy * dy) + (dz * dz);
+        float maxDistanceSq = microHullMaxDistance * microHullMaxDistance;
+        if (distanceSq > maxDistanceSq)
+        {
+            return false;
+        }
+
+        GetExpandedWorldBounds(ref targetSnapshot, config, out float minX, out float minY, out float minZ, out float maxX, out float maxY, out float maxZ);
+        AabbGeometry.GetClosestPointOnSurface(
+            viewerSnapshot.EyeX,
+            viewerSnapshot.EyeY,
+            viewerSnapshot.EyeZ,
+            minX,
+            minY,
+            minZ,
+            maxX,
+            maxY,
+            maxZ,
+            out float nearestX,
+            out float nearestY,
+            out float nearestZ);
+
+        if (TryMicroHullTrace(viewerPawn, targetHandle, nearestX, nearestY, nearestZ, drawDebugBeams, ref hasAnyTraceAttempt, ref hasSuccessfulTraceCall))
+        {
+            return true;
+        }
+
+        if (TryMicroHullTrace(viewerPawn, targetHandle, targetCenterX, targetCenterY, targetCenterZ, drawDebugBeams, ref hasAnyTraceAttempt, ref hasSuccessfulTraceCall))
+        {
+            return true;
+        }
+
+        return TryMicroHullTrace(viewerPawn, targetHandle, targetSnapshot.EyeX, targetSnapshot.EyeY, targetSnapshot.EyeZ, drawDebugBeams, ref hasAnyTraceAttempt, ref hasSuccessfulTraceCall);
+    }
+
+    private bool TryMicroHullTrace(
+        CBasePlayerPawn viewerPawn,
+        nint targetHandle,
+        float targetX,
+        float targetY,
+        float targetZ,
+        bool drawDebugBeams,
+        ref bool hasAnyTraceAttempt,
+        ref bool hasSuccessfulTraceCall)
+    {
+        SetVector(_traceEnd, targetX, targetY, targetZ);
+        hasAnyTraceAttempt = true;
+        if (!_rayTrace.TraceHullShape(_traceStart, _traceEnd, _microHullMins, _microHullMaxs, viewerPawn, _cachedTraceOptions, out var result))
+        {
+            return false;
+        }
+
+        hasSuccessfulTraceCall = true;
+        if (drawDebugBeams)
+        {
+            VisibilityGeometry.DrawDebugTraceBeam(_traceStart, _traceEnd, result, DebugTraceKind.MicroHull);
+        }
+
+        return !result.DidHit || result.HitEntity == targetHandle;
+    }
+
+    private void EnsureAimRayCache(
+        int viewerSlot,
+        int nowTick,
+        ref PlayerTransformSnapshot viewerSnapshot,
+        CBasePlayerPawn viewerPawn,
+        S2AWHConfig config,
+        bool drawDebugBeams,
+        out ViewerAimRayCacheEntry cache)
+    {
+        cache = _viewerAimCacheBySlot[viewerSlot] ??= new ViewerAimRayCacheEntry();
+        if (cache.Tick == nowTick)
+        {
+            return;
+        }
+
+        cache.Tick = nowTick;
+        cache.HitCount = 0;
+        cache.AttemptedCount = 0;
+        cache.SuccessfulCount = 0;
+
+        int rayCount = Math.Clamp(config.Trace.AimRayCount, 1, MaxAimRayCount);
+        float spreadDegrees = Math.Max(0.0f, config.Trace.AimRaySpreadDegrees);
+        float rayDistance = config.Trace.AimRayMaxDistance > 0.0f
+            ? Math.Max(MinAimRayDistance, config.Trace.AimRayMaxDistance)
+            : DefaultAimRayDistance;
+        float basePitch = viewerSnapshot.EyeAnglesPitch;
+        float baseYaw = viewerSnapshot.EyeAnglesYaw;
+
+        SetVector(_traceStart, viewerSnapshot.EyeX, viewerSnapshot.EyeY, viewerSnapshot.EyeZ);
+
+        for (int i = 0; i < rayCount; i++)
+        {
+            float pitch = basePitch + (spreadDegrees * AimRayPattern[i].PitchFactor);
+            float yaw = baseYaw + (spreadDegrees * AimRayPattern[i].YawFactor);
+            float pitchRad = pitch * DegToRad;
+            float yawRad = yaw * DegToRad;
+            (float sinPitch, float cosPitch) = MathF.SinCos(pitchRad);
+            (float sinYaw, float cosYaw) = MathF.SinCos(yawRad);
+
+            float dirX = cosPitch * cosYaw;
+            float dirY = cosPitch * sinYaw;
+            float dirZ = -sinPitch;
+
+            SetVector(
+                _traceEnd,
+                _traceStart.X + (dirX * rayDistance),
+                _traceStart.Y + (dirY * rayDistance),
+                _traceStart.Z + (dirZ * rayDistance));
+
+            cache.AttemptedCount++;
+            if (!_rayTrace.TraceEndShape(_traceStart, _traceEnd, viewerPawn, _cachedTraceOptions, out var result))
             {
                 continue;
             }
 
-            Vector hitPoint = _aimRayHitPoints[i];
-            float dx = centerX - hitPoint.X;
-            float dy = centerY - hitPoint.Y;
-            float dz = centerZ - hitPoint.Z;
-            float distanceSq = (dx * dx) + (dy * dy) + (dz * dz);
-            if (distanceSq <= radiusSq)
+            cache.SuccessfulCount++;
+            if (drawDebugBeams)
             {
-                return true;
+                VisibilityGeometry.DrawDebugTraceBeam(_traceStart, _traceEnd, result, DebugTraceKind.AimRay);
+            }
+
+            Vector hitPoint = cache.HitPoints[cache.HitCount++];
+            if (result.DidHit)
+            {
+                hitPoint.X = result.EndPosX;
+                hitPoint.Y = result.EndPosY;
+                hitPoint.Z = result.EndPosZ;
+            }
+            else
+            {
+                hitPoint.X = _traceEnd.X;
+                hitPoint.Y = _traceEnd.Y;
+                hitPoint.Z = _traceEnd.Z;
             }
         }
-
-        return false;
     }
 
-    private static bool IsGapSweepHitNearTarget(
-        in TraceResult result,
-        float traceLen,
-        float distToTarget,
-        Vector probeEnd,
-        float targetX,
-        float targetY,
-        float targetCenterZ,
-        float gapProximitySq)
+    private int GetOrRefreshSurfaceProbeCache(
+        int targetSlot,
+        int nowTick,
+        ref PlayerTransformSnapshot targetSnapshot,
+        S2AWHConfig config,
+        out Vector[] points)
     {
-        // If the ray hit a wall before reaching the target's distance, verify proximity.
-        if (result.DidHit)
+        var cache = _targetSurfaceCacheBySlot[targetSlot] ??= new TargetSurfaceCacheEntry();
+        if (cache.Tick != nowTick)
         {
-            float hitTravelDist = result.Fraction * traceLen;
-            if (hitTravelDist >= distToTarget)
-            {
-                return true;
-            }
+            cache.Tick = nowTick;
+            cache.PointCount = FillSurfaceProbePoints(ref targetSnapshot, config, cache.SurfacePoints);
         }
 
-        // Check if the hit/end point is near the target's body.
-        float endX = result.DidHit ? result.EndPosX : probeEnd.X;
-        float endY = result.DidHit ? result.EndPosY : probeEnd.Y;
-        float endZ = result.DidHit ? result.EndPosZ : probeEnd.Z;
-
-        float hx = endX - targetX;
-        float hy = endY - targetY;
-        float hz = endZ - targetCenterZ;
-        float hitToTargetDistSq = (hx * hx) + (hy * hy) + (hz * hz);
-        return hitToTargetDistSq < gapProximitySq;
+        points = cache.SurfacePoints;
+        return cache.PointCount;
     }
 
-    private bool TryMicroHullFallback(
-        CCSPlayerPawn viewerPawn,
-        nint targetHandle,
-        Vector[] targetPoints,
-        int targetPointCount,
-        TraceOptions options,
-        bool drawDebugBeams,
-        bool viewerIsBot)
+    private static int FillSurfaceProbePoints(
+        ref PlayerTransformSnapshot targetSnapshot,
+        S2AWHConfig config,
+        Vector[] pointBuffer)
     {
-        if (targetPointCount <= 0)
+        if (pointBuffer.Length < SurfaceProbePointCount)
         {
-            return false;
+            return 0;
         }
 
-        // 1. Center point probe (index 1 = AABB center)
-        int centerPointIndex = targetPointCount > 1 ? 1 : 0;
-        if (TryMicroHullProbe(viewerPawn, targetHandle, targetPoints[centerPointIndex], options, drawDebugBeams, viewerIsBot))
-        {
-            return true;
-        }
+        float centerX = targetSnapshot.CenterX;
+        float centerY = targetSnapshot.CenterY;
+        float centerZ = targetSnapshot.CenterZ;
+        float halfX = (targetSnapshot.MaxsX - targetSnapshot.MinsX) * 0.5f * config.Aabb.LosHorizontalScale;
+        float halfY = (targetSnapshot.MaxsY - targetSnapshot.MinsY) * 0.5f * config.Aabb.LosHorizontalScale;
+        float halfZ = (targetSnapshot.MaxsZ - targetSnapshot.MinsZ) * 0.5f * config.Aabb.LosVerticalScale;
 
-        // 2. Eye point probe (index 0)
-        if (centerPointIndex != 0 && TryMicroHullProbe(viewerPawn, targetHandle, targetPoints[0], options, drawDebugBeams, viewerIsBot))
-        {
-            return true;
-        }
-
-        // 3. Sample a subset of corner points to catch narrow diagonal slivers
-        //    where thin-angle ray samples all missed but a small hull can still reach.
-        int probeLimit = Math.Min(targetPointCount, 6);
-        for (int i = 2; i < probeLimit; i++)
-        {
-            if (TryMicroHullProbe(viewerPawn, targetHandle, targetPoints[i], options, drawDebugBeams, viewerIsBot))
-            {
-                return true;
-            }
-        }
-
-        return false;
+        return AabbGeometry.FillSurfaceProbePoints(
+            pointBuffer,
+            config.Aabb.LosSurfaceProbeRows,
+            targetSnapshot.OriginX + centerX,
+            targetSnapshot.OriginY + centerY,
+            targetSnapshot.OriginZ + centerZ,
+            halfX,
+            halfY,
+            halfZ);
     }
 
-    private bool TryMicroHullProbe(
-        CCSPlayerPawn viewerPawn,
-        nint targetHandle,
-        Vector probeEnd,
-        TraceOptions options,
-        bool drawDebugBeams,
-        bool viewerIsBot)
+    private static void DrawLosDebugAabb(ref PlayerTransformSnapshot targetSnapshot, S2AWHConfig config)
     {
-        if (!_rayTrace.TraceHullShape(_viewerEyeBuffer, probeEnd, _microHullMins, _microHullMaxs, viewerPawn, options, out var hullResult))
-        {
-            return false;
-        }
-
-        if (drawDebugBeams)
-        {
-            VisibilityGeometry.DrawDebugTraceBeam(_viewerEyeBuffer, probeEnd, hullResult, viewerIsBot);
-        }
-
-        return !hullResult.DidHit || hullResult.HitEntity == targetHandle;
+        GetExpandedWorldBounds(ref targetSnapshot, config, out float minX, out float minY, out float minZ, out float maxX, out float maxY, out float maxZ);
+        VisibilityGeometry.DrawDebugAabbBox(
+            minX,
+            minY,
+            minZ,
+            maxX,
+            maxY,
+            maxZ,
+            DebugAabbKind.Los);
     }
 
-    private bool TryGetTargetPoints(int targetSlot, CCSPlayerPawn targetPawn, int nowTick, out Vector[] targetPoints, out int pointCount)
+    private static void GetExpandedWorldBounds(
+        ref PlayerTransformSnapshot targetSnapshot,
+        S2AWHConfig config,
+        out float minX,
+        out float minY,
+        out float minZ,
+        out float maxX,
+        out float maxY,
+        out float maxZ)
     {
-        targetPoints = Array.Empty<Vector>();
-        pointCount = 0;
+        float centerX = targetSnapshot.OriginX + targetSnapshot.CenterX;
+        float centerY = targetSnapshot.OriginY + targetSnapshot.CenterY;
+        float centerZ = targetSnapshot.OriginZ + targetSnapshot.CenterZ;
+        float halfX = (targetSnapshot.MaxsX - targetSnapshot.MinsX) * 0.5f * config.Aabb.LosHorizontalScale;
+        float halfY = (targetSnapshot.MaxsY - targetSnapshot.MinsY) * 0.5f * config.Aabb.LosHorizontalScale;
+        float halfZ = (targetSnapshot.MaxsZ - targetSnapshot.MinsZ) * 0.5f * config.Aabb.LosVerticalScale;
 
-        if (!_targetPointCacheBySlot.TryGetValue(targetSlot, out var cacheEntry) || cacheEntry == null)
+        minX = centerX - halfX;
+        minY = centerY - halfY;
+        minZ = centerZ - halfZ;
+        maxX = centerX + halfX;
+        maxY = centerY + halfY;
+        maxZ = centerZ + halfZ;
+    }
+
+    private static void SetVector(Vector vector, float x, float y, float z)
+    {
+        vector.X = x;
+        vector.Y = y;
+        vector.Z = z;
+    }
+
+    private static Vector[] CreatePointBuffer(int count)
+    {
+        Vector[] points = new Vector[count];
+        for (int i = 0; i < count; i++)
         {
-            cacheEntry = new TargetPointCacheEntry();
-            _targetPointCacheBySlot[targetSlot] = cacheEntry;
+            points[i] = new Vector(0.0f, 0.0f, 0.0f);
         }
 
-        int pawnIndex = (int)targetPawn.Index;
-        if (cacheEntry.Tick != nowTick || cacheEntry.PawnIndex != pawnIndex)
-        {
-            cacheEntry.PointCount = VisibilityGeometry.FillTargetPoints(targetPawn, cacheEntry.Points, null, false);
-            cacheEntry.Tick = nowTick;
-            cacheEntry.PawnIndex = pawnIndex;
-        }
-
-        if (cacheEntry.PointCount <= 0)
-        {
-            return false;
-        }
-
-        targetPoints = cacheEntry.Points;
-        pointCount = cacheEntry.PointCount;
-        return true;
+        return points;
     }
 
     /// <summary>
-    /// Clears cached target-point data for the given slot.
+    /// Clears cached target surface data for one slot.
     /// </summary>
     internal void InvalidateTargetSlot(int targetSlot)
     {
-        _targetPointCacheBySlot.Remove(targetSlot);
+        if ((uint)targetSlot < SlotCount)
+        {
+            _targetSurfaceCacheBySlot[targetSlot] = null;
+            _viewerAimCacheBySlot[targetSlot] = null;
+        }
     }
 
     /// <summary>
-    /// Clears all LOS evaluation caches.
+    /// Clears all LOS caches.
     /// </summary>
     internal void ClearCaches()
     {
-        _targetPointCacheBySlot.Clear();
-        _cachedViewerPawnIndex = -1;
-        _cachedViewerTick = -1;
-        _cachedAimViewerPawnIndex = -1;
-        _cachedAimTick = -1;
-        _cachedAimHasHitPoint = false;
-        Array.Clear(_aimRayHitValid, 0, _aimRayHitValid.Length);
+        Array.Clear(_viewerAimCacheBySlot, 0, _viewerAimCacheBySlot.Length);
+        Array.Clear(_targetSurfaceCacheBySlot, 0, _targetSurfaceCacheBySlot.Length);
     }
 }

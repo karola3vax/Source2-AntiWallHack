@@ -1,4 +1,5 @@
 using CounterStrikeSharp.API;
+using Microsoft.Extensions.Logging;
 
 namespace S2AWH;
 
@@ -7,10 +8,6 @@ public partial class S2AWH
     private const string LevelInformation = "INFO";
     private const string LevelWarning = "WARN";
     private const string LevelDebug = "DEBUG";
-    private const string LogColorInformation = "\u001b[36m";
-    private const string LogColorWarning = "\u001b[33m";
-    private const string LogColorDebug = "\u001b[90m";
-    private const string LogColorReset = "\u001b[0m";
     private const int MaxLogSentenceLength = 320;
 
     private void InfoLog(string whatHappened, string whyHappened, string result)
@@ -66,9 +63,16 @@ public partial class S2AWH
         int revealHoldPairCount = CountPairEntries(_revealHoldRows);
         int stableDecisionPairCount = CountPairEntries(_stableDecisionRows);
 
-        int configuredRayPoints = config.Trace.RayTracePoints;
-        int estimatedLosRaysPerSnapshot = livePlayerCount > 1
-            ? livePlayerCount * (livePlayerCount - 1) * configuredRayPoints
+        int activeViewers = 0;
+        for (int i = 0; i < VisibilitySlotCapacity; i++)
+        {
+            if (_visibilityCache[i] != null) activeViewers++;
+        }
+
+        int losSurfaceRows = Math.Clamp(config.Aabb.LosSurfaceProbeRows, 1, 3);
+        int baseLosSurfaceRaysPerPair = losSurfaceRows * 4;
+        int estimatedBaseLosRaysPerSnapshot = livePlayerCount > 1
+            ? livePlayerCount * (livePlayerCount - 1) * baseLosSurfaceRaysPerPair
             : 0;
 
         float snapshotsPerSecond = 0.0f;
@@ -91,9 +95,9 @@ public partial class S2AWH
             hasLivePlayers
                 ? $"Players alive: {livePlayerCount} ({humanPlayerCount} humans, {botPlayerCount} bots)."
                 : "Waiting for players to join.",
-            $"Tracking: {_visibilityCache.Count} viewers, {visibilityPairCount} visibility decisions.",
+            $"Tracking: {activeViewers} viewers, {visibilityPairCount} visibility decisions.",
             $"Anti pop-in: {revealHoldPairCount} reveal holds, {stableDecisionPairCount} saved decisions.",
-            $"Rays: {configuredRayPoints} per player, ~{estimatedLosRaysPerSnapshot} total per scan.",
+            $"Rays: base LOS surface probes {baseLosSurfaceRaysPerPair} per pair, ~{estimatedBaseLosRaysPerSnapshot} per scan (plus aim/micro/preload).",
             $"Hidden {_transmitHiddenEntitiesInWindow} entities from wallhacks this window.",
             $"Safety checks: {_transmitFallbackChecksInWindow} extra, {_transmitRemovalNoEffectInWindow} redundant.",
             $"Reveal hold: {_holdRefreshInWindow} refreshed, {_holdHitKeepAliveInWindow} kept alive, {_holdExpiredInWindow} expired.",
@@ -112,27 +116,31 @@ public partial class S2AWH
         }
 
         int total = 0;
-        foreach (var row in _visibilityCache.Values)
+        for (int i = 0; i < VisibilitySlotCapacity; i++)
         {
+            var row = _visibilityCache[i];
+            if (row == null) continue;
+
             var known = row.Known;
-            for (int i = 0; i < known.Length; i++)
+            for (int k = 0; k < known.Length; k++)
             {
-                if (known[i])
-                {
-                    total++;
-                }
+                if (known[k]) total++;
             }
         }
 
         return total;
     }
 
-    private static int CountPairEntries<TRow>(Dictionary<int, TRow> byViewerMap) where TRow : ISlotRow
+    private static int CountPairEntries<TRow>(TRow?[] rowsArray) where TRow : ISlotRow
     {
         int total = 0;
-        foreach (var row in byViewerMap.Values)
+        for (int i = 0; i < VisibilitySlotCapacity; i++)
         {
-            total += row.ActiveCount;
+            var row = rowsArray[i];
+            if (row != null)
+            {
+                total += row.ActiveCount;
+            }
         }
         return total;
     }
@@ -217,18 +225,23 @@ public partial class S2AWH
 
     private void WriteLevelLine(string level, string text)
     {
-        string color = ResolveLevelColor(level);
-        Console.WriteLine($"{color}[S2AWH][{level}]{LogColorReset} {text}{LogColorReset}");
-    }
-
-    private static string ResolveLevelColor(string level)
-    {
-        return level switch
+        if (Logger != null)
         {
-            LevelWarning => LogColorWarning,
-            LevelDebug => LogColorDebug,
-            _ => LogColorInformation
-        };
+            switch (level)
+            {
+                case LevelWarning:
+                    Logger.LogWarning("[S2AWH] {Message}", text);
+                    return;
+                case LevelDebug:
+                    Logger.LogDebug("[S2AWH] {Message}", text);
+                    return;
+                default:
+                    Logger.LogInformation("[S2AWH] {Message}", text);
+                    return;
+            }
+        }
+
+        Console.WriteLine($"[S2AWH][{level}] {text}");
     }
 
     private static string BuildCompactSentence(string whatHappened, string whyHappened, string result)

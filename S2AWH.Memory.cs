@@ -38,12 +38,13 @@ public partial class S2AWH
 
     private void StoreStableDecision(int viewerSlot, int targetSlot, bool decision, int nowTick)
     {
-        if ((uint)targetSlot >= VisibilitySlotCapacity)
+        if ((uint)targetSlot >= VisibilitySlotCapacity || (uint)viewerSlot >= VisibilitySlotCapacity)
         {
             return;
         }
 
-        if (!_stableDecisionRows.TryGetValue(viewerSlot, out var stableRow))
+        StableDecisionRow? stableRow = _stableDecisionRows[viewerSlot];
+        if (stableRow == null)
         {
             stableRow = new StableDecisionRow();
             _stableDecisionRows[viewerSlot] = stableRow;
@@ -63,9 +64,13 @@ public partial class S2AWH
     {
         decision = false;
 
-        if ((uint)targetSlot >= VisibilitySlotCapacity ||
-            !_stableDecisionRows.TryGetValue(viewerSlot, out var stableRow) ||
-            !stableRow.Known[targetSlot])
+        if ((uint)targetSlot >= VisibilitySlotCapacity || (uint)viewerSlot >= VisibilitySlotCapacity)
+        {
+            return false;
+        }
+
+        StableDecisionRow? stableRow = _stableDecisionRows[viewerSlot];
+        if (stableRow == null || !stableRow.Known[targetSlot])
         {
             return false;
         }
@@ -88,24 +93,26 @@ public partial class S2AWH
             return false;
         }
 
-        if ((uint)targetSlot < VisibilitySlotCapacity &&
-            _revealHoldRows.TryGetValue(viewerSlot, out var holdRow) &&
-            holdRow.Known[targetSlot])
+        if ((uint)targetSlot < VisibilitySlotCapacity && (uint)viewerSlot < VisibilitySlotCapacity)
         {
-            int holdUntilTick = holdRow.HoldUntilTick[targetSlot];
-            if (holdUntilTick >= nowTick)
+            RevealHoldRow? holdRow = _revealHoldRows[viewerSlot];
+            if (holdRow != null && holdRow.Known[targetSlot])
             {
-                if (_collectDebugCounters && countAsGenericHoldHit)
+                int holdUntilTick = holdRow.HoldUntilTick[targetSlot];
+                if (holdUntilTick >= nowTick)
                 {
-                    _holdHitKeepAliveInWindow++;
+                    if (_collectDebugCounters && countAsGenericHoldHit)
+                    {
+                        _holdHitKeepAliveInWindow++;
+                    }
+                    return true;
                 }
-                return true;
-            }
 
-            ClearRevealHoldEntry(viewerSlot, holdRow, targetSlot);
-            if (_collectDebugCounters)
-            {
-                _holdExpiredInWindow++;
+                ClearRevealHoldEntry(viewerSlot, holdRow, targetSlot);
+                if (_collectDebugCounters)
+                {
+                    _holdExpiredInWindow++;
+                }
             }
         }
 
@@ -122,29 +129,40 @@ public partial class S2AWH
                 {
                     if (_revealHoldTicks > 0)
                     {
-                        if (!_revealHoldRows.TryGetValue(viewerSlot, out var holdRow))
+                        RevealHoldRow? holdRow = null;
+                        if ((uint)viewerSlot < VisibilitySlotCapacity)
                         {
-                            holdRow = new RevealHoldRow();
-                            _revealHoldRows[viewerSlot] = holdRow;
+                            holdRow = _revealHoldRows[viewerSlot];
+                            if (holdRow == null)
+                            {
+                                holdRow = new RevealHoldRow();
+                                _revealHoldRows[viewerSlot] = holdRow;
+                            }
                         }
 
-                        if (!holdRow.Known[targetSlot])
+                        if (holdRow != null)
                         {
-                            holdRow.Known[targetSlot] = true;
-                            holdRow.ActiveCount++;
-                        }
+                            if (!holdRow.Known[targetSlot])
+                            {
+                                holdRow.Known[targetSlot] = true;
+                                holdRow.ActiveCount++;
+                            }
 
-                        holdRow.HoldUntilTick[targetSlot] = nowTick + _revealHoldTicks;
+                            holdRow.HoldUntilTick[targetSlot] = nowTick + _revealHoldTicks;
 
-                        if (_collectDebugCounters)
-                        {
-                            _holdRefreshInWindow++;
+                            if (_collectDebugCounters)
+                            {
+                                _holdRefreshInWindow++;
+                            }
                         }
                     }
-                    else if (_revealHoldRows.TryGetValue(viewerSlot, out var holdRow) && holdRow.Known[targetSlot])
+                    else if ((uint)viewerSlot < VisibilitySlotCapacity)
                     {
-                        // Reveal hold disabled: remove stale memory immediately.
-                        ClearRevealHoldEntry(viewerSlot, holdRow, targetSlot);
+                        RevealHoldRow? holdRow = _revealHoldRows[viewerSlot];
+                        if (holdRow != null && holdRow.Known[targetSlot])
+                        {
+                            ClearRevealHoldEntry(viewerSlot, holdRow, targetSlot);
+                        }
                     }
                 }
                 return true;
@@ -199,9 +217,9 @@ public partial class S2AWH
         holdRow.Known[targetSlot] = false;
         holdRow.HoldUntilTick[targetSlot] = 0;
         holdRow.ActiveCount--;
-        if (holdRow.ActiveCount <= 0)
+        if (holdRow.ActiveCount <= 0 && (uint)viewerSlot < VisibilitySlotCapacity)
         {
-            _revealHoldRows.Remove(viewerSlot);
+            _revealHoldRows[viewerSlot] = null;
         }
     }
 
@@ -216,74 +234,22 @@ public partial class S2AWH
         stableRow.Decisions[targetSlot] = false;
         stableRow.Ticks[targetSlot] = 0;
         stableRow.ActiveCount--;
-        if (stableRow.ActiveCount <= 0)
+        if (stableRow.ActiveCount <= 0 && (uint)viewerSlot < VisibilitySlotCapacity)
         {
-            _stableDecisionRows.Remove(viewerSlot);
-        }
-    }
-
-    private void RemoveTargetSlotFromRows<TRow>(Dictionary<int, TRow> rows, int targetSlot) where TRow : ISlotRow
-    {
-        if ((uint)targetSlot >= VisibilitySlotCapacity || rows.Count == 0)
-        {
-            return;
-        }
-
-        _viewerSlotsToRemove.Clear();
-        foreach (var rowEntry in rows)
-        {
-            var row = rowEntry.Value;
-            if (!row.IsTargetKnown(targetSlot))
-            {
-                continue;
-            }
-
-            row.ClearTargetSlot(targetSlot);
-            if (row.IsEmpty)
-            {
-                _viewerSlotsToRemove.Add(rowEntry.Key);
-            }
-        }
-
-        foreach (int viewerSlot in _viewerSlotsToRemove)
-        {
-            rows.Remove(viewerSlot);
+            _stableDecisionRows[viewerSlot] = null;
         }
     }
 
     private void PurgeInactiveViewerRows()
     {
-        // Build valid slot set from already-cached live players (no new native interop calls).
-        _liveSlotSet.Clear();
-        foreach (var player in _cachedLivePlayers)
+        for (int i = 0; i < VisibilitySlotCapacity; i++)
         {
-            _liveSlotSet.Add(player.Slot);
-        }
-
-        PurgeStaleViewerEntries(_visibilityCache, _liveSlotSet);
-        PurgeStaleViewerEntries(_revealHoldRows, _liveSlotSet);
-        PurgeStaleViewerEntries(_stableDecisionRows, _liveSlotSet);
-    }
-
-    private void PurgeStaleViewerEntries<TValue>(Dictionary<int, TValue> cache, HashSet<int> liveSlots)
-    {
-        if (cache.Count == 0)
-        {
-            return;
-        }
-
-        _viewerSlotsToRemove.Clear();
-        foreach (var slot in cache.Keys)
-        {
-            if (!liveSlots.Contains(slot))
+            if (!_liveSlotFlags[i])
             {
-                _viewerSlotsToRemove.Add(slot);
+                _visibilityCache[i] = null;
+                _revealHoldRows[i] = null;
+                _stableDecisionRows[i] = null;
             }
-        }
-
-        foreach (int viewerSlot in _viewerSlotsToRemove)
-        {
-            cache.Remove(viewerSlot);
         }
     }
 }

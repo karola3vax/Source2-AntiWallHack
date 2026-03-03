@@ -11,10 +11,18 @@ namespace S2AWH;
 [MinimumApiVersion(362)]
 public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
 {
-    private const int VisibilitySlotCapacity = 128;
+    private const int VisibilitySlotCapacity = 65;
     private const float StationarySpeedSqThreshold = 4.0f;
     private const int DebugSummaryIntervalTicks = 4096;
     private const float StartupDigestDelaySeconds = 6.0f;
+    private const float RoundStartGraceSeconds = 0.5f;
+    private const int SnapshotStabilizeGraceTicks = 32;
+    private const float SnapshotZeroOriginEpsilon = 1.0f;
+    private const float MaxBoundsExtentUnits = 512.0f;
+    private const float MaxLocalBoundsCoordinateUnits = 384.0f;
+    private const float MaxLocalHorizontalCenterOffset = 96.0f;
+    private const float MinLocalVerticalCenter = -96.0f;
+    private const float MaxLocalVerticalCenter = 192.0f;
 
     /// <summary>
     /// Holds the set of entity handles (pawn + weapons) belonging to a single target player,
@@ -22,10 +30,10 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
     /// </summary>
     private sealed class TargetTransmitEntities
     {
-        public int Tick = -1;
+        public int LastFullRefreshTick = -1;
         public int SanitizeTick = -1;
         public uint PawnHandleRaw = uint.MaxValue;
-        public uint[] RawHandles = new uint[16];
+        public uint[] RawHandles = new uint[64];
         public int Count;
     }
 
@@ -34,14 +42,12 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
         public bool[] Decisions = new bool[VisibilitySlotCapacity];
         public bool[] Known = new bool[VisibilitySlotCapacity];
         public uint[] PawnHandles = new uint[VisibilitySlotCapacity];
+        public int[] EvalTicks = new int[VisibilitySlotCapacity];
     }
 
     private interface ISlotRow
     {
         int ActiveCount { get; }
-        bool IsTargetKnown(int slot);
-        void ClearTargetSlot(int slot);
-        bool IsEmpty { get; }
     }
 
     /// <summary>
@@ -54,20 +60,6 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
         public bool[] Known = new bool[VisibilitySlotCapacity];
         public int ActiveCount;
         int ISlotRow.ActiveCount => ActiveCount;
-        /// <summary>
-        /// Returns whether the target slot has an active hold entry.
-        /// </summary>
-        public bool IsTargetKnown(int slot) => Known[slot];
-        public bool IsEmpty => ActiveCount <= 0;
-        /// <summary>
-        /// Clears hold state for the target slot.
-        /// </summary>
-        public void ClearTargetSlot(int slot)
-        {
-            Known[slot] = false;
-            HoldUntilTick[slot] = 0;
-            ActiveCount--;
-        }
     }
 
     /// <summary>
@@ -81,21 +73,6 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
         public bool[] Known = new bool[VisibilitySlotCapacity];
         public int ActiveCount;
         int ISlotRow.ActiveCount => ActiveCount;
-        /// <summary>
-        /// Returns whether the target slot has a stored stable decision.
-        /// </summary>
-        public bool IsTargetKnown(int slot) => Known[slot];
-        public bool IsEmpty => ActiveCount <= 0;
-        /// <summary>
-        /// Clears stable-decision state for the target slot.
-        /// </summary>
-        public void ClearTargetSlot(int slot)
-        {
-            Known[slot] = false;
-            Decisions[slot] = false;
-            Ticks[slot] = 0;
-            ActiveCount--;
-        }
     }
 
     public override string ModuleName => "S2AWH (Source2 AntiWallhack)";
@@ -113,6 +90,8 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
     /// </summary>
     public void OnConfigParsed(S2AWHConfig config)
     {
+        ArgumentNullException.ThrowIfNull(config);
+
         var warnings = config.Normalize();
         Config = config;
         S2AWHState.Current = config;
@@ -135,24 +114,24 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
             "S2AWH is using these settings now."
         );
 
-        if (_transmitFilter != null)
+        if (_transmitFilter != null && config.Core.Enabled)
         {
             RebuildVisibilityCacheSnapshot();
         }
     }
 
     private readonly PluginCapability<CRayTraceInterface> _rayTraceCapability = new("raytrace:craytraceinterface");
-    
+
     private LosEvaluator? _losEvaluator;
     private PreloadPredictor? _predictor;
     private TransmitFilter? _transmitFilter;
 
     // Cache: ViewerSlot -> visibility-by-target-slot
-    private Dictionary<int, ViewerVisibilityRow> _visibilityCache = new(64);
+    private readonly ViewerVisibilityRow?[] _visibilityCache = new ViewerVisibilityRow?[VisibilitySlotCapacity];
     // Memory: ViewerSlot -> TargetSlot state
-    private Dictionary<int, RevealHoldRow> _revealHoldRows = new(64);
+    private readonly RevealHoldRow?[] _revealHoldRows = new RevealHoldRow?[VisibilitySlotCapacity];
     // Last stable decision memory: ViewerSlot -> TargetSlot state
-    private Dictionary<int, StableDecisionRow> _stableDecisionRows = new(64);
+    private readonly StableDecisionRow?[] _stableDecisionRows = new StableDecisionRow?[VisibilitySlotCapacity];
     private int _staggeredViewerOffset;
     private int _ticksSinceInitRetry;
     private bool _hasLoggedWaitingForCapability;
@@ -178,21 +157,24 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
     private int _unknownStickyWindowTicks = 1;
     private bool _collectDebugCounters = true;
     private bool _startupDigestQueued;
-    private readonly List<CCSPlayerController> _cachedLivePlayers = new(64);
+    private readonly List<CCSPlayerController> _cachedLivePlayers = new(VisibilitySlotCapacity - 1);
     private int _cachedLivePlayersTick = -1;
     private bool _cachedLivePlayersValid;
-    private readonly List<int> _viewerSlotsToRemove = new(64);
-    private readonly HashSet<int> _liveSlotSet = new(64);
-    private readonly Dictionary<int, TargetTransmitEntities> _targetTransmitEntitiesCache = new(64);
-    private readonly List<(CCSPlayerController Target, TargetTransmitEntities Entities, int TargetSlot, bool TargetIsBot, int TargetTeam)> _eligibleTargetsWithEntities = new(64);
+    private readonly bool[] _liveSlotFlags = new bool[VisibilitySlotCapacity];
+    private readonly TargetTransmitEntities?[] _targetTransmitEntitiesCache = new TargetTransmitEntities?[VisibilitySlotCapacity];
+    private readonly List<(TargetTransmitEntities Entities, int TargetSlot, int TargetTeam)> _eligibleTargetsWithEntities = new(VisibilitySlotCapacity - 1);
     private readonly Dictionary<uint, int> _entityHandleIndexCache = new(256);
     private int _entityHandleIndexCacheTick = -1;
     private int _eligibleTargetsWithEntitiesTick = -1;
+    private int _roundStartGraceUntilTick;
     private readonly int[] _snapshotTargetSlots = new int[VisibilitySlotCapacity];
     private readonly uint[] _snapshotTargetPawnHandles = new uint[VisibilitySlotCapacity];
     private readonly bool[] _snapshotTargetStationary = new bool[VisibilitySlotCapacity];
     private readonly bool[] _snapshotTargetIsBot = new bool[VisibilitySlotCapacity];
     private readonly int[] _snapshotTargetTeams = new int[VisibilitySlotCapacity];
+    private readonly int[] _snapshotStabilizeUntilTickBySlot = new int[VisibilitySlotCapacity];
+    internal readonly PlayerTransformSnapshot[] SnapshotTransforms = new PlayerTransformSnapshot[VisibilitySlotCapacity];
+    internal readonly CBasePlayerPawn?[] SnapshotPawns = new CBasePlayerPawn?[VisibilitySlotCapacity];
 
     /// <summary>
     /// Registers hooks and initializes dependencies needed by the plugin.
@@ -214,12 +196,14 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
         RegisterListener<Listeners.OnMapStart>(OnMapStart);
         RegisterListener<Listeners.OnMapEnd>(OnMapEnd);
         RegisterListener<Listeners.OnClientDisconnect>(OnClientDisconnect);
+        RegisterEventHandler<EventRoundStart>(OnRoundStart);
+        RegisterEventHandler<EventPlayerSpawn>(OnPlayerSpawn);
 
         TryInitializeModules("Load");
 
         RegisterListener<Listeners.OnTick>(OnTick);
         RegisterListener<Listeners.CheckTransmit>(OnCheckTransmit);
-        
+
         InfoLog(
             "S2AWH is ready.",
             "All hooks are active.",
@@ -264,7 +248,7 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
         );
         bool initialized = TryInitializeModules("OnMapStart");
 
-        if (initialized)
+        if (initialized && S2AWHState.Current.Core.Enabled)
         {
             if (RebuildVisibilityCacheSnapshot())
             {
@@ -283,6 +267,14 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
                 );
             }
         }
+        else if (initialized)
+        {
+            DebugLog(
+                "Visibility warmup skipped.",
+                "S2AWH is currently disabled in config.",
+                "Checks will start automatically when enabled."
+            );
+        }
 
         QueueStartupDigest(mapName);
     }
@@ -298,26 +290,80 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
         );
     }
 
-    private void OnClientDisconnect(int playerSlot)
+    private HookResult OnRoundStart(EventRoundStart @event, GameEventInfo info)
     {
-        _visibilityCache.Remove(playerSlot);
-        foreach (var viewerVisibility in _visibilityCache.Values)
+        ClearVisibilityCache();
+        int nowTick = Server.TickCount;
+        _roundStartGraceUntilTick = nowTick + ConvertSecondsToTicks(RoundStartGraceSeconds);
+        int stabilizeUntilTick = nowTick + SnapshotStabilizeGraceTicks;
+        Array.Fill(_snapshotStabilizeUntilTickBySlot, stabilizeUntilTick);
+        return HookResult.Continue;
+    }
+
+    private HookResult OnPlayerSpawn(EventPlayerSpawn @event, GameEventInfo info)
+    {
+        var player = @event.Userid;
+        if (player != null)
         {
-            if ((uint)playerSlot < (uint)viewerVisibility.Known.Length)
+            int slot = player.Slot;
+            if ((uint)slot < VisibilitySlotCapacity)
             {
-                viewerVisibility.Known[playerSlot] = false;
-                viewerVisibility.Decisions[playerSlot] = false;
-                viewerVisibility.PawnHandles[playerSlot] = 0;
+                int stabilizeUntilTick = Server.TickCount + SnapshotStabilizeGraceTicks;
+                if (_snapshotStabilizeUntilTickBySlot[slot] < stabilizeUntilTick)
+                {
+                    _snapshotStabilizeUntilTickBySlot[slot] = stabilizeUntilTick;
+                }
             }
         }
 
-        _revealHoldRows.Remove(playerSlot);
-        RemoveTargetSlotFromRows(_revealHoldRows, playerSlot);
+        return HookResult.Continue;
+    }
 
-        _stableDecisionRows.Remove(playerSlot);
-        RemoveTargetSlotFromRows(_stableDecisionRows, playerSlot);
+    private void OnClientDisconnect(int playerSlot)
+    {
+        if ((uint)playerSlot < VisibilitySlotCapacity)
+        {
+            _visibilityCache[playerSlot] = null;
+            _revealHoldRows[playerSlot] = null;
+            _stableDecisionRows[playerSlot] = null;
+            _targetTransmitEntitiesCache[playerSlot] = null;
+            SnapshotTransforms[playerSlot] = default;
+            SnapshotPawns[playerSlot] = null;
+            _liveSlotFlags[playerSlot] = false;
+            _snapshotStabilizeUntilTickBySlot[playerSlot] = 0;
 
-        _targetTransmitEntitiesCache.Remove(playerSlot);
+            for (int i = 0; i < VisibilitySlotCapacity; i++)
+            {
+                var viewerVisibility = _visibilityCache[i];
+                if (viewerVisibility != null && (uint)playerSlot < (uint)viewerVisibility.Known.Length)
+                {
+                    viewerVisibility.Known[playerSlot] = false;
+                    viewerVisibility.Decisions[playerSlot] = false;
+                    viewerVisibility.PawnHandles[playerSlot] = 0;
+                    viewerVisibility.EvalTicks[playerSlot] = 0;
+                }
+
+                var revealHold = _revealHoldRows[i];
+                if (revealHold != null && (uint)playerSlot < (uint)revealHold.Known.Length && revealHold.Known[playerSlot])
+                {
+                    revealHold.Known[playerSlot] = false;
+                    revealHold.HoldUntilTick[playerSlot] = 0;
+                    revealHold.ActiveCount--;
+                    if (revealHold.ActiveCount <= 0) _revealHoldRows[i] = null;
+                }
+
+                var stableDecision = _stableDecisionRows[i];
+                if (stableDecision != null && (uint)playerSlot < (uint)stableDecision.Known.Length && stableDecision.Known[playerSlot])
+                {
+                    stableDecision.Known[playerSlot] = false;
+                    stableDecision.Decisions[playerSlot] = false;
+                    stableDecision.Ticks[playerSlot] = 0;
+                    stableDecision.ActiveCount--;
+                    if (stableDecision.ActiveCount <= 0) _stableDecisionRows[i] = null;
+                }
+            }
+        }
+
         _losEvaluator?.InvalidateTargetSlot(playerSlot);
         _predictor?.InvalidateTargetSlot(playerSlot);
 
@@ -443,6 +489,11 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
             return;
         }
 
+        if (IsRoundStartGraceActive(Server.TickCount))
+        {
+            return;
+        }
+
         // Staggered rebuild: spread viewer evaluations across UpdateFrequencyTicks.
         // Each tick processes ceil(viewers / UpdateFrequencyTicks) viewers.
         // This prevents N^2 pair spikes that cause slow frames at high player counts.
@@ -509,27 +560,25 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
             return false;
         }
 
-        var pawn = player.PlayerPawn.Value;
-        if (pawn == null || !pawn.IsValid)
-        {
-            return false;
-        }
-
-        return pawn.LifeState == (byte)LifeState_t.LIFE_ALIVE;
+        return player.PawnIsAlive;
     }
 
     private void ClearVisibilityCache()
     {
-        _visibilityCache.Clear();
-        _revealHoldRows.Clear();
-        _stableDecisionRows.Clear();
-        _targetTransmitEntitiesCache.Clear();
+        Array.Clear(_visibilityCache, 0, _visibilityCache.Length);
+        Array.Clear(_revealHoldRows, 0, _revealHoldRows.Length);
+        Array.Clear(_stableDecisionRows, 0, _stableDecisionRows.Length);
+        Array.Clear(_targetTransmitEntitiesCache, 0, _targetTransmitEntitiesCache.Length);
+        Array.Clear(_snapshotStabilizeUntilTickBySlot, 0, _snapshotStabilizeUntilTickBySlot.Length);
+        _roundStartGraceUntilTick = 0;
         _losEvaluator?.ClearCaches();
         _predictor?.ClearCaches();
         InvalidateLivePlayersCache();
         _cachedLivePlayers.Clear();
-        _viewerSlotsToRemove.Clear();
         _eligibleTargetsWithEntities.Clear();
+        Array.Clear(_liveSlotFlags, 0, _liveSlotFlags.Length);
+        Array.Clear(SnapshotTransforms, 0, SnapshotTransforms.Length);
+        Array.Clear(SnapshotPawns, 0, SnapshotPawns.Length);
         _staggeredViewerOffset = 0;
         _hasLoggedGlobalsNotReady = false;
         _hasLoggedPlayerScanError = false;
@@ -539,10 +588,186 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
         ResetDebugWindowCounters();
     }
 
+    private static bool IsNearWorldOrigin(float x, float y, float z)
+    {
+        return MathF.Abs(x) <= SnapshotZeroOriginEpsilon &&
+               MathF.Abs(y) <= SnapshotZeroOriginEpsilon &&
+               MathF.Abs(z) <= SnapshotZeroOriginEpsilon;
+    }
+
+    private static bool TryGetLocalBoundsCandidate(
+        Vector minsWorldOrLocal,
+        Vector maxsWorldOrLocal,
+        float originX,
+        float originY,
+        float originZ,
+        float referenceMinX,
+        float referenceMinY,
+        float referenceMinZ,
+        float referenceMaxX,
+        float referenceMaxY,
+        float referenceMaxZ,
+        out float outMinX,
+        out float outMinY,
+        out float outMinZ,
+        out float outMaxX,
+        out float outMaxY,
+        out float outMaxZ)
+    {
+        outMinX = 0; outMinY = 0; outMinZ = 0; outMaxX = 0; outMaxY = 0; outMaxZ = 0;
+
+        if (minsWorldOrLocal == null || maxsWorldOrLocal == null)
+            return false;
+
+        float rawMinX = minsWorldOrLocal.X;
+        float rawMinY = minsWorldOrLocal.Y;
+        float rawMinZ = minsWorldOrLocal.Z;
+        float rawMaxX = maxsWorldOrLocal.X;
+        float rawMaxY = maxsWorldOrLocal.Y;
+        float rawMaxZ = maxsWorldOrLocal.Z;
+
+        bool hasRawLocal = TryScoreLocalBoundsCandidate(
+            rawMinX,
+            rawMinY,
+            rawMinZ,
+            rawMaxX,
+            rawMaxY,
+            rawMaxZ,
+            referenceMinX,
+            referenceMinY,
+            referenceMinZ,
+            referenceMaxX,
+            referenceMaxY,
+            referenceMaxZ,
+            out float rawLocalScore);
+
+        bool hasWorldShifted = TryScoreLocalBoundsCandidate(
+            rawMinX - originX,
+            rawMinY - originY,
+            rawMinZ - originZ,
+            rawMaxX - originX,
+            rawMaxY - originY,
+            rawMaxZ - originZ,
+            referenceMinX,
+            referenceMinY,
+            referenceMinZ,
+            referenceMaxX,
+            referenceMaxY,
+            referenceMaxZ,
+            out float worldShiftedScore);
+
+        if (!hasRawLocal && !hasWorldShifted)
+        {
+            return false;
+        }
+
+        if (hasRawLocal && (!hasWorldShifted || rawLocalScore <= worldShiftedScore))
+        {
+            outMinX = rawMinX;
+            outMinY = rawMinY;
+            outMinZ = rawMinZ;
+            outMaxX = rawMaxX;
+            outMaxY = rawMaxY;
+            outMaxZ = rawMaxZ;
+            return true;
+        }
+
+        outMinX = rawMinX - originX;
+        outMinY = rawMinY - originY;
+        outMinZ = rawMinZ - originZ;
+        outMaxX = rawMaxX - originX;
+        outMaxY = rawMaxY - originY;
+        outMaxZ = rawMaxZ - originZ;
+        return true;
+    }
+
+    private static bool TryScoreLocalBoundsCandidate(
+        float minX,
+        float minY,
+        float minZ,
+        float maxX,
+        float maxY,
+        float maxZ,
+        float referenceMinX,
+        float referenceMinY,
+        float referenceMinZ,
+        float referenceMaxX,
+        float referenceMaxY,
+        float referenceMaxZ,
+        out float score)
+    {
+        score = 0.0f;
+
+        float extentX = maxX - minX;
+        float extentY = maxY - minY;
+        float extentZ = maxZ - minZ;
+        if (extentX <= 0.0f || extentY <= 0.0f || extentZ <= 0.0f ||
+            extentX > MaxBoundsExtentUnits || extentY > MaxBoundsExtentUnits || extentZ > MaxBoundsExtentUnits)
+        {
+            return false;
+        }
+
+        if (MathF.Abs(minX) > MaxLocalBoundsCoordinateUnits || MathF.Abs(maxX) > MaxLocalBoundsCoordinateUnits ||
+            MathF.Abs(minY) > MaxLocalBoundsCoordinateUnits || MathF.Abs(maxY) > MaxLocalBoundsCoordinateUnits ||
+            MathF.Abs(minZ) > MaxLocalBoundsCoordinateUnits || MathF.Abs(maxZ) > MaxLocalBoundsCoordinateUnits)
+        {
+            return false;
+        }
+
+        float centerX = (minX + maxX) * 0.5f;
+        float centerY = (minY + maxY) * 0.5f;
+        float centerZ = (minZ + maxZ) * 0.5f;
+        if (MathF.Abs(centerX) > MaxLocalHorizontalCenterOffset ||
+            MathF.Abs(centerY) > MaxLocalHorizontalCenterOffset ||
+            centerZ < MinLocalVerticalCenter ||
+            centerZ > MaxLocalVerticalCenter)
+        {
+            return false;
+        }
+
+        float referenceExtentX = referenceMaxX - referenceMinX;
+        float referenceExtentY = referenceMaxY - referenceMinY;
+        float referenceExtentZ = referenceMaxZ - referenceMinZ;
+        float referenceCenterX = (referenceMinX + referenceMaxX) * 0.5f;
+        float referenceCenterY = (referenceMinY + referenceMaxY) * 0.5f;
+        float referenceCenterZ = (referenceMinZ + referenceMaxZ) * 0.5f;
+
+        float centerDelta =
+            MathF.Abs(centerX - referenceCenterX) +
+            MathF.Abs(centerY - referenceCenterY) +
+            MathF.Abs(centerZ - referenceCenterZ);
+        float extentDelta =
+            MathF.Abs(extentX - referenceExtentX) +
+            MathF.Abs(extentY - referenceExtentY) +
+            MathF.Abs(extentZ - referenceExtentZ);
+        float absoluteCoordinatePenalty =
+            MathF.Abs(minX) + MathF.Abs(minY) + MathF.Abs(minZ) +
+            MathF.Abs(maxX) + MathF.Abs(maxY) + MathF.Abs(maxZ);
+
+        score = (centerDelta * 4.0f) + extentDelta + (absoluteCoordinatePenalty * 0.01f);
+        return true;
+    }
+
+    private static int ConvertSecondsToTicks(float seconds)
+    {
+        if (seconds <= 0.0f)
+        {
+            return 0;
+        }
+
+        return Math.Max(1, (int)Math.Ceiling(seconds / Server.TickInterval));
+    }
+
+    private bool IsRoundStartGraceActive(int nowTick)
+    {
+        return nowTick < _roundStartGraceUntilTick;
+    }
+
     private void InvalidateLivePlayersCache()
     {
         _cachedLivePlayersTick = -1;
         _cachedLivePlayersValid = false;
+        Array.Clear(_liveSlotFlags, 0, _liveSlotFlags.Length);
         _entityHandleIndexCacheTick = -1;
         _entityHandleIndexCache.Clear();
         _eligibleTargetsWithEntitiesTick = -1;
@@ -586,26 +811,230 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
             playerCount = VisibilitySlotCapacity;
         }
 
+        // Live slots are rewritten below and dead slots are excluded by _liveSlotFlags/validPlayers.
+        // Avoid full-array clears every rebuild tick to keep the snapshot pass cheaper.
+
         // Snapshot per-target metadata once per rebuild pass to avoid O(N^2) property reads.
         for (int i = 0; i < playerCount; i++)
         {
             var target = validPlayers[i];
-            _snapshotTargetSlots[i] = target.Slot;
+            int slot = target.Slot;
+            _snapshotTargetSlots[i] = slot;
+            _snapshotTargetPawnHandles[i] = 0;
+            _snapshotTargetStationary[i] = false;
             _snapshotTargetIsBot[i] = target.IsBot;
             _snapshotTargetTeams[i] = target.TeamNum;
 
-            var targetPawnEntity = target.PlayerPawn.Value ?? target.Pawn.Value;
-            if (targetPawnEntity != null && targetPawnEntity.IsValid)
+            var targetCsPawn = target.PlayerPawn.Value;
+            var targetPawnEntity = (CBasePlayerPawn?)targetCsPawn ?? target.Pawn.Value;
+            if ((uint)slot < VisibilitySlotCapacity)
             {
-                _snapshotTargetPawnHandles[i] = targetPawnEntity.EntityHandle.Raw;
-                var tVel = targetPawnEntity.AbsVelocity;
-                _snapshotTargetStationary[i] = tVel == null ||
-                    (tVel.X * tVel.X + tVel.Y * tVel.Y + tVel.Z * tVel.Z) < StationarySpeedSqThreshold;
-            }
-            else
-            {
-                _snapshotTargetPawnHandles[i] = 0;
-                _snapshotTargetStationary[i] = false;
+                ref var t = ref SnapshotTransforms[slot];
+                t = default;
+
+                if (targetPawnEntity != null && targetPawnEntity.IsValid)
+                {
+                    var origin = targetPawnEntity.AbsOrigin;
+                    if (origin == null)
+                    {
+                        SnapshotPawns[slot] = null;
+                        continue;
+                    }
+
+                    t.OriginX = origin.X;
+                    t.OriginY = origin.Y;
+                    t.OriginZ = origin.Z;
+
+                    if (nowTick < _snapshotStabilizeUntilTickBySlot[slot] &&
+                        IsNearWorldOrigin(t.OriginX, t.OriginY, t.OriginZ))
+                    {
+                        SnapshotPawns[slot] = null;
+                        continue;
+                    }
+
+                    SnapshotPawns[slot] = targetPawnEntity;
+                    _snapshotTargetPawnHandles[i] = targetPawnEntity.EntityHandle.Raw;
+
+                    var tVel = targetPawnEntity.AbsVelocity;
+                    if (tVel != null)
+                    {
+                        t.VelocityX = tVel.X;
+                        t.VelocityY = tVel.Y;
+                        t.VelocityZ = tVel.Z;
+                    }
+                    else
+                    {
+                        t.VelocityX = 0.0f;
+                        t.VelocityY = 0.0f;
+                        t.VelocityZ = 0.0f;
+                    }
+
+                    _snapshotTargetStationary[i] =
+                        (t.VelocityX * t.VelocityX + t.VelocityY * t.VelocityY + t.VelocityZ * t.VelocityZ) < StationarySpeedSqThreshold;
+
+                    var collision = targetPawnEntity.Collision;
+                    if (collision?.Mins == null || collision.Maxs == null)
+                    {
+                        continue;
+                    }
+
+                    var mins = collision.Mins;
+                    var maxs = collision.Maxs;
+                    float minsX = mins.X;
+                    float minsY = mins.Y;
+                    float minsZ = mins.Z;
+                    float maxsX = maxs.X;
+                    float maxsY = maxs.Y;
+                    float maxsZ = maxs.Z;
+
+                    float mergedMinX = minsX;
+                    float mergedMinY = minsY;
+                    float mergedMinZ = minsZ;
+                    float mergedMaxX = maxsX;
+                    float mergedMaxY = maxsY;
+                    float mergedMaxZ = maxsZ;
+                    float referenceMinX = minsX;
+                    float referenceMinY = minsY;
+                    float referenceMinZ = minsZ;
+                    float referenceMaxX = maxsX;
+                    float referenceMaxY = maxsY;
+                    float referenceMaxZ = maxsZ;
+
+                    var surroundingMins = collision.SurroundingMins;
+                    var surroundingMaxs = collision.SurroundingMaxs;
+                    if (TryGetLocalBoundsCandidate(
+                            surroundingMins,
+                            surroundingMaxs,
+                            t.OriginX,
+                            t.OriginY,
+                            t.OriginZ,
+                            referenceMinX,
+                            referenceMinY,
+                            referenceMinZ,
+                            referenceMaxX,
+                            referenceMaxY,
+                            referenceMaxZ,
+                            out float surroundingLocalMinX,
+                            out float surroundingLocalMinY,
+                            out float surroundingLocalMinZ,
+                            out float surroundingLocalMaxX,
+                            out float surroundingLocalMaxY,
+                            out float surroundingLocalMaxZ))
+                    {
+                        mergedMinX = MathF.Min(mergedMinX, surroundingLocalMinX);
+                        mergedMinY = MathF.Min(mergedMinY, surroundingLocalMinY);
+                        mergedMinZ = MathF.Min(mergedMinZ, surroundingLocalMinZ);
+                        mergedMaxX = MathF.Max(mergedMaxX, surroundingLocalMaxX);
+                        mergedMaxY = MathF.Max(mergedMaxY, surroundingLocalMaxY);
+                        mergedMaxZ = MathF.Max(mergedMaxZ, surroundingLocalMaxZ);
+                    }
+
+                    var specifiedSurroundingMins = collision.SpecifiedSurroundingMins;
+                    var specifiedSurroundingMaxs = collision.SpecifiedSurroundingMaxs;
+                    if (TryGetLocalBoundsCandidate(
+                            specifiedSurroundingMins,
+                            specifiedSurroundingMaxs,
+                            t.OriginX,
+                            t.OriginY,
+                            t.OriginZ,
+                            referenceMinX,
+                            referenceMinY,
+                            referenceMinZ,
+                            referenceMaxX,
+                            referenceMaxY,
+                            referenceMaxZ,
+                            out float specifiedLocalMinX,
+                            out float specifiedLocalMinY,
+                            out float specifiedLocalMinZ,
+                            out float specifiedLocalMaxX,
+                            out float specifiedLocalMaxY,
+                            out float specifiedLocalMaxZ))
+                    {
+                        mergedMinX = MathF.Min(mergedMinX, specifiedLocalMinX);
+                        mergedMinY = MathF.Min(mergedMinY, specifiedLocalMinY);
+                        mergedMinZ = MathF.Min(mergedMinZ, specifiedLocalMinZ);
+                        mergedMaxX = MathF.Max(mergedMaxX, specifiedLocalMaxX);
+                        mergedMaxY = MathF.Max(mergedMaxY, specifiedLocalMaxY);
+                        mergedMaxZ = MathF.Max(mergedMaxZ, specifiedLocalMaxZ);
+                    }
+
+                    if (targetPawnEntity is CBaseModelEntity targetModelEntity)
+                    {
+                        float hitboxExpandRadius = targetModelEntity.CHitboxComponent.BoundsExpandRadius;
+                        if (hitboxExpandRadius > 0.0f && hitboxExpandRadius <= 32.0f)
+                        {
+                            mergedMinX -= hitboxExpandRadius;
+                            mergedMinY -= hitboxExpandRadius;
+                            mergedMinZ -= hitboxExpandRadius;
+                            mergedMaxX += hitboxExpandRadius;
+                            mergedMaxY += hitboxExpandRadius;
+                            mergedMaxZ += hitboxExpandRadius;
+                        }
+                    }
+
+                    minsX = mergedMinX;
+                    minsY = mergedMinY;
+                    minsZ = mergedMinZ;
+                    maxsX = mergedMaxX;
+                    maxsY = mergedMaxY;
+                    maxsZ = mergedMaxZ;
+
+                    t.MinsX = minsX;
+                    t.MinsY = minsY;
+                    t.MinsZ = minsZ;
+                    t.MaxsX = maxsX;
+                    t.MaxsY = maxsY;
+                    t.MaxsZ = maxsZ;
+                    t.CenterX = (minsX + maxsX) * 0.5f;
+                    t.CenterY = (minsY + maxsY) * 0.5f;
+                    t.CenterZ = (minsZ + maxsZ) * 0.5f;
+
+                    var viewOffset = targetPawnEntity.ViewOffset;
+                    if (viewOffset != null)
+                    {
+                        t.ViewOffsetX = viewOffset.X;
+                        t.ViewOffsetY = viewOffset.Y;
+                        t.ViewOffsetZ = viewOffset.Z;
+                    }
+                    else
+                    {
+                        t.ViewOffsetX = 0;
+                        t.ViewOffsetY = 0;
+                        t.ViewOffsetZ = 64.0f;
+                    }
+
+                    t.EyeAnglesPitch = 0.0f;
+                    t.EyeAnglesYaw = 0.0f;
+                    t.FovNormalX = 1.0f;
+                    t.FovNormalY = 0.0f;
+                    t.FovNormalZ = 0.0f;
+
+                    var angles = targetCsPawn?.EyeAngles;
+                    if (angles != null)
+                    {
+                        t.EyeAnglesPitch = angles.X;
+                        t.EyeAnglesYaw = angles.Y;
+
+                        float pitchRad = angles.X * MathF.PI / 180.0f;
+                        float yawRad = angles.Y * MathF.PI / 180.0f;
+                        (float sinPitch, float cosPitch) = MathF.SinCos(pitchRad);
+                        (float sinYaw, float cosYaw) = MathF.SinCos(yawRad);
+
+                        t.FovNormalX = cosPitch * cosYaw;
+                        t.FovNormalY = cosPitch * sinYaw;
+                        t.FovNormalZ = -sinPitch;
+                    }
+
+                    // Fallback eye position: Origin + ViewOffset
+                    t.EyeX = t.OriginX + t.ViewOffsetX;
+                    t.EyeY = t.OriginY + t.ViewOffsetY;
+                    t.EyeZ = t.OriginZ + t.ViewOffsetZ;
+                    t.IsValid = true;
+                }
+                else
+                {
+                    SnapshotPawns[slot] = null;
+                }
             }
         }
 
@@ -641,7 +1070,8 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
         for (int viewerIndex = 0; viewerIndex < playerCount && processedEligible < viewersPerTick; viewerIndex++)
         {
             var viewer = validPlayers[viewerIndex];
-            if (viewer.IsBot && !config.Visibility.BotsDoLOS)
+            bool viewerIsBot = viewer.IsBot;
+            if (viewerIsBot && !config.Visibility.BotsDoLOS)
             {
                 continue;
             }
@@ -656,23 +1086,32 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
             processedEligible++;
 
             int viewerSlot = viewer.Slot;
-            if (!_visibilityCache.TryGetValue(viewerSlot, out var visibilityByTargetSlot))
+            ViewerVisibilityRow? visibilityByTargetSlot = null;
+            if ((uint)viewerSlot < VisibilitySlotCapacity)
             {
-                visibilityByTargetSlot = new ViewerVisibilityRow();
-                _visibilityCache[viewerSlot] = visibilityByTargetSlot;
+                visibilityByTargetSlot = _visibilityCache[viewerSlot];
+                if (visibilityByTargetSlot == null)
+                {
+                    visibilityByTargetSlot = new ViewerVisibilityRow();
+                    _visibilityCache[viewerSlot] = visibilityByTargetSlot;
+                }
+            }
+            else
+            {
+                continue; // invalid slot
             }
 
             // Stationary-Visible optimization: if the viewer isn't moving, we can reuse
             // cached Visible decisions for targets that also aren't moving. This skips
             // expensive LOS evaluation entirely for stationary pairs (buy time, holds).
             // Safe: keeping Visible is the optimistic direction (never hides visible players).
-            var viewerPawn = viewer.PlayerPawn.Value;
-            bool viewerStationary = false;
-            if (viewerPawn != null)
-            {
-                var vVel = viewerPawn.AbsVelocity;
-                viewerStationary = vVel == null || (vVel.X * vVel.X + vVel.Y * vVel.Y + vVel.Z * vVel.Z) < StationarySpeedSqThreshold;
-            }
+            ref var viewerSnapshot = ref SnapshotTransforms[viewerSlot];
+            bool viewerStationary =
+                viewerSnapshot.IsValid &&
+                (viewerSnapshot.VelocityX * viewerSnapshot.VelocityX +
+                 viewerSnapshot.VelocityY * viewerSnapshot.VelocityY +
+                 viewerSnapshot.VelocityZ * viewerSnapshot.VelocityZ) < StationarySpeedSqThreshold;
+            int viewerTeam = viewer.TeamNum;
 
             for (int targetIndex = 0; targetIndex < playerCount; targetIndex++)
             {
@@ -681,7 +1120,6 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
                     continue;
                 }
 
-                var target = validPlayers[targetIndex];
                 int targetSlot = _snapshotTargetSlots[targetIndex];
                 if ((uint)targetSlot < (uint)visibilityByTargetSlot.Decisions.Length)
                 {
@@ -693,14 +1131,16 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
                         visibilityByTargetSlot.Decisions[targetSlot] = true;
                         visibilityByTargetSlot.Known[targetSlot] = true;
                         visibilityByTargetSlot.PawnHandles[targetSlot] = currentPawnHandle;
+                        visibilityByTargetSlot.EvalTicks[targetSlot] = nowTick;
                         continue;
                     }
 
-                    if (!config.Visibility.IncludeTeammates && _snapshotTargetTeams[targetIndex] == viewer.TeamNum)
+                    if (!config.Visibility.IncludeTeammates && _snapshotTargetTeams[targetIndex] == viewerTeam)
                     {
                         visibilityByTargetSlot.Decisions[targetSlot] = true;
                         visibilityByTargetSlot.Known[targetSlot] = true;
                         visibilityByTargetSlot.PawnHandles[targetSlot] = currentPawnHandle;
+                        visibilityByTargetSlot.EvalTicks[targetSlot] = nowTick;
                         continue;
                     }
 
@@ -718,10 +1158,17 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
                         }
                     }
 
-                    VisibilityEval visibilityEval = EvaluateVisibilitySafe(viewer, target, config, nowTick, "cache rebuild");
+                    VisibilityEval visibilityEval = EvaluateVisibilitySafe(
+                        viewerSlot,
+                        targetSlot,
+                        viewerIsBot,
+                        config,
+                        nowTick,
+                        "cache rebuild");
                     visibilityByTargetSlot.Decisions[targetSlot] = ResolveTransmitWithMemory(viewerSlot, targetSlot, visibilityEval, nowTick);
                     visibilityByTargetSlot.Known[targetSlot] = true;
                     visibilityByTargetSlot.PawnHandles[targetSlot] = currentPawnHandle;
+                    visibilityByTargetSlot.EvalTicks[targetSlot] = nowTick;
                 }
             }
         }
@@ -754,7 +1201,13 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
     }
 
 
-    private VisibilityEval EvaluateVisibilitySafe(CCSPlayerController viewer, CCSPlayerController target, S2AWHConfig config, int nowTick, string phase)
+    private VisibilityEval EvaluateVisibilitySafe(
+        int viewerSlot,
+        int targetSlot,
+        bool viewerIsBot,
+        S2AWHConfig config,
+        int nowTick,
+        string phase)
     {
         if (_transmitFilter == null)
         {
@@ -763,7 +1216,14 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
 
         try
         {
-            return _transmitFilter.EvaluateVisibility(viewer, target, nowTick, config);
+            return _transmitFilter.EvaluateVisibility(
+                viewerSlot,
+                targetSlot,
+                viewerIsBot,
+                nowTick,
+                config,
+                SnapshotTransforms,
+                SnapshotPawns);
         }
         catch (Exception ex)
         {
@@ -781,7 +1241,7 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
                 );
                 DebugLog(
                     "Visibility error detail.",
-                    $"Phase: {phase}. Error: {ex.Message}",
+                    $"Phase: {phase}. Pair: {viewerSlot}->{targetSlot}. Error: {ex.Message}",
                     "This message only shows once."
                 );
                 _hasLoggedFilterEvaluationError = true;
@@ -805,11 +1265,16 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
 
         try
         {
-            foreach (var player in Utilities.GetPlayers())
+            Array.Clear(_liveSlotFlags, 0, _liveSlotFlags.Length);
+
+            int maxPlayers = Math.Clamp(Server.MaxPlayers, 0, VisibilitySlotCapacity - 1);
+            for (int slot = 0; slot < maxPlayers; slot++)
             {
+                var player = Utilities.GetPlayerFromSlot(slot);
                 if (IsLivePlayer(player))
                 {
-                    _cachedLivePlayers.Add(player);
+                    _cachedLivePlayers.Add(player!);
+                    _liveSlotFlags[slot] = true;
                 }
             }
 
@@ -833,6 +1298,7 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
 
             _cachedLivePlayers.Clear();
             _cachedLivePlayersValid = false;
+            Array.Clear(_liveSlotFlags, 0, _liveSlotFlags.Length);
             livePlayers = _cachedLivePlayers;
             return false;
         }
@@ -855,6 +1321,7 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
 
             _cachedLivePlayers.Clear();
             _cachedLivePlayersValid = false;
+            Array.Clear(_liveSlotFlags, 0, _liveSlotFlags.Length);
             livePlayers = _cachedLivePlayers;
             return false;
         }
