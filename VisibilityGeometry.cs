@@ -31,7 +31,7 @@ internal static class VisibilityGeometry
     private static readonly Color LosDebugAabbColor = Color.FromArgb(255, 255, 170, 0);
     private static readonly Color PredictorCurrentDebugAabbColor = Color.FromArgb(255, 0, 225, 120);
     private static readonly Color PredictorFutureDebugAabbColor = Color.FromArgb(255, 225, 80, 255);
-    private const float DebugBeamWidth = 1.5f;
+    private const float DebugBeamWidth = 0.1f;
     private const float DebugBeamLifetimeSeconds = 0.08f;
     private const float DebugAabbLineWidth = 1.2f;
     private const float DebugAabbLifetimeSeconds = 0.08f;

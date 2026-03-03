@@ -13,6 +13,7 @@ public partial class S2AWH
         if (!config.Core.Enabled || _transmitFilter == null) return;
 
         int nowTick = Server.TickCount;
+        BeginViewerRayCountTick(nowTick);
         if (IsRoundStartGraceActive(nowTick))
         {
             return;
@@ -179,6 +180,8 @@ public partial class S2AWH
                 }
             }
         }
+
+        UpdateViewerRayCountOverlays();
     }
 
     private bool RemoveTargetPlayerAndWeapons(CCheckTransmitInfo info, TargetTransmitEntities targetEntities)

@@ -7,7 +7,7 @@ internal sealed class TransmitFilter
     private const int SlotCount = 65;
     // Very close targets should never be culled by FOV; 75 units is roughly two player widths.
     private const float NearbyAlwaysVisibleDistanceSq = 75.0f * 75.0f;
-    private const float ViewerGroundProbeHeight = 8.0f;
+    private const float ViewerGroundProbeHeight = 16.0f;
     private readonly LosEvaluator _losEvaluator;
     private readonly PreloadPredictor _predictor;
     private int _cachedFovViewerSlot = -1;

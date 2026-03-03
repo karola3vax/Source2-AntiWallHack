@@ -12,6 +12,12 @@
 - Added a commented `S2AWH.example.json` written in plain language for easier setup.
 - Moved plugin logs onto CounterStrikeSharp's logger pipeline instead of raw console writes.
 - Added a per-tick debug beam budget so trace/AABB debug drawing cannot spam unlimited `env_beam` entities.
+- Added per-viewer debug ray count text above player heads to make live trace cost visible in-game.
+- Added `Diagnostics.DrawAmountOfRayNumber` so the overhead number above each viewer can be toggled independently from trace beam drawing.
+- Reused same-tick visibility decisions during rebuild so transmit fallback work is not recomputed again in the same tick.
+- Reworked micro-hull around slit-band and extremity-biased sampling so thin visible body parts are found earlier.
+- Removed redundant LOS/preload face-grid probing after micro-hull took over that thin-slit role, cutting practical ray counts in real 1v1 tests.
+- Reduced default LOS/preload probe density and changed surface-probe ordering to center-first sampling for better CPU efficiency without wasting the single-row fallback on corner-biased points.
 - Added `Aabb.PredictorScaleStartSpeed` and `Aabb.PredictorScaleFullSpeed` so predictor AABB growth is controlled separately from preload look-ahead.
 - Raised the default adaptive-profile speed band to stop the purple predictor AABB from hitting maximum size during normal walking.
 - Capped predictor lead by target speed and update interval so the future AABB does not jump unrealistically far ahead.

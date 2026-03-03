@@ -70,10 +70,15 @@ public partial class S2AWH
         }
 
         int losSurfaceRows = Math.Clamp(config.Aabb.LosSurfaceProbeRows, 1, 3);
-        int baseLosSurfaceRaysPerPair = losSurfaceRows * 4;
+        int baseLosSurfaceRaysPerPair = losSurfaceRows * 6;
         int estimatedBaseLosRaysPerSnapshot = livePlayerCount > 1
             ? livePlayerCount * (livePlayerCount - 1) * baseLosSurfaceRaysPerPair
             : 0;
+        int currentViewerRayCountTotal = 0;
+        for (int i = 0; i < VisibilitySlotCapacity; i++)
+        {
+            currentViewerRayCountTotal += _viewerRayCountsWorking[i];
+        }
 
         float snapshotsPerSecond = 0.0f;
         if (config.Core.UpdateFrequencyTicks > 0 && Server.TickInterval > 0.0f)
@@ -98,6 +103,7 @@ public partial class S2AWH
             $"Tracking: {activeViewers} viewers, {visibilityPairCount} visibility decisions.",
             $"Anti pop-in: {revealHoldPairCount} reveal holds, {stableDecisionPairCount} saved decisions.",
             $"Rays: base LOS surface probes {baseLosSurfaceRaysPerPair} per pair, ~{estimatedBaseLosRaysPerSnapshot} per scan (plus aim/micro/preload).",
+            $"Current viewer ray count this tick: {currentViewerRayCountTotal}.",
             $"Hidden {_transmitHiddenEntitiesInWindow} entities from wallhacks this window.",
             $"Safety checks: {_transmitFallbackChecksInWindow} extra, {_transmitRemovalNoEffectInWindow} redundant.",
             $"Reveal hold: {_holdRefreshInWindow} refreshed, {_holdHitKeepAliveInWindow} kept alive, {_holdExpiredInWindow} expired.",

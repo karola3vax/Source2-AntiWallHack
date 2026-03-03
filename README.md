@@ -40,9 +40,9 @@ It runs on the server and only sends enemy data when that enemy should really be
 S2AWH uses a 4-stage visibility check:
 
 ```
-1. AABB Surface Probes  - Face probes with near-hit radius tolerance for thin visible slivers
-2. Aim-Ray Proximity    - X pattern from crosshair, reveal targets near hit points
-3. Micro-Hull Fallback  - Small hull traces for edge-case thin angles
+1. Surface LOS          - Closest-surface and low-origin probes for normal visibility
+2. Micro-Hull Fallback  - Small hull traces tuned for thin slits, limbs, and edge peeks
+3. Surface/Aim Fallback - Additional surface probes plus aim-ray proximity
 4. Predictive Preload   - Point + surface look-ahead to reduce pop-in while peeking
 ```
 
@@ -127,8 +127,8 @@ Use these as starting profiles, then benchmark on your own hardware.
 | Profile | `UpdateFrequencyTicks` | `RevealHoldSeconds` | `Preload.SurfaceProbeRows` | Best For |
 | :--- | :---: | :---: | :---: | :--- |
 | **Competitive** | `2` | `0.30` | `3` | 5v5 / scrim |
-| **Casual** | `4` | `0.40` | `2` | 10v10 community |
-| **Large** | `8` | `0.50` | `2` | 20-24 players |
+| **Casual** | `4` | `0.40` | `1` | 10v10 community |
+| **Large** | `8` | `0.50` | `1` | 20-24 players |
 | **High Population** | `16` | `1.0` | `1` | 30+ players |
 
 > [!TIP]
@@ -166,13 +166,13 @@ Use these as starting profiles, then benchmark on your own hardware.
 | :--- | :---: | :--- |
 | `Preload.EnablePreload` | `true` | Master switch for the whole preload system: predictor points, surface probes, and viewer peek assist |
 | `Preload.SurfaceProbeHitRadius` | `64.0` | Accepts near-hit preload probes within this radius (`0..200`) |
-| `Preload.SurfaceProbeRows` | `2` | Probe rows per predictor face for preload surface probing (`1..3`, total cached probes = rows x 6) |
-| `Preload.PredictorDistance` | `64.0` | Maximum forward look-ahead distance for prediction. Real lead is also capped by target speed and update interval |
+| `Preload.SurfaceProbeRows` | `1` | Probe rows per predictor face for preload surface probing (`1..3`, total cached probes = rows x 6, default starts from center-first sampling) |
+| `Preload.PredictorDistance` | `96.0` | Maximum forward look-ahead distance for prediction. Real lead is also capped by target speed and update interval |
 | `Preload.PredictorMinSpeed` | `1.0` | Minimum speed needed before prediction starts |
 | `Preload.PredictorFullSpeed` | `100.0` | Speed where preload look-ahead reaches full configured distance |
 | `Preload.EnableViewerPeekAssist` | `true` | Adds viewer movement prediction to reduce pop-in on peeks |
 | `Preload.ViewerPredictorDistanceFactor` | `0.85` | Strength multiplier for viewer peek prediction |
-| `Preload.RevealHoldSeconds` | `0.30` | Keep a target visible briefly after LOS is lost |
+| `Preload.RevealHoldSeconds` | `0.10` | Keep a target visible briefly after LOS is lost |
 
 > [!NOTE]
 > Older configs that still contain `Preload.EnableProbePreload` or `Preload.EnableSurfacePreload` are accepted as legacy aliases, but new auto-generated configs use `Preload.EnablePreload`.
@@ -196,7 +196,7 @@ Use these as starting profiles, then benchmark on your own hardware.
 | `Aabb.DirectionalForwardShiftMaxUnits` | `34.0` | Maximum forward shift used by predictor AABB |
 | `Aabb.DirectionalPredictorShiftFactor` | `0.65` | Global multiplier for directional predictor shifting |
 | `Aabb.LosSurfaceProbeHitRadius` | `64.0` | If a surface probe is blocked but ends within this radius of the probe point, count as visible |
-| `Aabb.LosSurfaceProbeRows` | `2` | Probe rows per LOS face for surface probing (`1..3`, total cached probes = rows x 6) |
+| `Aabb.LosSurfaceProbeRows` | `1` | Probe rows per LOS face for surface probing (`1..3`, total cached probes = rows x 6, default starts from center-first sampling) |
 | `Aabb.MicroHullMaxDistance` | `2000.0` | Skip LOS micro-hull fallback when target is farther than this distance (`0` disables) |
 
 ### Visibility Logic
@@ -214,6 +214,7 @@ Use these as starting profiles, then benchmark on your own hardware.
 | `Diagnostics.ShowDebugInfo` | `true` | Enables periodic debug summary logs |
 | `Diagnostics.DrawDebugTraceBeams` | `false` | Draw trace beams in-game (debug only, expensive if overused; S2AWH also caps debug beam spawns per tick) |
 | `Diagnostics.DrawDebugAabbBoxes` | `false` | Draw LOS/predictor AABB wireframe boxes in-game (debug only, very expensive; uses the same per-tick debug beam cap) |
+| `Diagnostics.DrawAmountOfRayNumber` | `false` | Draw the current total ray count above each viewer's head |
 | `Diagnostics.DrawDebugTraceBeamsForHumans` | `true` | Beam drawing toggle for human viewers |
 | `Diagnostics.DrawDebugTraceBeamsForBots` | `true` | Beam drawing toggle for bot viewers |
 

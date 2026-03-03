@@ -13,16 +13,16 @@ internal static class AabbGeometry
 {
     internal static readonly (float AxisFactor, float ZFactor)[] SurfaceProbePattern =
     {
+        (0.0f, 0.0f),
         (-1.0f, 1.0f),
-        (1.0f, -1.0f),
-        (0.0f, 0.0f)
+        (1.0f, -1.0f)
     };
 
     internal static readonly (float XFactor, float YFactor)[] CapProbePattern =
     {
+        (0.0f, 0.0f),
         (-1.0f, 1.0f),
-        (1.0f, -1.0f),
-        (0.0f, 0.0f)
+        (1.0f, -1.0f)
     };
 
     internal static void GetClosestPointOnSurface(

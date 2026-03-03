@@ -5,6 +5,7 @@ using CounterStrikeSharp.API.Core.Capabilities;
 using CounterStrikeSharp.API.Modules.Timers;
 using CounterStrikeSharp.API.Modules.Utils;
 using RayTraceAPI;
+using System.Drawing;
 
 namespace S2AWH;
 
@@ -24,6 +25,12 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
     private const float MinLocalVerticalCenter = -96.0f;
     private const float MaxLocalVerticalCenter = 192.0f;
     private const float MaxBoundsContainmentShrinkUnits = 8.0f;
+    private const float ViewerRayCountTextHeight = 18.0f;
+    private const float ViewerRayCountTextWorldUnitsPerPx = 0.18f;
+    private const float ViewerRayCountTextFontSize = 22.0f;
+    private static readonly QAngle ViewerRayCountTextAngles = new(0.0f, 0.0f, 0.0f);
+    private static readonly Vector ViewerRayCountTextVelocity = new(0.0f, 0.0f, 0.0f);
+    private static readonly Color ViewerRayCountTextColor = Color.FromArgb(255, 255, 240, 120);
 
     /// <summary>
     /// Holds the set of entity handles (pawn + weapons) belonging to a single target player,
@@ -174,6 +181,12 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
     private readonly bool[] _snapshotTargetIsBot = new bool[VisibilitySlotCapacity];
     private readonly int[] _snapshotTargetTeams = new int[VisibilitySlotCapacity];
     private readonly int[] _snapshotStabilizeUntilTickBySlot = new int[VisibilitySlotCapacity];
+    private readonly int[] _viewerRayCountsWorking = new int[VisibilitySlotCapacity];
+    private readonly int[] _viewerRayCountsDisplay = new int[VisibilitySlotCapacity];
+    private readonly int[] _viewerRayCountLastRendered = new int[VisibilitySlotCapacity];
+    private readonly CPointWorldText?[] _viewerRayCountTextBySlot = new CPointWorldText?[VisibilitySlotCapacity];
+    private int _viewerRayCounterTick = -1;
+    private bool _viewerRayCountsDisplayDirty;
     internal readonly PlayerTransformSnapshot[] SnapshotTransforms = new PlayerTransformSnapshot[VisibilitySlotCapacity];
     internal readonly CBasePlayerPawn?[] SnapshotPawns = new CBasePlayerPawn?[VisibilitySlotCapacity];
 
@@ -332,6 +345,10 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
             SnapshotPawns[playerSlot] = null;
             _liveSlotFlags[playerSlot] = false;
             _snapshotStabilizeUntilTickBySlot[playerSlot] = 0;
+            _viewerRayCountsWorking[playerSlot] = 0;
+            _viewerRayCountsDisplay[playerSlot] = 0;
+            _viewerRayCountLastRendered[playerSlot] = int.MinValue;
+            RemoveViewerRayCountOverlay(playerSlot);
 
             for (int i = 0; i < VisibilitySlotCapacity; i++)
             {
@@ -409,8 +426,8 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
             return false;
         }
 
-        _losEvaluator = new LosEvaluator(rayTrace);
-        _predictor = new PreloadPredictor(rayTrace);
+        _losEvaluator = new LosEvaluator(rayTrace, RecordViewerRayTraceAttempt);
+        _predictor = new PreloadPredictor(rayTrace, RecordViewerRayTraceAttempt);
         _transmitFilter = new TransmitFilter(_losEvaluator, _predictor);
 
         _ticksSinceInitRetry = 0;
@@ -484,14 +501,18 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
             return;
         }
 
+        BeginViewerRayCountTick(Server.TickCount);
+
         var config = S2AWHState.Current;
         if (!config.Core.Enabled)
         {
+            ClearViewerRayCountOverlays();
             return;
         }
 
         if (IsRoundStartGraceActive(Server.TickCount))
         {
+            ClearViewerRayCountOverlays();
             return;
         }
 
@@ -499,6 +520,7 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
         // Each tick processes ceil(viewers / UpdateFrequencyTicks) viewers.
         // This prevents N^2 pair spikes that cause slow frames at high player counts.
         RebuildVisibilityCacheSnapshot();
+        UpdateViewerRayCountOverlays();
 
         if (!_collectDebugCounters)
         {
@@ -578,8 +600,14 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
         _cachedLivePlayers.Clear();
         _eligibleTargetsWithEntities.Clear();
         Array.Clear(_liveSlotFlags, 0, _liveSlotFlags.Length);
+        Array.Clear(_viewerRayCountsWorking, 0, _viewerRayCountsWorking.Length);
+        Array.Clear(_viewerRayCountsDisplay, 0, _viewerRayCountsDisplay.Length);
+        Array.Fill(_viewerRayCountLastRendered, int.MinValue);
         Array.Clear(SnapshotTransforms, 0, SnapshotTransforms.Length);
         Array.Clear(SnapshotPawns, 0, SnapshotPawns.Length);
+        ClearViewerRayCountOverlays();
+        _viewerRayCounterTick = -1;
+        _viewerRayCountsDisplayDirty = false;
         _staggeredViewerOffset = 0;
         _hasLoggedGlobalsNotReady = false;
         _hasLoggedPlayerScanError = false;
@@ -594,6 +622,160 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
         return MathF.Abs(x) <= SnapshotZeroOriginEpsilon &&
                MathF.Abs(y) <= SnapshotZeroOriginEpsilon &&
                MathF.Abs(z) <= SnapshotZeroOriginEpsilon;
+    }
+
+    internal void RecordViewerRayTraceAttempt(int viewerSlot)
+    {
+        if ((uint)viewerSlot >= VisibilitySlotCapacity)
+        {
+            return;
+        }
+
+        BeginViewerRayCountTick(Server.TickCount);
+        _viewerRayCountsWorking[viewerSlot]++;
+    }
+
+    private void BeginViewerRayCountTick(int nowTick)
+    {
+        if (_viewerRayCounterTick == nowTick)
+        {
+            return;
+        }
+
+        if (_viewerRayCounterTick >= 0)
+        {
+            Array.Copy(_viewerRayCountsWorking, _viewerRayCountsDisplay, VisibilitySlotCapacity);
+            Array.Clear(_viewerRayCountsWorking, 0, _viewerRayCountsWorking.Length);
+            _viewerRayCountsDisplayDirty = true;
+        }
+
+        _viewerRayCounterTick = nowTick;
+    }
+
+    private void UpdateViewerRayCountOverlays()
+    {
+        var diagnostics = S2AWHState.Current.Diagnostics;
+        if (!diagnostics.DrawAmountOfRayNumber)
+        {
+            ClearViewerRayCountOverlays();
+            return;
+        }
+
+        bool forceRefresh = _viewerRayCountsDisplayDirty;
+        _viewerRayCountsDisplayDirty = false;
+
+        for (int slot = 0; slot < VisibilitySlotCapacity; slot++)
+        {
+            var pawn = SnapshotPawns[slot];
+            if (pawn == null || !pawn.IsValid || !SnapshotTransforms[slot].IsValid)
+            {
+                RemoveViewerRayCountOverlay(slot);
+                continue;
+            }
+
+            CCSPlayerController? player = Utilities.GetPlayerFromSlot(slot);
+            if (!IsLivePlayer(player))
+            {
+                RemoveViewerRayCountOverlay(slot);
+                continue;
+            }
+
+            bool allowViewerType = player!.IsBot
+                ? diagnostics.DrawDebugTraceBeamsForBots
+                : diagnostics.DrawDebugTraceBeamsForHumans;
+            if (!allowViewerType)
+            {
+                RemoveViewerRayCountOverlay(slot);
+                continue;
+            }
+
+            int rayCount = _viewerRayCounterTick == Server.TickCount
+                ? _viewerRayCountsWorking[slot]
+                : _viewerRayCountsDisplay[slot];
+            UpdateViewerRayCountOverlay(slot, rayCount, forceRefresh);
+        }
+    }
+
+    private void UpdateViewerRayCountOverlay(int slot, int rayCount, bool forceMessageRefresh)
+    {
+        ref var snapshot = ref SnapshotTransforms[slot];
+        string countText = rayCount.ToString();
+        CPointWorldText? textEntity = _viewerRayCountTextBySlot[slot];
+        bool shouldRecreate = forceMessageRefresh || _viewerRayCountLastRendered[slot] != rayCount;
+        if (shouldRecreate && textEntity != null && textEntity.IsValid)
+        {
+            textEntity.Remove();
+            textEntity = null;
+            _viewerRayCountTextBySlot[slot] = null;
+        }
+
+        if (textEntity == null || !textEntity.IsValid)
+        {
+            textEntity = Utilities.CreateEntityByName<CPointWorldText>("point_worldtext");
+            if (textEntity == null || !textEntity.IsValid)
+            {
+                _viewerRayCountTextBySlot[slot] = null;
+                return;
+            }
+
+            textEntity.Enabled = true;
+            textEntity.Fullbright = true;
+            textEntity.DrawBackground = false;
+            textEntity.WorldUnitsPerPx = ViewerRayCountTextWorldUnitsPerPx;
+            textEntity.FontSize = ViewerRayCountTextFontSize;
+            textEntity.DepthOffset = 0.0f;
+            textEntity.Color = ViewerRayCountTextColor;
+            textEntity.JustifyHorizontal = PointWorldTextJustifyHorizontal_t.POINT_WORLD_TEXT_JUSTIFY_HORIZONTAL_CENTER;
+            textEntity.JustifyVertical = PointWorldTextJustifyVertical_t.POINT_WORLD_TEXT_JUSTIFY_VERTICAL_BOTTOM;
+            textEntity.ReorientMode = PointWorldTextReorientMode_t.POINT_WORLD_TEXT_REORIENT_AROUND_UP;
+            textEntity.FontName = "Arial";
+            textEntity.MessageText = countText;
+            textEntity.Teleport(
+                new Vector(snapshot.EyeX, snapshot.EyeY, snapshot.EyeZ + ViewerRayCountTextHeight),
+                ViewerRayCountTextAngles,
+                ViewerRayCountTextVelocity);
+            textEntity.DispatchSpawn();
+            _viewerRayCountLastRendered[slot] = rayCount;
+            _viewerRayCountTextBySlot[slot] = textEntity;
+            return;
+        }
+
+        textEntity.Teleport(
+            new Vector(snapshot.EyeX, snapshot.EyeY, snapshot.EyeZ + ViewerRayCountTextHeight),
+            ViewerRayCountTextAngles,
+            ViewerRayCountTextVelocity);
+
+        if (forceMessageRefresh || textEntity.MessageText != countText)
+        {
+            textEntity.MessageText = countText;
+        }
+
+        _viewerRayCountLastRendered[slot] = rayCount;
+    }
+
+    private void ClearViewerRayCountOverlays()
+    {
+        for (int slot = 0; slot < VisibilitySlotCapacity; slot++)
+        {
+            RemoveViewerRayCountOverlay(slot);
+        }
+    }
+
+    private void RemoveViewerRayCountOverlay(int slot)
+    {
+        if ((uint)slot >= VisibilitySlotCapacity)
+        {
+            return;
+        }
+
+        CPointWorldText? textEntity = _viewerRayCountTextBySlot[slot];
+        if (textEntity != null && textEntity.IsValid)
+        {
+            textEntity.Remove();
+        }
+
+        _viewerRayCountTextBySlot[slot] = null;
+        _viewerRayCountLastRendered[slot] = int.MinValue;
     }
 
     private static bool TryGetLocalBoundsCandidate(
@@ -1171,6 +1353,14 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
                         {
                             continue; // Reuse cached Visible - both stationary, same pawn.
                         }
+                    }
+
+                    if (visibilityByTargetSlot.Known[targetSlot] &&
+                        visibilityByTargetSlot.EvalTicks[targetSlot] == nowTick &&
+                        currentPawnHandle != 0 &&
+                        visibilityByTargetSlot.PawnHandles[targetSlot] == currentPawnHandle)
+                    {
+                        continue; // Reuse decision already computed earlier this tick (e.g. transmit fallback path).
                     }
 
                     VisibilityEval visibilityEval = EvaluateVisibilitySafe(

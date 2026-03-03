@@ -47,7 +47,7 @@ public sealed class S2AWHConfig : BasePluginConfig
         public float SurfaceProbeHitRadius { get; set; } = 64.0f;
 
         [JsonPropertyName("SurfaceProbeRows")]
-        public int SurfaceProbeRows { get; set; } = 2;
+        public int SurfaceProbeRows { get; set; } = 1;
 
         [JsonPropertyName("PredictorDistance")]
         public float PredictorDistance { get; set; } = 64.0f;
@@ -65,7 +65,7 @@ public sealed class S2AWHConfig : BasePluginConfig
         public float ViewerPredictorDistanceFactor { get; set; } = 0.85f;
 
         [JsonPropertyName("RevealHoldSeconds")]
-        public float RevealHoldSeconds { get; set; } = 0.30f;
+        public float RevealHoldSeconds { get; set; } = 0.10f;
 
         [JsonExtensionData]
         public Dictionary<string, System.Text.Json.JsonElement>? ExtraJson { get; set; }
@@ -181,7 +181,7 @@ public sealed class S2AWHConfig : BasePluginConfig
         public float LosSurfaceProbeHitRadius { get; set; } = 64.0f;
 
         [JsonPropertyName("LosSurfaceProbeRows")]
-        public int LosSurfaceProbeRows { get; set; } = 2;
+        public int LosSurfaceProbeRows { get; set; } = 1;
 
         [JsonPropertyName("MicroHullMaxDistance")]
         public float MicroHullMaxDistance { get; set; } = 2000.0f;
@@ -209,6 +209,9 @@ public sealed class S2AWHConfig : BasePluginConfig
 
         [JsonPropertyName("DrawDebugAabbBoxes")]
         public bool DrawDebugAabbBoxes { get; set; } = false;
+
+        [JsonPropertyName("DrawAmountOfRayNumber")]
+        public bool DrawAmountOfRayNumber { get; set; } = false;
 
         [JsonPropertyName("DrawDebugTraceBeamsForHumans")]
         public bool DrawDebugTraceBeamsForHumans { get; set; } = true;

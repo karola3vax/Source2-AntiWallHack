@@ -10,8 +10,6 @@ internal sealed class PreloadPredictor
     private const int SlotCount = 65;
     private const int PredictorTracePointCount = 10; // eye + center + 8 corners
     private const int SurfaceProbePointCount = 18; // max: 3 probe rows * 6 faces
-    private const int ViewerFacingFaceProbeGridSize = 3;
-
     private sealed class PredictorTargetCacheEntry
     {
         public int Tick = -1;
@@ -29,6 +27,7 @@ internal sealed class PreloadPredictor
     }
 
     private readonly CRayTraceInterface _rayTrace;
+    private readonly Action<int>? _recordViewerTraceAttempt;
     private readonly Vector _viewerEyeBuffer = new(0.0f, 0.0f, 0.0f);
     private readonly Vector _predictedTargetOrigin = new(0.0f, 0.0f, 0.0f);
     private readonly Vector _currentTargetOrigin = new(0.0f, 0.0f, 0.0f);
@@ -40,10 +39,12 @@ internal sealed class PreloadPredictor
     private int _cachedViewerSlot = -1;
     private int _cachedViewerTick = -1;
     private bool _cachedDrawDebugBeams;
+    private int _activeViewerSlot = -1;
 
-    public PreloadPredictor(CRayTraceInterface rayTrace)
+    public PreloadPredictor(CRayTraceInterface rayTrace, Action<int>? recordViewerTraceAttempt = null)
     {
         _rayTrace = rayTrace;
+        _recordViewerTraceAttempt = recordViewerTraceAttempt;
     }
 
     /// <summary>
@@ -91,6 +92,7 @@ internal sealed class PreloadPredictor
             _cachedViewerTick = nowTick;
             _cachedDrawDebugBeams = VisibilityGeometry.ShouldDrawDebugTraceBeam(viewerIsBot);
         }
+        _activeViewerSlot = viewerSlot;
 
         var config = S2AWHState.Current;
         if (!config.Preload.EnablePreload)
@@ -216,20 +218,6 @@ internal sealed class PreloadPredictor
             return true;
         }
 
-        if (CanSeeViewerFacingFaceGrid(
-                viewerPawn,
-                targetPawn,
-                eyePosition,
-                ref targetSnapshot,
-                targetOrigin,
-                applyDirectionalShift,
-                hitRadiusSq,
-                drawDebugBeams,
-                config))
-        {
-            return true;
-        }
-
         return surfacePointCount > 0 &&
                CanSeeAnySurfaceProbe(
                    viewerPawn,
@@ -239,6 +227,14 @@ internal sealed class PreloadPredictor
                    surfacePointCount,
                    hitRadiusSq,
                    drawDebugBeams);
+    }
+
+    private void RecordActiveViewerTraceAttempt()
+    {
+        if (_activeViewerSlot >= 0)
+        {
+            _recordViewerTraceAttempt?.Invoke(_activeViewerSlot);
+        }
     }
 
     private bool CanSeeAnyTargetPoint(
@@ -253,6 +249,7 @@ internal sealed class PreloadPredictor
         for (int i = 0; i < targetPointCount; i++)
         {
             Vector targetPoint = targetPoints[i];
+            RecordActiveViewerTraceAttempt();
             if (!_rayTrace.TraceEndShape(eyePosition, targetPoint, viewerPawn, _cachedTraceOptions, out var result))
             {
                 continue;
@@ -302,6 +299,7 @@ internal sealed class PreloadPredictor
         _surfaceTraceEnd.Y = probeY;
         _surfaceTraceEnd.Z = probeZ;
 
+        RecordActiveViewerTraceAttempt();
         if (!_rayTrace.TraceEndShape(eyePosition, _surfaceTraceEnd, viewerPawn, _cachedTraceOptions, out var result))
         {
             return false;
@@ -321,32 +319,6 @@ internal sealed class PreloadPredictor
                DistanceSquared(probeX, probeY, probeZ, result.EndPosX, result.EndPosY, result.EndPosZ) <= hitRadiusSq;
     }
 
-    private bool CanSeeViewerFacingFaceGrid(
-        CBasePlayerPawn viewerPawn,
-        CBasePlayerPawn targetPawn,
-        Vector eyePosition,
-        ref PlayerTransformSnapshot targetSnapshot,
-        Vector targetOrigin,
-        bool applyDirectionalShift,
-        float hitRadiusSq,
-        bool drawDebugBeams,
-        S2AWHConfig config)
-    {
-        GetPredictorWorldBounds(ref targetSnapshot, targetOrigin, config, applyDirectionalShift, out float minX, out float minY, out float minZ, out float maxX, out float maxY, out float maxZ);
-
-        float centerX = (minX + maxX) * 0.5f;
-        float centerY = (minY + maxY) * 0.5f;
-        float centerZ = (minZ + maxZ) * 0.5f;
-
-        float faceX = eyePosition.X <= centerX ? minX : maxX;
-        float faceY = eyePosition.Y <= centerY ? minY : maxY;
-        float faceZ = eyePosition.Z <= centerZ ? minZ : maxZ;
-
-        return TraceFaceGrid(viewerPawn, targetPawn, eyePosition, faceX, minY, maxY, minZ, maxZ, AabbFaceAxis.X, hitRadiusSq, drawDebugBeams) ||
-               TraceFaceGrid(viewerPawn, targetPawn, eyePosition, faceY, minX, maxX, minZ, maxZ, AabbFaceAxis.Y, hitRadiusSq, drawDebugBeams) ||
-               TraceFaceGrid(viewerPawn, targetPawn, eyePosition, faceZ, minX, maxX, minY, maxY, AabbFaceAxis.Z, hitRadiusSq, drawDebugBeams);
-    }
-
     private bool CanSeeAnySurfaceProbe(
         CBasePlayerPawn viewerPawn,
         CBasePlayerPawn targetPawn,
@@ -360,6 +332,7 @@ internal sealed class PreloadPredictor
         for (int i = 0; i < surfacePointCount; i++)
         {
             Vector probePoint = surfacePoints[i];
+            RecordActiveViewerTraceAttempt();
             if (!_rayTrace.TraceEndShape(eyePosition, probePoint, viewerPawn, _cachedTraceOptions, out var result))
             {
                 continue;
@@ -379,56 +352,6 @@ internal sealed class PreloadPredictor
                 DistanceSquared(probePoint.X, probePoint.Y, probePoint.Z, result.EndPosX, result.EndPosY, result.EndPosZ) <= hitRadiusSq)
             {
                 return true;
-            }
-        }
-
-        return false;
-    }
-
-    private bool TraceFaceGrid(
-        CBasePlayerPawn viewerPawn,
-        CBasePlayerPawn targetPawn,
-        Vector eyePosition,
-        float fixedAxisValue,
-        float range1Min,
-        float range1Max,
-        float range2Min,
-        float range2Max,
-        AabbFaceAxis faceAxis,
-        float hitRadiusSq,
-        bool drawDebugBeams)
-    {
-        float step1 = ViewerFacingFaceProbeGridSize > 1 ? (range1Max - range1Min) / (ViewerFacingFaceProbeGridSize - 1) : 0.0f;
-        float step2 = ViewerFacingFaceProbeGridSize > 1 ? (range2Max - range2Min) / (ViewerFacingFaceProbeGridSize - 1) : 0.0f;
-
-        for (int i = 0; i < ViewerFacingFaceProbeGridSize; i++)
-        {
-            float axis1 = range1Min + (step1 * i);
-            for (int j = 0; j < ViewerFacingFaceProbeGridSize; j++)
-            {
-                float axis2 = range2Min + (step2 * j);
-                AabbGeometry.SetFacePoint(_surfaceTraceEnd, fixedAxisValue, axis1, axis2, faceAxis);
-
-                if (!_rayTrace.TraceEndShape(eyePosition, _surfaceTraceEnd, viewerPawn, _cachedTraceOptions, out var result))
-                {
-                    continue;
-                }
-
-                if (drawDebugBeams)
-                {
-                    VisibilityGeometry.DrawDebugTraceBeam(eyePosition, _surfaceTraceEnd, result, DebugTraceKind.LosSurface);
-                }
-
-                if (!result.DidHit || result.HitEntity == targetPawn.Handle)
-                {
-                    return true;
-                }
-
-                if (hitRadiusSq > 0.0f &&
-                    DistanceSquared(_surfaceTraceEnd.X, _surfaceTraceEnd.Y, _surfaceTraceEnd.Z, result.EndPosX, result.EndPosY, result.EndPosZ) <= hitRadiusSq)
-                {
-                    return true;
-                }
             }
         }
 
