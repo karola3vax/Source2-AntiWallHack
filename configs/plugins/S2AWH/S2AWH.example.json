@@ -38,11 +38,11 @@
     "SurfaceProbeHitRadius": 64.0,
 
     // More rows = better thin-angle detection, but more CPU.
-    "SurfaceProbeRows": 2,
+    "SurfaceProbeRows": 1,
 
     // Maximum distance to predict target movement forward.
     // Real lead is also limited by target speed and the plugin update interval.
-    "PredictorDistance": 64.0,
+    "PredictorDistance": 96.0,
 
     // Minimum speed before prediction starts to matter.
     "PredictorMinSpeed": 1.0,
@@ -57,7 +57,7 @@
     "ViewerPredictorDistanceFactor": 0.85,
 
     // Keep a target visible for a short time after LOS breaks.
-    "RevealHoldSeconds": 0.30
+    "RevealHoldSeconds": 0.10
   },
 
   "Aabb": {
@@ -108,7 +108,7 @@
     "LosSurfaceProbeHitRadius": 64.0,
 
     // More rows = better thin-angle LOS detection, but more CPU.
-    "LosSurfaceProbeRows": 2,
+    "LosSurfaceProbeRows": 1,
 
     // Disable micro-hull fallback for far targets. 0 disables the fallback entirely.
     "MicroHullMaxDistance": 2000.0
@@ -136,6 +136,9 @@
     // Draw debug AABB boxes in game. Very expensive.
     // These use the same per-tick debug beam budget.
     "DrawDebugAabbBoxes": false,
+
+    // Draw the current total ray count above each viewer's head.
+    "DrawAmountOfRayNumber": false,
 
     // Draw rays for human viewers.
     "DrawDebugTraceBeamsForHumans": true,
