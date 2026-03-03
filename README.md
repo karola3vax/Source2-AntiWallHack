@@ -4,7 +4,7 @@
 
 ### Server-side anti-wallhack for Counter-Strike 2
 
-[![Version](https://img.shields.io/badge/VERSION-3.0.1-ec4899?style=for-the-badge&logoColor=white)](https://github.com/karola3vax/Source2-AntiWallHack/releases)
+[![Version](https://img.shields.io/badge/VERSION-3.0.2-ec4899?style=for-the-badge&logoColor=white)](https://github.com/karola3vax/Source2-AntiWallHack/releases)
 [![CounterStrikeSharp](https://img.shields.io/badge/CSSHARP-v1.0.362%2B-db2777?style=for-the-badge&logoColor=white)](https://github.com/roflmuffin/CounterStrikeSharp/releases)
 [![Ray-Trace](https://img.shields.io/badge/RAY--TRACE-v1.0.4-b0126f?style=for-the-badge&logoColor=white)](https://github.com/FUNPLAY-pro-CS2/Ray-Trace/releases)
 [![Build](https://img.shields.io/badge/BUILD-.NET%208-ad1457?style=for-the-badge&logoColor=white)](https://dotnet.microsoft.com/)
@@ -89,15 +89,16 @@ If all 4 stages fail, the target is treated as hidden and their important entity
 
 ## Development
 
-S2AWH builds against local `CounterStrikeSharp.API.dll` and `RayTraceApi.dll` references.
+S2AWH builds against local `CounterStrikeSharp.API.dll`, `Microsoft.Extensions.Logging.Abstractions.dll`, and `RayTraceApi.dll` references.
 The project validates these local dependency paths before compilation in [`S2AWH.csproj`](./S2AWH.csproj).
 
 Default local lookup order:
 
 1. `..\Dependencies\CounterStrikeSharp-main\managed\CounterStrikeSharp.API\bin\Release\net8.0\CounterStrikeSharp.API.dll`
-2. `..\Dependencies\Ray-Trace-main\managed\RayTrace\RayTraceApi\bin\Release\net8.0\RayTraceApi.dll`
+2. `..\Dependencies\CounterStrikeSharp-main\managed\CounterStrikeSharp.API\bin\Release\net8.0\Microsoft.Extensions.Logging.Abstractions.dll`
+3. `..\Dependencies\Ray-Trace-main\managed\RayTrace\RayTraceApi\bin\Release\net8.0\RayTraceApi.dll`
 
-If your workspace layout is different, override `CssApiPath` and `RayTraceApiPath` at build time.
+If your workspace layout is different, override `CssApiPath`, `LoggingAbstractionsPath`, and `RayTraceApiPath` at build time.
 
 The repo also ships a commented example config at [`configs/plugins/S2AWH/S2AWH.example.json`](./configs/plugins/S2AWH/S2AWH.example.json).
 It is written in plain language so server owners can understand each setting without reading source code.
@@ -137,7 +138,7 @@ Use these as starting profiles, then benchmark on your own hardware.
 | :--- | :---: | :--- |
 | `Core.Enabled` | `true` | Master on/off switch for the plugin |
 | `Core.UpdateFrequencyTicks` | `16` | How many ticks to spread viewer work across (higher = lower CPU, slower updates) |
-| `Trace.UseFovCulling` | `true` | Skip expensive checks for targets outside viewer cone |
+| `Trace.UseFovCulling` | `true` | Skip expensive checks for targets outside viewer cone using conservative AABB-aware culling |
 | `Trace.FovDegrees` | `220.0` | FOV cone size used by culling |
 | `Trace.AimRayHitRadius` | `100.0` | Reveal radius around aim-ray hit points |
 | `Trace.AimRaySpreadDegrees` | `1.0` | Angular spacing for the aim-ray X pattern |
@@ -151,7 +152,7 @@ Use these as starting profiles, then benchmark on your own hardware.
 | `Preload.EnablePreload` | `true` | Master switch for the whole preload system: predictor points, surface probes, and viewer peek assist |
 | `Preload.SurfaceProbeHitRadius` | `64.0` | Accepts near-hit preload probes within this radius (`0..200`) |
 | `Preload.SurfaceProbeRows` | `2` | Probe rows per predictor face for preload surface probing (`1..3`, total cached probes = rows x 6) |
-| `Preload.PredictorDistance` | `150.0` | Maximum forward look-ahead distance for prediction. Real lead is also capped by target speed and update interval |
+| `Preload.PredictorDistance` | `64.0` | Maximum forward look-ahead distance for prediction. Real lead is also capped by target speed and update interval |
 | `Preload.PredictorMinSpeed` | `1.0` | Minimum speed needed before prediction starts |
 | `Preload.PredictorFullSpeed` | `100.0` | Speed where preload look-ahead reaches full configured distance |
 | `Preload.EnableViewerPeekAssist` | `true` | Adds viewer movement prediction to reduce pop-in on peeks |

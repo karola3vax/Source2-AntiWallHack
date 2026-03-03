@@ -4,7 +4,7 @@
     <RootNamespace>S2AWH</RootNamespace>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <Version>3.0.1</Version>
+    <Version>3.0.2</Version>
     <AssemblyName>S2AWH</AssemblyName>
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
     <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
@@ -12,6 +12,9 @@
     <CssApiPath Condition="'$(CssApiPath)' == '' and Exists('..\Dependencies\CounterStrikeSharp-main\managed\CounterStrikeSharp.API\bin\Release\net8.0\CounterStrikeSharp.API.dll')">..\Dependencies\CounterStrikeSharp-main\managed\CounterStrikeSharp.API\bin\Release\net8.0\CounterStrikeSharp.API.dll</CssApiPath>
     <CssApiPath Condition="'$(CssApiPath)' == '' and Exists('..\CounterStrikeSharp-main\managed\CounterStrikeSharp.API\bin\Release\net8.0\CounterStrikeSharp.API.dll')">..\CounterStrikeSharp-main\managed\CounterStrikeSharp.API\bin\Release\net8.0\CounterStrikeSharp.API.dll</CssApiPath>
     <CssApiPath Condition="'$(CssApiPath)' == '' and Exists('..\..\AGWH\CounterStrikeSharp-main\managed\CounterStrikeSharp.API\bin\Release\net8.0\CounterStrikeSharp.API.dll')">..\..\AGWH\CounterStrikeSharp-main\managed\CounterStrikeSharp.API\bin\Release\net8.0\CounterStrikeSharp.API.dll</CssApiPath>
+    <LoggingAbstractionsPath Condition="'$(LoggingAbstractionsPath)' == '' and Exists('..\Dependencies\CounterStrikeSharp-main\managed\CounterStrikeSharp.API\bin\Release\net8.0\Microsoft.Extensions.Logging.Abstractions.dll')">..\Dependencies\CounterStrikeSharp-main\managed\CounterStrikeSharp.API\bin\Release\net8.0\Microsoft.Extensions.Logging.Abstractions.dll</LoggingAbstractionsPath>
+    <LoggingAbstractionsPath Condition="'$(LoggingAbstractionsPath)' == '' and Exists('..\CounterStrikeSharp-main\managed\CounterStrikeSharp.API\bin\Release\net8.0\Microsoft.Extensions.Logging.Abstractions.dll')">..\CounterStrikeSharp-main\managed\CounterStrikeSharp.API\bin\Release\net8.0\Microsoft.Extensions.Logging.Abstractions.dll</LoggingAbstractionsPath>
+    <LoggingAbstractionsPath Condition="'$(LoggingAbstractionsPath)' == '' and Exists('..\..\AGWH\CounterStrikeSharp-main\managed\CounterStrikeSharp.API\bin\Release\net8.0\Microsoft.Extensions.Logging.Abstractions.dll')">..\..\AGWH\CounterStrikeSharp-main\managed\CounterStrikeSharp.API\bin\Release\net8.0\Microsoft.Extensions.Logging.Abstractions.dll</LoggingAbstractionsPath>
     <RayTraceApiPath Condition="'$(RayTraceApiPath)' == '' and Exists('..\Dependencies\Ray-Trace-main\managed\RayTrace\RayTraceApi\bin\Release\net8.0\RayTraceApi.dll')">..\Dependencies\Ray-Trace-main\managed\RayTrace\RayTraceApi\bin\Release\net8.0\RayTraceApi.dll</RayTraceApiPath>
     <RayTraceApiPath Condition="'$(RayTraceApiPath)' == '' and Exists('..\Ray-Trace-main\managed\RayTrace\RayTraceApi\bin\Release\net8.0\RayTraceApi.dll')">..\Ray-Trace-main\managed\RayTrace\RayTraceApi\bin\Release\net8.0\RayTraceApi.dll</RayTraceApiPath>
     <RayTraceApiPath Condition="'$(RayTraceApiPath)' == '' and Exists('..\..\AGWH\Ray-Trace-main\managed\RayTrace\RayTraceApi\bin\Release\net8.0\RayTraceApi.dll')">..\..\AGWH\Ray-Trace-main\managed\RayTrace\RayTraceApi\bin\Release\net8.0\RayTraceApi.dll</RayTraceApiPath>
@@ -43,7 +46,7 @@
       <Private>false</Private>
     </Reference>
     <Reference Include="Microsoft.Extensions.Logging.Abstractions">
-      <HintPath>..\Dependencies\CounterStrikeSharp-main\managed\CounterStrikeSharp.API\bin\Release\net8.0\Microsoft.Extensions.Logging.Abstractions.dll</HintPath>
+      <HintPath>$(LoggingAbstractionsPath)</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="RayTraceApi">
@@ -53,6 +56,7 @@
   </ItemGroup>
   <Target Name="ValidateLocalDependencies" BeforeTargets="ResolveReferences">
     <Error Condition="'$(CssApiPath)' == ''" Text="CounterStrikeSharp.API.dll bulunamadi. Expected: ..\Dependencies\CounterStrikeSharp-main\managed\CounterStrikeSharp.API\bin\Release\net8.0\CounterStrikeSharp.API.dll" />
+    <Error Condition="'$(LoggingAbstractionsPath)' == ''" Text="Microsoft.Extensions.Logging.Abstractions.dll bulunamadi. Expected: CounterStrikeSharp.API.dll ile ayni build output klasorunde." />
     <Error Condition="'$(RayTraceApiPath)' == ''" Text="RayTraceApi.dll bulunamadi. Expected: ..\Dependencies\Ray-Trace-main\managed\RayTrace\RayTraceApi\bin\Release\net8.0\RayTraceApi.dll" />
   </Target>
   <Target Name="CopyExampleConfigToOutput" AfterTargets="Build">

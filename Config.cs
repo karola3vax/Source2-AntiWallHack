@@ -50,7 +50,7 @@ public sealed class S2AWHConfig : BasePluginConfig
         public int SurfaceProbeRows { get; set; } = 2;
 
         [JsonPropertyName("PredictorDistance")]
-        public float PredictorDistance { get; set; } = 150.0f;
+        public float PredictorDistance { get; set; } = 64.0f;
 
         [JsonPropertyName("PredictorMinSpeed")]
         public float PredictorMinSpeed { get; set; } = 1.0f;
@@ -70,10 +70,11 @@ public sealed class S2AWHConfig : BasePluginConfig
         [JsonExtensionData]
         public Dictionary<string, System.Text.Json.JsonElement>? ExtraJson { get; set; }
 
-        public bool TryConsumeLegacyPreloadAlias(out bool enabled, out string aliasName)
+        public bool TryConsumeLegacyPreloadAlias(out bool enabled, out string aliasName, out string? warning)
         {
             aliasName = string.Empty;
             enabled = false;
+            warning = null;
             if (ExtraJson == null)
             {
                 return false;
@@ -82,7 +83,13 @@ public sealed class S2AWHConfig : BasePluginConfig
             if (ExtraJson.TryGetValue("EnableProbePreload", out var probeValue))
             {
                 aliasName = "Preload.EnableProbePreload";
-                return TryReadLegacyBoolValue(probeValue, out enabled);
+                if (TryReadLegacyBoolValue(probeValue, out enabled))
+                {
+                    return true;
+                }
+
+                warning = $"{aliasName} exists but is not a valid boolean. The plugin ignores it and keeps Preload.EnablePreload unchanged.";
+                return false;
             }
 
             if (!ExtraJson.TryGetValue("EnableSurfacePreload", out var value))
@@ -91,7 +98,13 @@ public sealed class S2AWHConfig : BasePluginConfig
             }
 
             aliasName = "Preload.EnableSurfacePreload";
-            return TryReadLegacyBoolValue(value, out enabled);
+            if (TryReadLegacyBoolValue(value, out enabled))
+            {
+                return true;
+            }
+
+            warning = $"{aliasName} exists but is not a valid boolean. The plugin ignores it and keeps Preload.EnablePreload unchanged.";
+            return false;
         }
 
         private static bool TryReadLegacyBoolValue(System.Text.Json.JsonElement value, out bool enabled)
@@ -116,7 +129,7 @@ public sealed class S2AWHConfig : BasePluginConfig
                 return true;
             }
 
-            return true;
+            return false;
         }
     }
 
@@ -299,10 +312,14 @@ public sealed class S2AWHConfig : BasePluginConfig
         Preload.RevealHoldSeconds = revealHoldSeconds;
 
         // Legacy compatibility: accept old key, but keep generated config surface clean.
-        if (Preload.TryConsumeLegacyPreloadAlias(out bool enablePreloadAlias, out string preloadAliasName))
+        if (Preload.TryConsumeLegacyPreloadAlias(out bool enablePreloadAlias, out string preloadAliasName, out string? preloadAliasWarning))
         {
             Preload.EnablePreload = enablePreloadAlias;
             warnings.Add($"{preloadAliasName} is a legacy key. The plugin maps it to Preload.EnablePreload, but new auto-generated configs no longer include the old name.");
+        }
+        else if (!string.IsNullOrWhiteSpace(preloadAliasWarning))
+        {
+            warnings.Add(preloadAliasWarning);
         }
 
         // --- Aabb ---

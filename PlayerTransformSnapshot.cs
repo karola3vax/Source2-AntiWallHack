@@ -45,7 +45,7 @@ internal struct PlayerTransformSnapshot
     public float FovNormalY;
     public float FovNormalZ;
 
-    // Eye position (Origin + ViewOffset or Bone absolute position)
+    // Eye position (Origin + ViewOffset)
     public float EyeX;
     public float EyeY;
     public float EyeZ;

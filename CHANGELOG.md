@@ -1,10 +1,14 @@
 # Changelog
 
-## Unreleased
+## 3.0.2 - 2026-03-03
 
 - Cleaned the generated config surface so new auto-created configs only contain live runtime keys.
 - Removed `Preload.EnableSurfacePreload` from newly generated configs while keeping legacy read compatibility.
 - Renamed the generated preload master switch to `Preload.EnablePreload` and kept `EnableProbePreload` / `EnableSurfacePreload` as legacy read aliases.
+- Hardened legacy preload alias parsing so invalid non-boolean values no longer silently disable preload.
+- Made the project file validate and resolve `Microsoft.Extensions.Logging.Abstractions.dll` through the same local dependency lookup flow as CounterStrikeSharp / Ray-Trace.
+- Tightened bounds candidate normalization so surrounding/specifed surrounding boxes must still contain the base collision box within a small tolerance.
+- Made FOV culling more conservative by checking the target AABB bounding sphere before point-sample culling.
 - Added a commented `S2AWH.example.json` written in plain language for easier setup.
 - Moved plugin logs onto CounterStrikeSharp's logger pipeline instead of raw console writes.
 - Added a per-tick debug beam budget so trace/AABB debug drawing cannot spam unlimited `env_beam` entities.

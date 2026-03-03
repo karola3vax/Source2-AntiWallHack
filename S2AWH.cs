@@ -23,6 +23,7 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
     private const float MaxLocalHorizontalCenterOffset = 96.0f;
     private const float MinLocalVerticalCenter = -96.0f;
     private const float MaxLocalVerticalCenter = 192.0f;
+    private const float MaxBoundsContainmentShrinkUnits = 8.0f;
 
     /// <summary>
     /// Holds the set of entity handles (pawn + weapons) belonging to a single target player,
@@ -76,7 +77,7 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
     }
 
     public override string ModuleName => "S2AWH (Source2 AntiWallhack)";
-    public override string ModuleVersion => "3.0.1";
+    public override string ModuleVersion => "3.0.2";
     public override string ModuleAuthor => "karola3vax";
     public override string ModuleDescription => "Prevents wallhacks from working using Ray-Trace by hiding players from out of line of sight.";
 
@@ -740,11 +741,23 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
             MathF.Abs(extentX - referenceExtentX) +
             MathF.Abs(extentY - referenceExtentY) +
             MathF.Abs(extentZ - referenceExtentZ);
+        float containmentShrink =
+            MathF.Max(0.0f, minX - referenceMinX) +
+            MathF.Max(0.0f, minY - referenceMinY) +
+            MathF.Max(0.0f, minZ - referenceMinZ) +
+            MathF.Max(0.0f, referenceMaxX - maxX) +
+            MathF.Max(0.0f, referenceMaxY - maxY) +
+            MathF.Max(0.0f, referenceMaxZ - maxZ);
+        if (containmentShrink > MaxBoundsContainmentShrinkUnits)
+        {
+            return false;
+        }
+
         float absoluteCoordinatePenalty =
             MathF.Abs(minX) + MathF.Abs(minY) + MathF.Abs(minZ) +
             MathF.Abs(maxX) + MathF.Abs(maxY) + MathF.Abs(maxZ);
 
-        score = (centerDelta * 4.0f) + extentDelta + (absoluteCoordinatePenalty * 0.01f);
+        score = (centerDelta * 4.0f) + extentDelta + (containmentShrink * 8.0f) + (absoluteCoordinatePenalty * 0.01f);
         return true;
     }
 
@@ -875,6 +888,8 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
                     var collision = targetPawnEntity.Collision;
                     if (collision?.Mins == null || collision.Maxs == null)
                     {
+                        SnapshotPawns[slot] = null;
+                        _snapshotTargetPawnHandles[i] = 0;
                         continue;
                     }
 

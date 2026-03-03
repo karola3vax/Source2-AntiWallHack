@@ -42,7 +42,7 @@
 
     // Maximum distance to predict target movement forward.
     // Real lead is also limited by target speed and the plugin update interval.
-    "PredictorDistance": 150.0,
+    "PredictorDistance": 64.0,
 
     // Minimum speed before prediction starts to matter.
     "PredictorMinSpeed": 1.0,

@@ -142,6 +142,14 @@ internal sealed class TransmitFilter
         float maxY = centerY + halfY;
         float maxZ = centerZ + halfZ;
 
+        // Conservative sphere-vs-cone check: if the AABB's bounding sphere overlaps the FOV cone,
+        // do not cull here. False positives only cost extra LOS work; false negatives hide players.
+        float halfFovRadians = (config.Trace.FovDegrees * 0.5f) * MathF.PI / 180.0f;
+        if (IsBoundsSphereInFov(centerX, centerY, centerZ, halfX, halfY, halfZ, halfFovRadians, fovDotThreshold))
+        {
+            return true;
+        }
+
         if (IsPointInFov(centerX, centerY, centerZ, fovDotThreshold))
         {
             return true;
@@ -214,5 +222,61 @@ internal sealed class TransmitFilter
         }
 
         return (dot * dot) < thresholdSq;
+    }
+
+    private bool IsBoundsSphereInFov(
+        float centerX,
+        float centerY,
+        float centerZ,
+        float halfX,
+        float halfY,
+        float halfZ,
+        float halfFovRadians,
+        float fovDotThreshold)
+    {
+        float planeX = centerX - _cachedFovStartX;
+        float planeY = centerY - _cachedFovStartY;
+        float planeZ = centerZ - _cachedFovStartZ;
+        float distanceSq = (planeX * planeX) + (planeY * planeY) + (planeZ * planeZ);
+        if (distanceSq < NearbyAlwaysVisibleDistanceSq)
+        {
+            return true;
+        }
+
+        float radiusSq = (halfX * halfX) + (halfY * halfY) + (halfZ * halfZ);
+        if (radiusSq <= 0.0001f)
+        {
+            return IsPointInFov(centerX, centerY, centerZ, fovDotThreshold);
+        }
+
+        if (distanceSq <= radiusSq)
+        {
+            return true;
+        }
+
+        float distance = MathF.Sqrt(distanceSq);
+        float radius = MathF.Sqrt(radiusSq);
+        float radiusAngle = MathF.Asin(Math.Min(1.0f, radius / distance));
+        float expandedHalfFov = MathF.Min(MathF.PI - 0.0001f, halfFovRadians + radiusAngle);
+        float expandedDotThreshold = MathF.Cos(expandedHalfFov);
+        float dot = (planeX * _cachedFovNormalX) + (planeY * _cachedFovNormalY) + (planeZ * _cachedFovNormalZ);
+        float thresholdSq = expandedDotThreshold * expandedDotThreshold * distanceSq;
+
+        if (expandedDotThreshold >= 0.0f)
+        {
+            if (dot <= 0.0f)
+            {
+                return false;
+            }
+
+            return (dot * dot) >= thresholdSq;
+        }
+
+        if (dot >= 0.0f)
+        {
+            return true;
+        }
+
+        return (dot * dot) <= thresholdSq;
     }
 }
