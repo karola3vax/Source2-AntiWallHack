@@ -33,6 +33,11 @@ public partial class S2AWH
         InvalidateLivePlayersCache();
         _cachedLivePlayers.Clear();
         _eligibleTargetsWithEntities.Clear();
+        _ownedEntityBuckets.Clear();
+        _entityHandleIndexCache.Clear();
+        _ownedEntityBucketsTick = -1;
+        _entityHandleIndexCacheTick = -1;
+        _eligibleTargetsWithEntitiesTick = -1;
         Array.Clear(_liveSlotFlags, 0, _liveSlotFlags.Length);
         Array.Clear(_viewerRayCountsWorking, 0, _viewerRayCountsWorking.Length);
         Array.Clear(_viewerRayCountsDisplay, 0, _viewerRayCountsDisplay.Length);
@@ -51,8 +56,6 @@ public partial class S2AWH
         _hasLoggedFilterEvaluationError = false;
         _hasLoggedWeaponSyncError = false;
         _hasLoggedOwnedEntityScanError = false;
-        _ownedEntityBuckets.Clear();
-        _ownedEntityBucketsTick = -1;
         _lastDebugCachePlayerCount = 0;
         ResetDebugWindowCounters();
     }

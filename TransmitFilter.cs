@@ -156,7 +156,7 @@ internal sealed class TransmitFilter
 
         // Conservative sphere-vs-cone check: if the AABB's bounding sphere overlaps the FOV cone,
         // do not cull here. False positives only cost extra LOS work; false negatives hide players.
-        float halfFovRadians = (config.Trace.FovDegrees * 0.5f) * MathF.PI / 180.0f;
+        float halfFovRadians = config.HalfFovRadians;
         if (IsBoundsSphereInFov(_cachedFovStartX, _cachedFovStartY, _cachedFovStartZ, centerX, centerY, centerZ, halfX, halfY, halfZ, halfFovRadians, fovDotThreshold) ||
             IsBoundsSphereInFov(groundStartX, groundStartY, groundStartZ, centerX, centerY, centerZ, halfX, halfY, halfZ, halfFovRadians, fovDotThreshold))
         {

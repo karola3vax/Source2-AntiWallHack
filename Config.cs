@@ -8,6 +8,7 @@ namespace S2AWH;
 public sealed class S2AWHConfig : BasePluginConfig
 {
     private float _fovDotThreshold = ComputeFovDotThreshold(240.0f);
+    private float _halfFovRadians = ComputeHalfFovRadians(240.0f);
 
     public sealed class CoreSettings
     {
@@ -286,6 +287,9 @@ public sealed class S2AWHConfig : BasePluginConfig
     [JsonIgnore]
     public float FovDotThreshold => _fovDotThreshold;
 
+    [JsonIgnore]
+    public float HalfFovRadians => _halfFovRadians;
+
     /// <summary>
     /// Validates and clamps all config values to their allowed ranges, returning a list of
     /// human-readable warnings for any values that were auto-corrected.
@@ -448,6 +452,7 @@ public sealed class S2AWHConfig : BasePluginConfig
         Aabb.MicroHullOverheadZOffset = microHullOverheadZOffset;
 
         _fovDotThreshold = ComputeFovDotThreshold(Trace.FovDegrees);
+        _halfFovRadians = ComputeHalfFovRadians(Trace.FovDegrees);
         return warnings;
     }
 
@@ -494,6 +499,12 @@ public sealed class S2AWHConfig : BasePluginConfig
         float clampedFov = Math.Clamp(fovDegrees, 1.0f, 359.0f);
         float halfFovRadians = (clampedFov * 0.5f) * MathF.PI / 180.0f;
         return MathF.Cos(halfFovRadians);
+    }
+
+    private static float ComputeHalfFovRadians(float fovDegrees)
+    {
+        float clampedFov = Math.Clamp(fovDegrees, 1.0f, 359.0f);
+        return (clampedFov * 0.5f) * MathF.PI / 180.0f;
     }
 }
 #pragma warning restore CA1034

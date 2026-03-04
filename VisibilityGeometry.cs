@@ -179,7 +179,7 @@ internal static class VisibilityGeometry
         }
 
         Color color = ResolveDebugAabbColor(kind);
-        Vector[] cornerBuffer = CreateDebugAabbCornerBuffer();
+        Vector[] cornerBuffer = DebugAabbCornerBuffer;
 
         SetPoint(cornerBuffer, 0, minX, minY, minZ);
         SetPoint(cornerBuffer, 1, maxX, minY, minZ);
@@ -205,7 +205,9 @@ internal static class VisibilityGeometry
         point.Z = z;
     }
 
-    private static Vector[] CreateDebugAabbCornerBuffer()
+    private static readonly Vector[] DebugAabbCornerBuffer = CreateDebugAabbCornerBufferOnce();
+
+    private static Vector[] CreateDebugAabbCornerBufferOnce()
     {
         Vector[] corners = new Vector[8];
         for (int i = 0; i < corners.Length; i++)

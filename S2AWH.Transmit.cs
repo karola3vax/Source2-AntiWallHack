@@ -69,11 +69,6 @@ public partial class S2AWH
                     continue;
                 }
 
-                if (cachedTargetEntities.Count <= 0)
-                {
-                    continue;
-                }
-
                 _eligibleTargetsWithEntities.Add((cachedTargetEntities, slot, cachedTargetEntities.LastKnownTeam, true));
             }
 
