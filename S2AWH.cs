@@ -275,13 +275,6 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
     {
         ClearViewerRayCountOverlays();
         ClearVisibilityCache();
-
-        _cachedLivePlayers.Clear();
-        _eligibleTargetsWithEntities.Clear();
-        Array.Clear(SnapshotPawns);
-        Array.Clear(SnapshotTransforms);
-        Array.Clear(_targetTransmitEntitiesCache);
-
         _losEvaluator = null;
         _predictor = null;
         _transmitFilter = null;
