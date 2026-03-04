@@ -36,7 +36,7 @@ public sealed class S2AWHConfig : BasePluginConfig
         public int AimRayCount { get; set; } = 1;
 
         [JsonPropertyName("AimRayMaxDistance")]
-        public float AimRayMaxDistance { get; set; } = 2200.0f;
+        public float AimRayMaxDistance { get; set; } = 3000.0f;
     }
 
     public sealed class PreloadSettings
@@ -45,7 +45,7 @@ public sealed class S2AWHConfig : BasePluginConfig
         public bool EnablePreload { get; set; } = true;
 
         [JsonPropertyName("SurfaceProbeHitRadius")]
-        public float SurfaceProbeHitRadius { get; set; } = 64.0f;
+        public float SurfaceProbeHitRadius { get; set; } = 80.0f;
 
         [JsonPropertyName("SurfaceProbeRows")]
         public int SurfaceProbeRows { get; set; } = 1;
@@ -169,10 +169,10 @@ public sealed class S2AWHConfig : BasePluginConfig
     public sealed class AabbSettings
     {
         [JsonPropertyName("LosHorizontalScale")]
-        public float LosHorizontalScale { get; set; } = 1.0f;
+        public float LosHorizontalScale { get; set; } = 1.15f;
 
         [JsonPropertyName("LosVerticalScale")]
-        public float LosVerticalScale { get; set; } = 1.0f;
+        public float LosVerticalScale { get; set; } = 1.10f;
 
         [JsonPropertyName("PredictorHorizontalScale")]
         public float PredictorHorizontalScale { get; set; } = 1.0f;
@@ -211,13 +211,13 @@ public sealed class S2AWHConfig : BasePluginConfig
         public float DirectionalPredictorShiftFactor { get; set; } = 0.65f;
 
         [JsonPropertyName("LosSurfaceProbeHitRadius")]
-        public float LosSurfaceProbeHitRadius { get; set; } = 64.0f;
+        public float LosSurfaceProbeHitRadius { get; set; } = 80.0f;
 
         [JsonPropertyName("LosSurfaceProbeRows")]
-        public int LosSurfaceProbeRows { get; set; } = 1;
+        public int LosSurfaceProbeRows { get; set; } = 2;
 
         [JsonPropertyName("MicroHullMaxDistance")]
-        public float MicroHullMaxDistance { get; set; } = 2000.0f;
+        public float MicroHullMaxDistance { get; set; } = 3000.0f;
 
         [JsonPropertyName("MicroHullOverheadZOffset")]
         public float MicroHullOverheadZOffset { get; set; } = 32.0f;

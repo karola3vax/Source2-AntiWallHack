@@ -33,12 +33,15 @@ internal sealed class LosEvaluator
     private static readonly float[] MicroHullSlitBandLateralPattern =
     {
         -0.85f,
-        0.85f
+        0.85f,
+        0.0f,   // center lateral
+        -0.40f  // mid-left lateral
     };
     private static readonly float[] MicroHullSlitBandVerticalPattern =
     {
         0.45f,  // upper band
-        -0.45f  // lower band
+        -0.45f, // lower band
+        0.0f    // center band
     };
     private static readonly (float PitchFactor, float YawFactor)[] AimRayPattern =
     {

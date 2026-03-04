@@ -537,7 +537,8 @@ public partial class S2AWH
             return true;
         }
 
-        return TryResolveOwnerChainToTarget(targetEntities, entityHandleRaw);
+        return TryResolveOwnerChainToTarget(targetEntities, entityHandleRaw) ||
+               TryResolveParentChainToTarget(targetEntities, entityHandleRaw);
     }
 
     private static bool TryResolveOwnerChainToTarget(TargetTransmitEntities targetEntities, uint entityHandleRaw)
@@ -579,6 +580,84 @@ public partial class S2AWH
         }
 
         return false;
+    }
+
+    private static bool TryResolveParentChainToTarget(TargetTransmitEntities targetEntities, uint entityHandleRaw)
+    {
+        uint currentHandleRaw = entityHandleRaw;
+        for (int depth = 0; depth < 8; depth++)
+        {
+            if (!TryResolveSceneParentEntityHandle(currentHandleRaw, out uint parentHandleRaw))
+            {
+                return false;
+            }
+
+            if (parentHandleRaw == targetEntities.PawnHandleRaw ||
+                parentHandleRaw == targetEntities.ControllerHandleRaw)
+            {
+                return true;
+            }
+
+            if (parentHandleRaw == 0 || parentHandleRaw == currentHandleRaw)
+            {
+                return false;
+            }
+
+            currentHandleRaw = parentHandleRaw;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Resolves the scene-graph parent of an entity by walking
+    /// CBaseEntity → CBodyComponent → SceneNode → PParent → Owner.
+    /// Returns false if any step in the chain is null or invalid.
+    /// </summary>
+    private static bool TryResolveSceneParentEntityHandle(uint childEntityHandleRaw, out uint parentEntityHandleRaw)
+    {
+        parentEntityHandleRaw = 0;
+
+        try
+        {
+            IntPtr? childPointer = EntitySystem.GetEntityByHandle(childEntityHandleRaw);
+            if (!childPointer.HasValue || childPointer.Value == IntPtr.Zero)
+            {
+                return false;
+            }
+
+            var childEntity = new CBaseEntity(childPointer.Value);
+            if (!childEntity.IsValid)
+            {
+                return false;
+            }
+
+            var sceneNode = childEntity.CBodyComponent?.SceneNode;
+            if (sceneNode == null)
+            {
+                return false;
+            }
+
+            var parentSceneNode = sceneNode.PParent;
+            if (parentSceneNode == null)
+            {
+                return false;
+            }
+
+            var parentOwner = parentSceneNode.Owner;
+            if (parentOwner == null || !parentOwner.IsValid)
+            {
+                return false;
+            }
+
+            parentEntityHandleRaw = parentOwner.EntityHandle.Raw;
+            int parentIndex = (int)(parentEntityHandleRaw & (Utilities.MaxEdicts - 1));
+            return parentIndex > 0 && parentIndex < Utilities.MaxEdicts;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private void AppendOwnedEntityHandleClosure(TargetTransmitEntities targetEntities, uint extraOwnerHandleRaw, int nowTick)
@@ -649,24 +728,42 @@ public partial class S2AWH
                 }
 
                 var ownerHandle = entity.OwnerEntity;
-                if (!ownerHandle.IsValid)
+                bool hasOwner = ownerHandle.IsValid;
+                bool hasParent = TryResolveSceneParentEntityHandle(entityHandleRaw, out uint sceneParentHandleRaw);
+
+                if (!hasOwner && !hasParent)
                 {
                     continue;
                 }
 
-                uint ownerHandleRaw = ownerHandle.Raw;
-                if (ownerHandleRaw == 0 || ownerHandleRaw == entityHandleRaw)
+                // Bucket under OwnerEntity (gameplay ownership: weapons, etc.)
+                if (hasOwner)
                 {
-                    continue;
+                    uint ownerHandleRaw = ownerHandle.Raw;
+                    if (ownerHandleRaw != 0 && ownerHandleRaw != entityHandleRaw)
+                    {
+                        if (!_ownedEntityBuckets.TryGetValue(ownerHandleRaw, out OwnedEntityBucket? ownerBucket))
+                        {
+                            ownerBucket = new OwnedEntityBucket();
+                            _ownedEntityBuckets[ownerHandleRaw] = ownerBucket;
+                        }
+
+                        AddOwnedEntityBucketHandle(ownerBucket, entityHandleRaw);
+                    }
                 }
 
-                if (!_ownedEntityBuckets.TryGetValue(ownerHandleRaw, out OwnedEntityBucket? bucket))
+                // Bucket under scene-graph parent (spatial parenting: wearables, bone-attached cosmetics, etc.)
+                if (hasParent && sceneParentHandleRaw != 0 && sceneParentHandleRaw != entityHandleRaw &&
+                    (!hasOwner || sceneParentHandleRaw != ownerHandle.Raw))
                 {
-                    bucket = new OwnedEntityBucket();
-                    _ownedEntityBuckets[ownerHandleRaw] = bucket;
-                }
+                    if (!_ownedEntityBuckets.TryGetValue(sceneParentHandleRaw, out OwnedEntityBucket? parentBucket))
+                    {
+                        parentBucket = new OwnedEntityBucket();
+                        _ownedEntityBuckets[sceneParentHandleRaw] = parentBucket;
+                    }
 
-                AddOwnedEntityBucketHandle(bucket, entityHandleRaw);
+                    AddOwnedEntityBucketHandle(parentBucket, entityHandleRaw);
+                }
             }
 
             _hasLoggedOwnedEntityScanError = false;
