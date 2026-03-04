@@ -4,7 +4,7 @@
 
 ### Server-side anti-wallhack for Counter-Strike 2
 
-[![Version](https://img.shields.io/badge/VERSION-3.0.2-ec4899?style=for-the-badge&logoColor=white)](https://github.com/karola3vax/Source2-AntiWallHack/releases)
+[![Version](https://img.shields.io/badge/VERSION-3.0.3-ec4899?style=for-the-badge&logoColor=white)](https://github.com/karola3vax/Source2-AntiWallHack/releases)
 [![CounterStrikeSharp](https://img.shields.io/badge/CSSHARP-v1.0.362%2B-db2777?style=for-the-badge&logoColor=white)](https://github.com/roflmuffin/CounterStrikeSharp/releases)
 [![Ray-Trace](https://img.shields.io/badge/RAY--TRACE-v1.0.4-b0126f?style=for-the-badge&logoColor=white)](https://github.com/FUNPLAY-pro-CS2/Ray-Trace/releases)
 [![License](https://img.shields.io/badge/LICENSE-MIT-10b981?style=for-the-badge&logoColor=white)](./LICENSE)
@@ -32,7 +32,7 @@ Every tick, S2AWH checks if each enemy is actually visible to each player using 
 | **3** | Aim-ray proximity — checks near the player's crosshair |
 | **4** | Predictive preload — look-ahead to prevent pop-in while peeking |
 
-If all stages say "hidden", the enemy's entities are removed from transmit. The cheat sees nothing.
+If all stages say "hidden", the enemy's entities (including weapons, wearables, and cosmetics) are removed from transmit. This complete coverage ensures the cheat sees nothing and prevents `missing client entity` game crashes.
 
 ---
 

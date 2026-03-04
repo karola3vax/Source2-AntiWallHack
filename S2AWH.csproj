@@ -4,7 +4,7 @@
     <RootNamespace>S2AWH</RootNamespace>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <Version>3.0.2</Version>
+    <Version>3.0.3</Version>
     <AssemblyName>S2AWH</AssemblyName>
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
     <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>

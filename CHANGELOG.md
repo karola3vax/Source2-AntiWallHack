@@ -1,5 +1,15 @@
 # Changelog
 
+## 3.0.3 - 2026-03-05
+
+- Removed redundant cache clears in `ClearVisibilityCache` that duplicated work already done by `InvalidateLivePlayersCache`.
+- Removed redundant cleanup lines in `Unload` that duplicated work already done by `ClearVisibilityCache`.
+- Removed redundant `Count <= 0` guard in the eligible target entity retention loop.
+- Replaced per-call debug AABB corner buffer allocation with a static reusable buffer.
+- Precomputed `HalfFovRadians` during config normalization so FOV culling avoids per-call trigonometry.
+- Fixed the critical `CopyExistingEntity: missing client entity` client crash by collecting `CGameSceneNode.PParent` linked entities (wearables, bone-attached cosmetics) alongside gameplay-owned entities.
+- Rewrote README for compact, layman-friendly presentation while preserving full configuration reference.
+
 ## 3.0.2 - 2026-03-03
 
 - Cleaned the generated config surface so new auto-created configs only contain live runtime keys.
