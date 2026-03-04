@@ -2,6 +2,7 @@ using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
 using CounterStrikeSharp.API.Modules.Entities;
 using CounterStrikeSharp.API.Modules.Utils;
+using System.Diagnostics.CodeAnalysis;
 
 namespace S2AWH;
 
@@ -48,9 +49,34 @@ public partial class S2AWH
 
                 if (TryGetTargetTransmitEntities(target, nowTick, out var targetEntities))
                 {
-                    _eligibleTargetsWithEntities.Add((targetEntities, target.Slot, target.TeamNum));
+                    _eligibleTargetsWithEntities.Add((targetEntities, target.Slot, target.TeamNum, false));
                 }
             }
+
+            for (int slot = 0; slot < VisibilitySlotCapacity; slot++)
+            {
+                if (_liveSlotFlags[slot])
+                {
+                    continue;
+                }
+
+                TargetTransmitEntities? cachedTargetEntities = _targetTransmitEntitiesCache[slot];
+                if (cachedTargetEntities == null ||
+                    cachedTargetEntities.Count <= 0 ||
+                    cachedTargetEntities.RetainUntilTick < nowTick ||
+                    (!config.Visibility.IncludeBots && cachedTargetEntities.LastKnownIsBot))
+                {
+                    continue;
+                }
+
+                if (cachedTargetEntities.Count <= 0)
+                {
+                    continue;
+                }
+
+                _eligibleTargetsWithEntities.Add((cachedTargetEntities, slot, cachedTargetEntities.LastKnownTeam, true));
+            }
+
             _eligibleTargetsWithEntitiesTick = nowTick;
         }
 
@@ -97,50 +123,61 @@ public partial class S2AWH
                 }
 
                 bool shouldTransmit;
-                if (hasViewerCache &&
+                bool hasMatchingCachedDecision =
+                    hasViewerCache &&
                     targetVisibilityBySlot != null &&
                     (uint)targetSlot < (uint)targetVisibilityBySlot.Known.Length &&
                     targetVisibilityBySlot.Known[targetSlot] &&
-                    targetVisibilityBySlot.PawnHandles[targetSlot] == targetEntities.PawnHandleRaw)
+                    targetVisibilityBySlot.PawnHandles[targetSlot] == targetEntities.PawnHandleRaw;
+
+                if (hasMatchingCachedDecision)
                 {
-                    shouldTransmit = targetVisibilityBySlot.Decisions[targetSlot];
+                    ViewerVisibilityRow cachedVisibilityRow = targetVisibilityBySlot!;
+                    shouldTransmit = cachedVisibilityRow.Decisions[targetSlot];
 
                     // Staggered snapshot rebuild can leave a hidden decision one or more ticks old.
                     // Recheck only stale hidden pairs so newly exposed targets do not remain popped-out
                     // until the viewer's next scheduled cache batch.
-                    if (!shouldTransmit && targetVisibilityBySlot.EvalTicks[targetSlot] != nowTick)
+                    if (!targetEntry.UseCachedDecisionOnly &&
+                        !shouldTransmit &&
+                        cachedVisibilityRow.EvalTicks[targetSlot] != nowTick)
                     {
                         if (_collectDebugCounters)
                         {
                             _transmitFallbackChecksInWindow++;
                         }
 
-                        VisibilityEval visibilityEval = EvaluateVisibilitySafe(
+                        VisibilityDecision visibilityDecision = EvaluateVisibilitySafe(
                             viewerSlot,
                             targetSlot,
                             viewerIsBot,
                             config,
                             nowTick,
                             "stale hidden recheck");
-                        shouldTransmit = ResolveTransmitWithMemory(viewerSlot, targetSlot, visibilityEval, nowTick);
-                        targetVisibilityBySlot.Decisions[targetSlot] = shouldTransmit;
-                        targetVisibilityBySlot.EvalTicks[targetSlot] = nowTick;
+                        shouldTransmit = ResolveTransmitWithMemory(viewerSlot, targetSlot, visibilityDecision, nowTick);
+                        cachedVisibilityRow.Decisions[targetSlot] = shouldTransmit;
+                        cachedVisibilityRow.EvalTicks[targetSlot] = nowTick;
                     }
                 }
                 else
                 {
+                    if (targetEntry.UseCachedDecisionOnly)
+                    {
+                        continue;
+                    }
+
                     if (_collectDebugCounters)
                     {
                         _transmitFallbackChecksInWindow++;
                     }
-                    VisibilityEval visibilityEval = EvaluateVisibilitySafe(
+                    VisibilityDecision visibilityDecision = EvaluateVisibilitySafe(
                         viewerSlot,
                         targetSlot,
                         viewerIsBot,
                         config,
                         nowTick,
                         "transmit fallback");
-                    shouldTransmit = ResolveTransmitWithMemory(viewerSlot, targetSlot, visibilityEval, nowTick);
+                    shouldTransmit = ResolveTransmitWithMemory(viewerSlot, targetSlot, visibilityDecision, nowTick);
 
                     // Keep fallback decisions in the snapshot to avoid repeating work in the same tick window.
                     if ((uint)targetSlot < VisibilitySlotCapacity)
@@ -166,7 +203,7 @@ public partial class S2AWH
                     continue;
                 }
 
-                bool removedAny = RemoveTargetPlayerAndWeapons(info, targetEntities);
+                bool removedAny = RemoveTargetTransmitEntities(info, targetEntities);
                 if (_collectDebugCounters)
                 {
                     if (removedAny)
@@ -184,8 +221,10 @@ public partial class S2AWH
         UpdateViewerRayCountOverlays();
     }
 
-    private bool RemoveTargetPlayerAndWeapons(CCheckTransmitInfo info, TargetTransmitEntities targetEntities)
+    private bool RemoveTargetTransmitEntities(CCheckTransmitInfo info, TargetTransmitEntities targetEntities)
     {
+        PrepareTargetTransmitEntitiesForRemoval(targetEntities, Server.TickCount);
+
         int entityCount = targetEntities.Count;
         if (entityCount <= 0)
         {
@@ -229,6 +268,10 @@ public partial class S2AWH
         return removedAny;
     }
 
+    [SuppressMessage(
+        "Design",
+        "CA1031:Do not catch general exception types",
+        Justification = "Weapon service resolution is external/native-facing and must remain resilient.")]
     private bool TryGetTargetTransmitEntities(CCSPlayerController target, int nowTick, out TargetTransmitEntities targetEntities)
     {
         targetEntities = null!;
@@ -251,6 +294,7 @@ public partial class S2AWH
         }
 
         uint pawnHandleRaw = targetPawnEntity.EntityHandle.Raw;
+        uint controllerHandleRaw = target.EntityHandle.Raw;
 
         TargetTransmitEntities? cachedEntities = _targetTransmitEntitiesCache[targetSlot];
         if (cachedEntities == null)
@@ -259,6 +303,10 @@ public partial class S2AWH
             _targetTransmitEntitiesCache[targetSlot] = cachedEntities;
         }
         targetEntities = cachedEntities;
+        targetEntities.LastKnownTeam = target.TeamNum;
+        targetEntities.LastKnownIsBot = target.IsBot;
+        targetEntities.RetainUntilTick = nowTick + HiddenEntityTransitionGraceTicks;
+        targetEntities.ControllerHandleRaw = controllerHandleRaw;
 
         int targetPawnIndex = (int)targetPawnEntity.Index;
         int targetControllerIndex = (int)target.Index;
@@ -269,47 +317,44 @@ public partial class S2AWH
             targetEntities.LastFullRefreshTick = nowTick;
             targetEntities.PawnHandleRaw = pawnHandleRaw;
             targetEntities.Count = 0;
+            targetEntities.OwnedClosureTick = -1;
             AddUniqueEntityHandle(targetEntities, pawnHandleRaw);
 
             try
             {
                 var weaponServices = targetPawnEntity.WeaponServices;
-                if (weaponServices == null)
+                if (weaponServices != null)
                 {
-                    SanitizeTargetEntityList(targetEntities);
-                    targetEntities.SanitizeTick = nowTick;
-                    return true;
-                }
-
-                var activeWeapon = weaponServices.ActiveWeapon;
-                if (TryResolveLiveWeaponEntityHandle(activeWeapon, targetPawnIndex, targetControllerIndex, out uint activeWeaponHandleRaw))
-                {
-                    AddUniqueEntityHandle(targetEntities, activeWeaponHandleRaw);
-                }
-
-                var lastWeapon = weaponServices.LastWeapon;
-                if (TryResolveLiveWeaponEntityHandle(lastWeapon, targetPawnIndex, targetControllerIndex, out uint lastWeaponHandleRaw))
-                {
-                    AddUniqueEntityHandle(targetEntities, lastWeaponHandleRaw);
-                }
-
-                var csWeaponServices = weaponServices.As<CCSPlayer_WeaponServices>();
-                if (csWeaponServices != null)
-                {
-                    var savedWeapon = csWeaponServices.SavedWeapon;
-                    if (TryResolveLiveWeaponEntityHandle(savedWeapon, targetPawnIndex, targetControllerIndex, out uint savedWeaponHandleRaw))
+                    var activeWeapon = weaponServices.ActiveWeapon;
+                    if (TryResolveLiveWeaponEntityHandle(activeWeapon, targetPawnIndex, targetControllerIndex, out uint activeWeaponHandleRaw))
                     {
-                        AddUniqueEntityHandle(targetEntities, savedWeaponHandleRaw);
+                        AddUniqueEntityHandle(targetEntities, activeWeaponHandleRaw);
                     }
-                }
 
-                var myWeapons = weaponServices.MyWeapons;
-                int myWeaponCount = myWeapons.Count;
-                for (int i = 0; i < myWeaponCount; i++)
-                {
-                    if (TryResolveLiveWeaponEntityHandle(myWeapons[i], targetPawnIndex, targetControllerIndex, out uint weaponHandleRaw))
+                    var lastWeapon = weaponServices.LastWeapon;
+                    if (TryResolveLiveWeaponEntityHandle(lastWeapon, targetPawnIndex, targetControllerIndex, out uint lastWeaponHandleRaw))
                     {
-                        AddUniqueEntityHandle(targetEntities, weaponHandleRaw);
+                        AddUniqueEntityHandle(targetEntities, lastWeaponHandleRaw);
+                    }
+
+                    var csWeaponServices = weaponServices.As<CCSPlayer_WeaponServices>();
+                    if (csWeaponServices != null)
+                    {
+                        var savedWeapon = csWeaponServices.SavedWeapon;
+                        if (TryResolveLiveWeaponEntityHandle(savedWeapon, targetPawnIndex, targetControllerIndex, out uint savedWeaponHandleRaw))
+                        {
+                            AddUniqueEntityHandle(targetEntities, savedWeaponHandleRaw);
+                        }
+                    }
+
+                    var myWeapons = weaponServices.MyWeapons;
+                    int myWeaponCount = myWeapons.Count;
+                    for (int i = 0; i < myWeaponCount; i++)
+                    {
+                        if (TryResolveLiveWeaponEntityHandle(myWeapons[i], targetPawnIndex, targetControllerIndex, out uint weaponHandleRaw))
+                        {
+                            AddUniqueEntityHandle(targetEntities, weaponHandleRaw);
+                        }
                     }
                 }
             }
@@ -330,6 +375,7 @@ public partial class S2AWH
                     _hasLoggedWeaponSyncError = true;
                 }
             }
+
         }
 
         if (targetEntities.SanitizeTick != nowTick)
@@ -359,13 +405,23 @@ public partial class S2AWH
 
         if (count >= targetEntities.RawHandles.Length)
         {
-            return; // Safety cap reached for this target.
+            if (targetEntities.RawHandles.Length >= MaxTrackedTransmitEntitiesPerTarget)
+            {
+                return;
+            }
+
+            int newLength = Math.Min(MaxTrackedTransmitEntitiesPerTarget, targetEntities.RawHandles.Length * 2);
+            Array.Resize(ref targetEntities.RawHandles, newLength);
         }
 
         targetEntities.RawHandles[count] = entityHandleRaw;
         targetEntities.Count = count + 1;
     }
 
+    [SuppressMessage(
+        "Design",
+        "CA1031:Do not catch general exception types",
+        Justification = "Weapon entity resolution crosses unstable native boundaries and must stay non-fatal inside transmit filtering.")]
     private static bool TryResolveLiveWeaponEntityHandle(CHandle<CBasePlayerWeapon> weaponHandle, int targetPawnIndex, int targetControllerIndex, out uint entityHandleRaw)
     {
         entityHandleRaw = 0;
@@ -441,7 +497,7 @@ public partial class S2AWH
         for (int i = 0; i < count; i++)
         {
             uint entityHandleRaw = targetEntities.RawHandles[i];
-            if (!TryResolveEntityHandleIndexForTransmit(entityHandleRaw, out _))
+            if (!ShouldKeepTargetEntityHandle(targetEntities, entityHandleRaw))
             {
                 continue;
             }
@@ -450,6 +506,220 @@ public partial class S2AWH
         }
 
         targetEntities.Count = writeIndex;
+    }
+
+    private void PrepareTargetTransmitEntitiesForRemoval(TargetTransmitEntities targetEntities, int nowTick)
+    {
+        bool appendedOwnedClosure = false;
+        if (targetEntities.OwnedClosureTick != nowTick)
+        {
+            AppendOwnedEntityHandleClosure(targetEntities, targetEntities.ControllerHandleRaw, nowTick);
+            targetEntities.OwnedClosureTick = nowTick;
+            appendedOwnedClosure = true;
+        }
+
+        if (appendedOwnedClosure || targetEntities.SanitizeTick != nowTick)
+        {
+            SanitizeTargetEntityList(targetEntities);
+            targetEntities.SanitizeTick = nowTick;
+        }
+    }
+
+    private bool ShouldKeepTargetEntityHandle(TargetTransmitEntities targetEntities, uint entityHandleRaw)
+    {
+        if (!TryResolveEntityHandleIndexForTransmit(entityHandleRaw, out _))
+        {
+            return false;
+        }
+
+        if (entityHandleRaw == targetEntities.PawnHandleRaw)
+        {
+            return true;
+        }
+
+        return TryResolveOwnerChainToTarget(targetEntities, entityHandleRaw);
+    }
+
+    private static bool TryResolveOwnerChainToTarget(TargetTransmitEntities targetEntities, uint entityHandleRaw)
+    {
+        uint currentHandleRaw = entityHandleRaw;
+        for (int depth = 0; depth < 8; depth++)
+        {
+            IntPtr? entityPointer = EntitySystem.GetEntityByHandle(currentHandleRaw);
+            if (!entityPointer.HasValue || entityPointer.Value == IntPtr.Zero)
+            {
+                return false;
+            }
+
+            var entity = new CBaseEntity(entityPointer.Value);
+            if (!entity.IsValid)
+            {
+                return false;
+            }
+
+            var ownerHandle = entity.OwnerEntity;
+            if (!ownerHandle.IsValid)
+            {
+                return false;
+            }
+
+            uint ownerHandleRaw = ownerHandle.Raw;
+            if (ownerHandleRaw == targetEntities.PawnHandleRaw ||
+                ownerHandleRaw == targetEntities.ControllerHandleRaw)
+            {
+                return true;
+            }
+
+            if (ownerHandleRaw == 0 || ownerHandleRaw == currentHandleRaw)
+            {
+                return false;
+            }
+
+            currentHandleRaw = ownerHandleRaw;
+        }
+
+        return false;
+    }
+
+    private void AppendOwnedEntityHandleClosure(TargetTransmitEntities targetEntities, uint extraOwnerHandleRaw, int nowTick)
+    {
+        if (!TryEnsureOwnedEntityBuckets(nowTick))
+        {
+            return;
+        }
+
+        if (extraOwnerHandleRaw != 0 && extraOwnerHandleRaw != uint.MaxValue)
+        {
+            AppendOwnedChildren(targetEntities, extraOwnerHandleRaw);
+        }
+
+        int readIndex = 0;
+        while (readIndex < targetEntities.Count)
+        {
+            AppendOwnedChildren(targetEntities, targetEntities.RawHandles[readIndex++]);
+        }
+    }
+
+    private void AppendOwnedChildren(TargetTransmitEntities targetEntities, uint ownerHandleRaw)
+    {
+        if (!_ownedEntityBuckets.TryGetValue(ownerHandleRaw, out OwnedEntityBucket? bucket) || bucket.Count <= 0)
+        {
+            return;
+        }
+
+        for (int i = 0; i < bucket.Count; i++)
+        {
+            AddUniqueEntityHandle(targetEntities, bucket.RawHandles[i]);
+        }
+    }
+
+    [SuppressMessage(
+        "Design",
+        "CA1031:Do not catch general exception types",
+        Justification = "Entity ownership scans cross native entity state and must fail open on transient issues.")]
+    private bool TryEnsureOwnedEntityBuckets(int nowTick)
+    {
+        if (_ownedEntityBucketsTick == nowTick)
+        {
+            return true;
+        }
+
+        try
+        {
+            _ownedEntityBuckets.Clear();
+
+            foreach (CEntityInstance entityInstance in Utilities.GetAllEntities())
+            {
+                if (entityInstance == null || !entityInstance.IsValid)
+                {
+                    continue;
+                }
+
+                var entity = new CBaseEntity(entityInstance.Handle);
+                if (!entity.IsValid)
+                {
+                    continue;
+                }
+
+                uint entityHandleRaw = entity.EntityHandle.Raw;
+                int entityIndex = (int)(entityHandleRaw & (Utilities.MaxEdicts - 1));
+                if (entityIndex <= 0 || entityIndex >= Utilities.MaxEdicts)
+                {
+                    continue;
+                }
+
+                var ownerHandle = entity.OwnerEntity;
+                if (!ownerHandle.IsValid)
+                {
+                    continue;
+                }
+
+                uint ownerHandleRaw = ownerHandle.Raw;
+                if (ownerHandleRaw == 0 || ownerHandleRaw == entityHandleRaw)
+                {
+                    continue;
+                }
+
+                if (!_ownedEntityBuckets.TryGetValue(ownerHandleRaw, out OwnedEntityBucket? bucket))
+                {
+                    bucket = new OwnedEntityBucket();
+                    _ownedEntityBuckets[ownerHandleRaw] = bucket;
+                }
+
+                AddOwnedEntityBucketHandle(bucket, entityHandleRaw);
+            }
+
+            _hasLoggedOwnedEntityScanError = false;
+            _ownedEntityBucketsTick = nowTick;
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _ownedEntityBucketsTick = -1;
+
+            if (!_hasLoggedOwnedEntityScanError)
+            {
+                WarnLog(
+                    "Could not scan owned entities.",
+                    "A temporary issue prevented S2AWH from gathering player-owned attachments.",
+                    "This tick will fail open and retry automatically."
+                );
+                DebugLog(
+                    "Owned entity scan error detail.",
+                    $"Error: {ex.Message}",
+                    "This message only shows once."
+                );
+                _hasLoggedOwnedEntityScanError = true;
+            }
+
+            return false;
+        }
+    }
+
+    private static void AddOwnedEntityBucketHandle(OwnedEntityBucket bucket, uint entityHandleRaw)
+    {
+        int count = bucket.Count;
+        for (int i = 0; i < count; i++)
+        {
+            if (bucket.RawHandles[i] == entityHandleRaw)
+            {
+                return;
+            }
+        }
+
+        if (count >= bucket.RawHandles.Length)
+        {
+            if (bucket.RawHandles.Length >= MaxTrackedTransmitEntitiesPerTarget)
+            {
+                return;
+            }
+
+            int newLength = Math.Min(MaxTrackedTransmitEntitiesPerTarget, bucket.RawHandles.Length * 2);
+            Array.Resize(ref bucket.RawHandles, newLength);
+        }
+
+        bucket.RawHandles[count] = entityHandleRaw;
+        bucket.Count = count + 1;
     }
 
     private bool TryResolveEntityHandleIndexForTransmit(uint entityHandleRaw, out int entityIndex)

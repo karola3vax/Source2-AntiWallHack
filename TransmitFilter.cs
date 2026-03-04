@@ -29,7 +29,7 @@ internal sealed class TransmitFilter
     /// <summary>
     /// Determines whether the target's data should be transmitted to the viewer
     /// </summary>
-    internal VisibilityEval EvaluateVisibility(
+    internal VisibilityDecision EvaluateVisibility(
         int viewerSlot,
         int targetSlot,
         bool viewerIsBot,
@@ -40,19 +40,19 @@ internal sealed class TransmitFilter
     {
         if ((uint)viewerSlot >= SlotCount || (uint)targetSlot >= SlotCount || viewerSlot == targetSlot)
         {
-            return VisibilityEval.Visible;
+            return new VisibilityDecision(VisibilityEval.Visible);
         }
 
         if (pawnsBySlot[viewerSlot] == null || pawnsBySlot[targetSlot] == null)
         {
-            return VisibilityEval.Visible;
+            return new VisibilityDecision(VisibilityEval.Visible);
         }
 
         if (config.Trace.UseFovCulling)
         {
             if (!IsFov(viewerSlot, targetSlot, config, nowTick, transforms))
             {
-                return VisibilityEval.Hidden;
+                return new VisibilityDecision(VisibilityEval.Hidden);
             }
         }
 
@@ -67,22 +67,29 @@ internal sealed class TransmitFilter
             pawnsBySlot);
         if (losResult == VisibilityEval.Visible)
         {
-            return VisibilityEval.Visible;
+            return new VisibilityDecision(VisibilityEval.Visible);
         }
 
         if (losResult == VisibilityEval.UnknownTransient)
         {
-            return VisibilityEval.UnknownTransient;
+            return new VisibilityDecision(VisibilityEval.UnknownTransient);
         }
 
-        // 2. Check Predictive Visibility (Peek assist)
+        // 2. Jump pop-in assist is mandatory and independent from preload config.
+        bool jumpPeekVisible = _predictor.WillBeVisibleFromJumpPeek(viewerSlot, targetSlot, viewerIsBot, nowTick, transforms, pawnsBySlot);
+        if (jumpPeekVisible)
+        {
+            return new VisibilityDecision(VisibilityEval.Visible, isPredictiveVisible: true);
+        }
+
+        // 3. Check Predictive Visibility (Peek assist)
         bool willBeVisible = _predictor.WillBeVisible(viewerSlot, targetSlot, viewerIsBot, nowTick, transforms, pawnsBySlot);
         if (willBeVisible)
         {
-            return VisibilityEval.Visible;
+            return new VisibilityDecision(VisibilityEval.Visible, isPredictiveVisible: true);
         }
 
-        return VisibilityEval.Hidden;
+        return new VisibilityDecision(VisibilityEval.Hidden);
     }
 
     private bool IsFov(int viewerSlot, int targetSlot, S2AWHConfig config, int nowTick, PlayerTransformSnapshot[] transforms)

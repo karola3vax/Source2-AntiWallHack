@@ -9,10 +9,21 @@ using System.Drawing;
 
 namespace S2AWH;
 
+internal enum ViewerRayTraceStage : byte
+{
+    Los = 0,
+    Micro = 1,
+    Aim = 2,
+    Preload = 3,
+    Jump = 4,
+    Count = 5
+}
+
 [MinimumApiVersion(362)]
 public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
 {
     private const int VisibilitySlotCapacity = 65;
+    private const int ViewerRayTraceStageCount = (int)ViewerRayTraceStage.Count;
     private const float StationarySpeedSqThreshold = 4.0f;
     private const int DebugSummaryIntervalTicks = 4096;
     private const float StartupDigestDelaySeconds = 6.0f;
@@ -25,12 +36,10 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
     private const float MinLocalVerticalCenter = -96.0f;
     private const float MaxLocalVerticalCenter = 192.0f;
     private const float MaxBoundsContainmentShrinkUnits = 8.0f;
-    private const float ViewerRayCountTextHeight = 18.0f;
-    private const float ViewerRayCountTextWorldUnitsPerPx = 0.18f;
-    private const float ViewerRayCountTextFontSize = 22.0f;
-    private static readonly QAngle ViewerRayCountTextAngles = new(0.0f, 0.0f, 0.0f);
-    private static readonly Vector ViewerRayCountTextVelocity = new(0.0f, 0.0f, 0.0f);
-    private static readonly Color ViewerRayCountTextColor = Color.FromArgb(255, 255, 240, 120);
+    private const int ViewerRayCountHudRefreshIntervalTicks = 8;
+    private const int HiddenEntityTransitionGraceTicks = 32;
+    private const int MaxTrackedTransmitEntitiesPerTarget = 192;
+    private const int VisibleReacquireConfirmTicks = 4;
 
     /// <summary>
     /// Holds the set of entity handles (pawn + weapons) belonging to a single target player,
@@ -40,7 +49,12 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
     {
         public int LastFullRefreshTick = -1;
         public int SanitizeTick = -1;
+        public int OwnedClosureTick = -1;
+        public int RetainUntilTick = -1;
+        public int LastKnownTeam;
+        public bool LastKnownIsBot;
         public uint PawnHandleRaw = uint.MaxValue;
+        public uint ControllerHandleRaw = uint.MaxValue;
         public uint[] RawHandles = new uint[64];
         public int Count;
     }
@@ -51,6 +65,12 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
         public bool[] Known = new bool[VisibilitySlotCapacity];
         public uint[] PawnHandles = new uint[VisibilitySlotCapacity];
         public int[] EvalTicks = new int[VisibilitySlotCapacity];
+    }
+
+    private sealed class OwnedEntityBucket
+    {
+        public uint[] RawHandles = new uint[8];
+        public int Count;
     }
 
     private interface ISlotRow
@@ -78,6 +98,18 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
     {
         public bool[] Decisions = new bool[VisibilitySlotCapacity];
         public int[] Ticks = new int[VisibilitySlotCapacity];
+        public bool[] Known = new bool[VisibilitySlotCapacity];
+        public int ActiveCount;
+        int ISlotRow.ActiveCount => ActiveCount;
+    }
+
+    /// <summary>
+    /// Requires a few consecutive visible ticks before a recently hidden target is re-shown,
+    /// reducing rapid hide/unhide churn in the engine transmit path.
+    /// </summary>
+    private sealed class VisibleConfirmRow : ISlotRow
+    {
+        public int[] FirstVisibleTick = new int[VisibilitySlotCapacity];
         public bool[] Known = new bool[VisibilitySlotCapacity];
         public int ActiveCount;
         int ISlotRow.ActiveCount => ActiveCount;
@@ -122,6 +154,11 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
             "S2AWH is using these settings now."
         );
 
+        if (_transmitFilter != null && (!config.Core.Enabled || !config.Diagnostics.DrawAmountOfRayNumber))
+        {
+            ClearViewerRayCountOverlays();
+        }
+
         if (_transmitFilter != null && config.Core.Enabled)
         {
             RebuildVisibilityCacheSnapshot();
@@ -140,6 +177,8 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
     private readonly RevealHoldRow?[] _revealHoldRows = new RevealHoldRow?[VisibilitySlotCapacity];
     // Last stable decision memory: ViewerSlot -> TargetSlot state
     private readonly StableDecisionRow?[] _stableDecisionRows = new StableDecisionRow?[VisibilitySlotCapacity];
+    // Re-show debounce: ViewerSlot -> TargetSlot state
+    private readonly VisibleConfirmRow?[] _visibleConfirmRows = new VisibleConfirmRow?[VisibilitySlotCapacity];
     private int _staggeredViewerOffset;
     private int _ticksSinceInitRetry;
     private bool _hasLoggedWaitingForCapability;
@@ -147,6 +186,7 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
     private bool _hasLoggedPlayerScanError;
     private bool _hasLoggedFilterEvaluationError;
     private bool _hasLoggedWeaponSyncError;
+    private bool _hasLoggedOwnedEntityScanError;
     private int _lastDebugCachePlayerCount;
     private int _ticksSinceLastTransmitReport;
     private int _transmitCallbacksInWindow;
@@ -170,9 +210,11 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
     private bool _cachedLivePlayersValid;
     private readonly bool[] _liveSlotFlags = new bool[VisibilitySlotCapacity];
     private readonly TargetTransmitEntities?[] _targetTransmitEntitiesCache = new TargetTransmitEntities?[VisibilitySlotCapacity];
-    private readonly List<(TargetTransmitEntities Entities, int TargetSlot, int TargetTeam)> _eligibleTargetsWithEntities = new(VisibilitySlotCapacity - 1);
+    private readonly List<(TargetTransmitEntities Entities, int TargetSlot, int TargetTeam, bool UseCachedDecisionOnly)> _eligibleTargetsWithEntities = new(VisibilitySlotCapacity - 1);
     private readonly Dictionary<uint, int> _entityHandleIndexCache = new(256);
+    private readonly Dictionary<uint, OwnedEntityBucket> _ownedEntityBuckets = new(128);
     private int _entityHandleIndexCacheTick = -1;
+    private int _ownedEntityBucketsTick = -1;
     private int _eligibleTargetsWithEntitiesTick = -1;
     private int _roundStartGraceUntilTick;
     private readonly int[] _snapshotTargetSlots = new int[VisibilitySlotCapacity];
@@ -181,10 +223,10 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
     private readonly bool[] _snapshotTargetIsBot = new bool[VisibilitySlotCapacity];
     private readonly int[] _snapshotTargetTeams = new int[VisibilitySlotCapacity];
     private readonly int[] _snapshotStabilizeUntilTickBySlot = new int[VisibilitySlotCapacity];
-    private readonly int[] _viewerRayCountsWorking = new int[VisibilitySlotCapacity];
-    private readonly int[] _viewerRayCountsDisplay = new int[VisibilitySlotCapacity];
-    private readonly int[] _viewerRayCountLastRendered = new int[VisibilitySlotCapacity];
-    private readonly CPointWorldText?[] _viewerRayCountTextBySlot = new CPointWorldText?[VisibilitySlotCapacity];
+    private readonly int[,] _viewerRayCountsWorking = new int[VisibilitySlotCapacity, ViewerRayTraceStageCount];
+    private readonly int[,] _viewerRayCountsDisplay = new int[VisibilitySlotCapacity, ViewerRayTraceStageCount];
+    private readonly int[] _viewerRayCountLastRenderedHashBySlot = new int[VisibilitySlotCapacity];
+    private readonly int[] _viewerRayCountLastHudRefreshTickBySlot = new int[VisibilitySlotCapacity];
     private int _viewerRayCounterTick = -1;
     private bool _viewerRayCountsDisplayDirty;
     internal readonly PlayerTransformSnapshot[] SnapshotTransforms = new PlayerTransformSnapshot[VisibilitySlotCapacity];
@@ -198,6 +240,7 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
         _revealHoldTicks = ConvertRevealHoldSecondsToTicks(S2AWHState.Current.Preload.RevealHoldSeconds);
         _unknownStickyWindowTicks = ConvertUnknownStickySecondsToTicks();
         _collectDebugCounters = S2AWHState.Current.Diagnostics.ShowDebugInfo;
+        ResetViewerRayCountOverlayTracking();
 
         InfoLog(
             "S2AWH is starting up.",
@@ -230,7 +273,15 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
     /// </summary>
     public override void Unload(bool hotReload)
     {
+        ClearViewerRayCountOverlays();
         ClearVisibilityCache();
+
+        _cachedLivePlayers.Clear();
+        _eligibleTargetsWithEntities.Clear();
+        Array.Clear(SnapshotPawns);
+        Array.Clear(SnapshotTransforms);
+        Array.Clear(_targetTransmitEntitiesCache);
+
         _losEvaluator = null;
         _predictor = null;
         _transmitFilter = null;
@@ -296,6 +347,7 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
     private void OnMapEnd()
     {
         _startupDigestQueued = false;
+        ClearViewerRayCountOverlays();
         ClearVisibilityCache();
         DebugLog(
             "Map ended.",
@@ -340,14 +392,13 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
             _visibilityCache[playerSlot] = null;
             _revealHoldRows[playerSlot] = null;
             _stableDecisionRows[playerSlot] = null;
+            _visibleConfirmRows[playerSlot] = null;
             _targetTransmitEntitiesCache[playerSlot] = null;
             SnapshotTransforms[playerSlot] = default;
             SnapshotPawns[playerSlot] = null;
             _liveSlotFlags[playerSlot] = false;
             _snapshotStabilizeUntilTickBySlot[playerSlot] = 0;
-            _viewerRayCountsWorking[playerSlot] = 0;
-            _viewerRayCountsDisplay[playerSlot] = 0;
-            _viewerRayCountLastRendered[playerSlot] = int.MinValue;
+            ClearViewerRayCountSlotState(playerSlot);
             RemoveViewerRayCountOverlay(playerSlot);
 
             for (int i = 0; i < VisibilitySlotCapacity; i++)
@@ -378,6 +429,15 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
                     stableDecision.Ticks[playerSlot] = 0;
                     stableDecision.ActiveCount--;
                     if (stableDecision.ActiveCount <= 0) _stableDecisionRows[i] = null;
+                }
+
+                var visibleConfirm = _visibleConfirmRows[i];
+                if (visibleConfirm != null && (uint)playerSlot < (uint)visibleConfirm.Known.Length && visibleConfirm.Known[playerSlot])
+                {
+                    visibleConfirm.Known[playerSlot] = false;
+                    visibleConfirm.FirstVisibleTick[playerSlot] = 0;
+                    visibleConfirm.ActiveCount--;
+                    if (visibleConfirm.ActiveCount <= 0) _visibleConfirmRows[i] = null;
                 }
             }
         }
@@ -435,6 +495,7 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
         _hasLoggedPlayerScanError = false;
         _hasLoggedFilterEvaluationError = false;
         _hasLoggedWeaponSyncError = false;
+        _hasLoggedOwnedEntityScanError = false;
 
         InfoLog(
             "RayTrace is connected.",
@@ -576,63 +637,16 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
         }, TimerFlags.STOP_ON_MAPCHANGE);
     }
 
-    private static bool IsLivePlayer(CCSPlayerController? player)
-    {
-        if (player == null || !player.IsValid || player.Connected != PlayerConnectedState.PlayerConnected)
-        {
-            return false;
-        }
 
-        return player.PawnIsAlive;
-    }
-
-    private void ClearVisibilityCache()
+    internal void RecordViewerRayTraceAttempt(int viewerSlot, ViewerRayTraceStage stage)
     {
-        Array.Clear(_visibilityCache, 0, _visibilityCache.Length);
-        Array.Clear(_revealHoldRows, 0, _revealHoldRows.Length);
-        Array.Clear(_stableDecisionRows, 0, _stableDecisionRows.Length);
-        Array.Clear(_targetTransmitEntitiesCache, 0, _targetTransmitEntitiesCache.Length);
-        Array.Clear(_snapshotStabilizeUntilTickBySlot, 0, _snapshotStabilizeUntilTickBySlot.Length);
-        _roundStartGraceUntilTick = 0;
-        _losEvaluator?.ClearCaches();
-        _predictor?.ClearCaches();
-        InvalidateLivePlayersCache();
-        _cachedLivePlayers.Clear();
-        _eligibleTargetsWithEntities.Clear();
-        Array.Clear(_liveSlotFlags, 0, _liveSlotFlags.Length);
-        Array.Clear(_viewerRayCountsWorking, 0, _viewerRayCountsWorking.Length);
-        Array.Clear(_viewerRayCountsDisplay, 0, _viewerRayCountsDisplay.Length);
-        Array.Fill(_viewerRayCountLastRendered, int.MinValue);
-        Array.Clear(SnapshotTransforms, 0, SnapshotTransforms.Length);
-        Array.Clear(SnapshotPawns, 0, SnapshotPawns.Length);
-        ClearViewerRayCountOverlays();
-        _viewerRayCounterTick = -1;
-        _viewerRayCountsDisplayDirty = false;
-        _staggeredViewerOffset = 0;
-        _hasLoggedGlobalsNotReady = false;
-        _hasLoggedPlayerScanError = false;
-        _hasLoggedFilterEvaluationError = false;
-        _hasLoggedWeaponSyncError = false;
-        _lastDebugCachePlayerCount = 0;
-        ResetDebugWindowCounters();
-    }
-
-    private static bool IsNearWorldOrigin(float x, float y, float z)
-    {
-        return MathF.Abs(x) <= SnapshotZeroOriginEpsilon &&
-               MathF.Abs(y) <= SnapshotZeroOriginEpsilon &&
-               MathF.Abs(z) <= SnapshotZeroOriginEpsilon;
-    }
-
-    internal void RecordViewerRayTraceAttempt(int viewerSlot)
-    {
-        if ((uint)viewerSlot >= VisibilitySlotCapacity)
+        if ((uint)viewerSlot >= VisibilitySlotCapacity || (int)stage >= ViewerRayTraceStageCount)
         {
             return;
         }
 
         BeginViewerRayCountTick(Server.TickCount);
-        _viewerRayCountsWorking[viewerSlot]++;
+        _viewerRayCountsWorking[viewerSlot, (int)stage]++;
     }
 
     private void BeginViewerRayCountTick(int nowTick)
@@ -644,7 +658,7 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
 
         if (_viewerRayCounterTick >= 0)
         {
-            Array.Copy(_viewerRayCountsWorking, _viewerRayCountsDisplay, VisibilitySlotCapacity);
+            Array.Copy(_viewerRayCountsWorking, _viewerRayCountsDisplay, _viewerRayCountsWorking.Length);
             Array.Clear(_viewerRayCountsWorking, 0, _viewerRayCountsWorking.Length);
             _viewerRayCountsDisplayDirty = true;
         }
@@ -680,77 +694,93 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
                 continue;
             }
 
-            bool allowViewerType = player!.IsBot
-                ? diagnostics.DrawDebugTraceBeamsForBots
-                : diagnostics.DrawDebugTraceBeamsForHumans;
-            if (!allowViewerType)
-            {
-                RemoveViewerRayCountOverlay(slot);
-                continue;
-            }
-
-            int rayCount = _viewerRayCounterTick == Server.TickCount
-                ? _viewerRayCountsWorking[slot]
-                : _viewerRayCountsDisplay[slot];
-            UpdateViewerRayCountOverlay(slot, rayCount, forceRefresh);
+            UpdateViewerRayCountOverlay(slot, forceRefresh);
         }
     }
 
-    private void UpdateViewerRayCountOverlay(int slot, int rayCount, bool forceMessageRefresh)
+    private void UpdateViewerRayCountOverlay(int slot, bool forceMessageRefresh)
     {
-        ref var snapshot = ref SnapshotTransforms[slot];
-        string countText = rayCount.ToString();
-        CPointWorldText? textEntity = _viewerRayCountTextBySlot[slot];
-        bool shouldRecreate = forceMessageRefresh || _viewerRayCountLastRendered[slot] != rayCount;
-        if (shouldRecreate && textEntity != null && textEntity.IsValid)
+        CCSPlayerController? player = Utilities.GetPlayerFromSlot(slot);
+        if (!IsLivePlayer(player))
         {
-            textEntity.Remove();
-            textEntity = null;
-            _viewerRayCountTextBySlot[slot] = null;
-        }
-
-        if (textEntity == null || !textEntity.IsValid)
-        {
-            textEntity = Utilities.CreateEntityByName<CPointWorldText>("point_worldtext");
-            if (textEntity == null || !textEntity.IsValid)
-            {
-                _viewerRayCountTextBySlot[slot] = null;
-                return;
-            }
-
-            textEntity.Enabled = true;
-            textEntity.Fullbright = true;
-            textEntity.DrawBackground = false;
-            textEntity.WorldUnitsPerPx = ViewerRayCountTextWorldUnitsPerPx;
-            textEntity.FontSize = ViewerRayCountTextFontSize;
-            textEntity.DepthOffset = 0.0f;
-            textEntity.Color = ViewerRayCountTextColor;
-            textEntity.JustifyHorizontal = PointWorldTextJustifyHorizontal_t.POINT_WORLD_TEXT_JUSTIFY_HORIZONTAL_CENTER;
-            textEntity.JustifyVertical = PointWorldTextJustifyVertical_t.POINT_WORLD_TEXT_JUSTIFY_VERTICAL_BOTTOM;
-            textEntity.ReorientMode = PointWorldTextReorientMode_t.POINT_WORLD_TEXT_REORIENT_AROUND_UP;
-            textEntity.FontName = "Arial";
-            textEntity.MessageText = countText;
-            textEntity.Teleport(
-                new Vector(snapshot.EyeX, snapshot.EyeY, snapshot.EyeZ + ViewerRayCountTextHeight),
-                ViewerRayCountTextAngles,
-                ViewerRayCountTextVelocity);
-            textEntity.DispatchSpawn();
-            _viewerRayCountLastRendered[slot] = rayCount;
-            _viewerRayCountTextBySlot[slot] = textEntity;
+            RemoveViewerRayCountOverlay(slot);
             return;
         }
 
-        textEntity.Teleport(
-            new Vector(snapshot.EyeX, snapshot.EyeY, snapshot.EyeZ + ViewerRayCountTextHeight),
-            ViewerRayCountTextAngles,
-            ViewerRayCountTextVelocity);
-
-        if (forceMessageRefresh || textEntity.MessageText != countText)
+        string countText = BuildViewerRayCountHudHtml(slot);
+        int textHash = countText.GetHashCode(StringComparison.Ordinal);
+        int nowTick = Server.TickCount;
+        bool shouldRefreshHud = forceMessageRefresh
+            || _viewerRayCountLastRenderedHashBySlot[slot] != textHash
+            || (nowTick - _viewerRayCountLastHudRefreshTickBySlot[slot]) >= ViewerRayCountHudRefreshIntervalTicks;
+        if (!shouldRefreshHud)
         {
-            textEntity.MessageText = countText;
+            return;
         }
 
-        _viewerRayCountLastRendered[slot] = rayCount;
+        player!.PrintToCenterHtml(countText, 1);
+        _viewerRayCountLastRenderedHashBySlot[slot] = textHash;
+        _viewerRayCountLastHudRefreshTickBySlot[slot] = nowTick;
+    }
+
+    private string BuildViewerRayCountHudHtml(int slot)
+    {
+        int los = GetViewerRayStageCount(slot, ViewerRayTraceStage.Los);
+        int micro = GetViewerRayStageCount(slot, ViewerRayTraceStage.Micro);
+        int aim = GetViewerRayStageCount(slot, ViewerRayTraceStage.Aim);
+        int preload = GetViewerRayStageCount(slot, ViewerRayTraceStage.Preload);
+        int jump = GetViewerRayStageCount(slot, ViewerRayTraceStage.Jump);
+        int total = los + micro + aim + preload + jump;
+        return string.Concat(
+            BuildViewerRayStageHtml(ViewerRayTraceStage.Los, los),
+            "&nbsp;",
+            BuildViewerRayStageHtml(ViewerRayTraceStage.Micro, micro),
+            "&nbsp;",
+            BuildViewerRayStageHtml(ViewerRayTraceStage.Aim, aim),
+            "&nbsp;",
+            BuildViewerRayStageHtml(ViewerRayTraceStage.Preload, preload),
+            "&nbsp;",
+            BuildViewerRayStageHtml(ViewerRayTraceStage.Jump, jump),
+            "&nbsp;",
+            BuildViewerRayTotalHtml(total));
+    }
+
+    private static string BuildViewerRayStageHtml(ViewerRayTraceStage stage, int count)
+    {
+        string stageLabel = GetViewerRayTraceStageCompactLabel(stage);
+        string color = ToHtmlColorHex(VisibilityGeometry.GetViewerRayCounterColor(stage));
+        return $"<b><font color='{color}'>{stageLabel}:{count}</font></b>";
+    }
+
+    private static string BuildViewerRayTotalHtml(int total)
+    {
+        return $"<b><font color='#FFF078'>T:{total}</font></b>";
+    }
+
+    private static string GetViewerRayTraceStageCompactLabel(ViewerRayTraceStage stage)
+    {
+        return stage switch
+        {
+            ViewerRayTraceStage.Los => "L",
+            ViewerRayTraceStage.Micro => "M",
+            ViewerRayTraceStage.Aim => "A",
+            ViewerRayTraceStage.Preload => "P",
+            ViewerRayTraceStage.Jump => "J",
+            _ => "R"
+        };
+    }
+
+    private static string ToHtmlColorHex(Color color)
+    {
+        return $"#{color.R:X2}{color.G:X2}{color.B:X2}";
+    }
+
+    private int GetViewerRayStageCount(int slot, ViewerRayTraceStage stage)
+    {
+        int stageIndex = (int)stage;
+        return _viewerRayCounterTick == Server.TickCount
+            ? _viewerRayCountsWorking[slot, stageIndex]
+            : _viewerRayCountsDisplay[slot, stageIndex];
     }
 
     private void ClearViewerRayCountOverlays()
@@ -761,6 +791,12 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
         }
     }
 
+    private void ResetViewerRayCountOverlayTracking()
+    {
+        Array.Fill(_viewerRayCountLastRenderedHashBySlot, int.MinValue);
+        Array.Fill(_viewerRayCountLastHudRefreshTickBySlot, int.MinValue);
+    }
+
     private void RemoveViewerRayCountOverlay(int slot)
     {
         if ((uint)slot >= VisibilitySlotCapacity)
@@ -768,769 +804,24 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
             return;
         }
 
-        CPointWorldText? textEntity = _viewerRayCountTextBySlot[slot];
-        if (textEntity != null && textEntity.IsValid)
-        {
-            textEntity.Remove();
-        }
-
-        _viewerRayCountTextBySlot[slot] = null;
-        _viewerRayCountLastRendered[slot] = int.MinValue;
+        _viewerRayCountLastRenderedHashBySlot[slot] = int.MinValue;
+        _viewerRayCountLastHudRefreshTickBySlot[slot] = int.MinValue;
     }
 
-    private static bool TryGetLocalBoundsCandidate(
-        Vector minsWorldOrLocal,
-        Vector maxsWorldOrLocal,
-        float originX,
-        float originY,
-        float originZ,
-        float referenceMinX,
-        float referenceMinY,
-        float referenceMinZ,
-        float referenceMaxX,
-        float referenceMaxY,
-        float referenceMaxZ,
-        out float outMinX,
-        out float outMinY,
-        out float outMinZ,
-        out float outMaxX,
-        out float outMaxY,
-        out float outMaxZ)
+    private void ClearViewerRayCountSlotState(int slot)
     {
-        outMinX = 0; outMinY = 0; outMinZ = 0; outMaxX = 0; outMaxY = 0; outMaxZ = 0;
-
-        if (minsWorldOrLocal == null || maxsWorldOrLocal == null)
-            return false;
-
-        float rawMinX = minsWorldOrLocal.X;
-        float rawMinY = minsWorldOrLocal.Y;
-        float rawMinZ = minsWorldOrLocal.Z;
-        float rawMaxX = maxsWorldOrLocal.X;
-        float rawMaxY = maxsWorldOrLocal.Y;
-        float rawMaxZ = maxsWorldOrLocal.Z;
-
-        bool hasRawLocal = TryScoreLocalBoundsCandidate(
-            rawMinX,
-            rawMinY,
-            rawMinZ,
-            rawMaxX,
-            rawMaxY,
-            rawMaxZ,
-            referenceMinX,
-            referenceMinY,
-            referenceMinZ,
-            referenceMaxX,
-            referenceMaxY,
-            referenceMaxZ,
-            out float rawLocalScore);
-
-        bool hasWorldShifted = TryScoreLocalBoundsCandidate(
-            rawMinX - originX,
-            rawMinY - originY,
-            rawMinZ - originZ,
-            rawMaxX - originX,
-            rawMaxY - originY,
-            rawMaxZ - originZ,
-            referenceMinX,
-            referenceMinY,
-            referenceMinZ,
-            referenceMaxX,
-            referenceMaxY,
-            referenceMaxZ,
-            out float worldShiftedScore);
-
-        if (!hasRawLocal && !hasWorldShifted)
+        if ((uint)slot >= VisibilitySlotCapacity)
         {
-            return false;
+            return;
         }
 
-        if (hasRawLocal && (!hasWorldShifted || rawLocalScore <= worldShiftedScore))
+        for (int stageIndex = 0; stageIndex < ViewerRayTraceStageCount; stageIndex++)
         {
-            outMinX = rawMinX;
-            outMinY = rawMinY;
-            outMinZ = rawMinZ;
-            outMaxX = rawMaxX;
-            outMaxY = rawMaxY;
-            outMaxZ = rawMaxZ;
-            return true;
+            _viewerRayCountsWorking[slot, stageIndex] = 0;
+            _viewerRayCountsDisplay[slot, stageIndex] = 0;
         }
 
-        outMinX = rawMinX - originX;
-        outMinY = rawMinY - originY;
-        outMinZ = rawMinZ - originZ;
-        outMaxX = rawMaxX - originX;
-        outMaxY = rawMaxY - originY;
-        outMaxZ = rawMaxZ - originZ;
-        return true;
+        _viewerRayCountLastRenderedHashBySlot[slot] = int.MinValue;
+        _viewerRayCountLastHudRefreshTickBySlot[slot] = int.MinValue;
     }
-
-    private static bool TryScoreLocalBoundsCandidate(
-        float minX,
-        float minY,
-        float minZ,
-        float maxX,
-        float maxY,
-        float maxZ,
-        float referenceMinX,
-        float referenceMinY,
-        float referenceMinZ,
-        float referenceMaxX,
-        float referenceMaxY,
-        float referenceMaxZ,
-        out float score)
-    {
-        score = 0.0f;
-
-        float extentX = maxX - minX;
-        float extentY = maxY - minY;
-        float extentZ = maxZ - minZ;
-        if (extentX <= 0.0f || extentY <= 0.0f || extentZ <= 0.0f ||
-            extentX > MaxBoundsExtentUnits || extentY > MaxBoundsExtentUnits || extentZ > MaxBoundsExtentUnits)
-        {
-            return false;
-        }
-
-        if (MathF.Abs(minX) > MaxLocalBoundsCoordinateUnits || MathF.Abs(maxX) > MaxLocalBoundsCoordinateUnits ||
-            MathF.Abs(minY) > MaxLocalBoundsCoordinateUnits || MathF.Abs(maxY) > MaxLocalBoundsCoordinateUnits ||
-            MathF.Abs(minZ) > MaxLocalBoundsCoordinateUnits || MathF.Abs(maxZ) > MaxLocalBoundsCoordinateUnits)
-        {
-            return false;
-        }
-
-        float centerX = (minX + maxX) * 0.5f;
-        float centerY = (minY + maxY) * 0.5f;
-        float centerZ = (minZ + maxZ) * 0.5f;
-        if (MathF.Abs(centerX) > MaxLocalHorizontalCenterOffset ||
-            MathF.Abs(centerY) > MaxLocalHorizontalCenterOffset ||
-            centerZ < MinLocalVerticalCenter ||
-            centerZ > MaxLocalVerticalCenter)
-        {
-            return false;
-        }
-
-        float referenceExtentX = referenceMaxX - referenceMinX;
-        float referenceExtentY = referenceMaxY - referenceMinY;
-        float referenceExtentZ = referenceMaxZ - referenceMinZ;
-        float referenceCenterX = (referenceMinX + referenceMaxX) * 0.5f;
-        float referenceCenterY = (referenceMinY + referenceMaxY) * 0.5f;
-        float referenceCenterZ = (referenceMinZ + referenceMaxZ) * 0.5f;
-
-        float centerDelta =
-            MathF.Abs(centerX - referenceCenterX) +
-            MathF.Abs(centerY - referenceCenterY) +
-            MathF.Abs(centerZ - referenceCenterZ);
-        float extentDelta =
-            MathF.Abs(extentX - referenceExtentX) +
-            MathF.Abs(extentY - referenceExtentY) +
-            MathF.Abs(extentZ - referenceExtentZ);
-        float containmentShrink =
-            MathF.Max(0.0f, minX - referenceMinX) +
-            MathF.Max(0.0f, minY - referenceMinY) +
-            MathF.Max(0.0f, minZ - referenceMinZ) +
-            MathF.Max(0.0f, referenceMaxX - maxX) +
-            MathF.Max(0.0f, referenceMaxY - maxY) +
-            MathF.Max(0.0f, referenceMaxZ - maxZ);
-        if (containmentShrink > MaxBoundsContainmentShrinkUnits)
-        {
-            return false;
-        }
-
-        float absoluteCoordinatePenalty =
-            MathF.Abs(minX) + MathF.Abs(minY) + MathF.Abs(minZ) +
-            MathF.Abs(maxX) + MathF.Abs(maxY) + MathF.Abs(maxZ);
-
-        score = (centerDelta * 4.0f) + extentDelta + (containmentShrink * 8.0f) + (absoluteCoordinatePenalty * 0.01f);
-        return true;
-    }
-
-    private static int ConvertSecondsToTicks(float seconds)
-    {
-        if (seconds <= 0.0f)
-        {
-            return 0;
-        }
-
-        return Math.Max(1, (int)Math.Ceiling(seconds / Server.TickInterval));
-    }
-
-    private bool IsRoundStartGraceActive(int nowTick)
-    {
-        return nowTick < _roundStartGraceUntilTick;
-    }
-
-    private void InvalidateLivePlayersCache()
-    {
-        _cachedLivePlayersTick = -1;
-        _cachedLivePlayersValid = false;
-        Array.Clear(_liveSlotFlags, 0, _liveSlotFlags.Length);
-        _entityHandleIndexCacheTick = -1;
-        _entityHandleIndexCache.Clear();
-        _eligibleTargetsWithEntitiesTick = -1;
-    }
-
-    private void ResetDebugWindowCounters()
-    {
-        _ticksSinceLastTransmitReport = 0;
-        _transmitCallbacksInWindow = 0;
-        _transmitHiddenEntitiesInWindow = 0;
-        _transmitFallbackChecksInWindow = 0;
-        _transmitRemovalNoEffectInWindow = 0;
-        _holdRefreshInWindow = 0;
-        _holdHitKeepAliveInWindow = 0;
-        _holdExpiredInWindow = 0;
-        _unknownEvalInWindow = 0;
-        _unknownStickyHitInWindow = 0;
-        _unknownHoldHitInWindow = 0;
-        _unknownFailOpenInWindow = 0;
-        _unknownFromExceptionInWindow = 0;
-    }
-
-
-    private bool RebuildVisibilityCacheSnapshot()
-    {
-        if (_transmitFilter == null)
-        {
-            return false;
-        }
-
-        int nowTick = Server.TickCount;
-        if (!TryGetLivePlayers(nowTick, out var validPlayers))
-        {
-            return false;
-        }
-
-        var config = S2AWHState.Current;
-        int playerCount = validPlayers.Count;
-        if (playerCount > VisibilitySlotCapacity)
-        {
-            playerCount = VisibilitySlotCapacity;
-        }
-
-        // Live slots are rewritten below and dead slots are excluded by _liveSlotFlags/validPlayers.
-        // Avoid full-array clears every rebuild tick to keep the snapshot pass cheaper.
-
-        // Snapshot per-target metadata once per rebuild pass to avoid O(N^2) property reads.
-        for (int i = 0; i < playerCount; i++)
-        {
-            var target = validPlayers[i];
-            int slot = target.Slot;
-            _snapshotTargetSlots[i] = slot;
-            _snapshotTargetPawnHandles[i] = 0;
-            _snapshotTargetStationary[i] = false;
-            _snapshotTargetIsBot[i] = target.IsBot;
-            _snapshotTargetTeams[i] = target.TeamNum;
-
-            var targetCsPawn = target.PlayerPawn.Value;
-            var targetPawnEntity = (CBasePlayerPawn?)targetCsPawn ?? target.Pawn.Value;
-            if ((uint)slot < VisibilitySlotCapacity)
-            {
-                ref var t = ref SnapshotTransforms[slot];
-                t = default;
-
-                if (targetPawnEntity != null && targetPawnEntity.IsValid)
-                {
-                    var origin = targetPawnEntity.AbsOrigin;
-                    if (origin == null)
-                    {
-                        SnapshotPawns[slot] = null;
-                        continue;
-                    }
-
-                    t.OriginX = origin.X;
-                    t.OriginY = origin.Y;
-                    t.OriginZ = origin.Z;
-
-                    if (nowTick < _snapshotStabilizeUntilTickBySlot[slot] &&
-                        IsNearWorldOrigin(t.OriginX, t.OriginY, t.OriginZ))
-                    {
-                        SnapshotPawns[slot] = null;
-                        continue;
-                    }
-
-                    SnapshotPawns[slot] = targetPawnEntity;
-                    _snapshotTargetPawnHandles[i] = targetPawnEntity.EntityHandle.Raw;
-
-                    var tVel = targetPawnEntity.AbsVelocity;
-                    if (tVel != null)
-                    {
-                        t.VelocityX = tVel.X;
-                        t.VelocityY = tVel.Y;
-                        t.VelocityZ = tVel.Z;
-                    }
-                    else
-                    {
-                        t.VelocityX = 0.0f;
-                        t.VelocityY = 0.0f;
-                        t.VelocityZ = 0.0f;
-                    }
-
-                    _snapshotTargetStationary[i] =
-                        (t.VelocityX * t.VelocityX + t.VelocityY * t.VelocityY + t.VelocityZ * t.VelocityZ) < StationarySpeedSqThreshold;
-
-                    var collision = targetPawnEntity.Collision;
-                    if (collision?.Mins == null || collision.Maxs == null)
-                    {
-                        SnapshotPawns[slot] = null;
-                        _snapshotTargetPawnHandles[i] = 0;
-                        continue;
-                    }
-
-                    var mins = collision.Mins;
-                    var maxs = collision.Maxs;
-                    float minsX = mins.X;
-                    float minsY = mins.Y;
-                    float minsZ = mins.Z;
-                    float maxsX = maxs.X;
-                    float maxsY = maxs.Y;
-                    float maxsZ = maxs.Z;
-
-                    float mergedMinX = minsX;
-                    float mergedMinY = minsY;
-                    float mergedMinZ = minsZ;
-                    float mergedMaxX = maxsX;
-                    float mergedMaxY = maxsY;
-                    float mergedMaxZ = maxsZ;
-                    float referenceMinX = minsX;
-                    float referenceMinY = minsY;
-                    float referenceMinZ = minsZ;
-                    float referenceMaxX = maxsX;
-                    float referenceMaxY = maxsY;
-                    float referenceMaxZ = maxsZ;
-
-                    var surroundingMins = collision.SurroundingMins;
-                    var surroundingMaxs = collision.SurroundingMaxs;
-                    if (TryGetLocalBoundsCandidate(
-                            surroundingMins,
-                            surroundingMaxs,
-                            t.OriginX,
-                            t.OriginY,
-                            t.OriginZ,
-                            referenceMinX,
-                            referenceMinY,
-                            referenceMinZ,
-                            referenceMaxX,
-                            referenceMaxY,
-                            referenceMaxZ,
-                            out float surroundingLocalMinX,
-                            out float surroundingLocalMinY,
-                            out float surroundingLocalMinZ,
-                            out float surroundingLocalMaxX,
-                            out float surroundingLocalMaxY,
-                            out float surroundingLocalMaxZ))
-                    {
-                        mergedMinX = MathF.Min(mergedMinX, surroundingLocalMinX);
-                        mergedMinY = MathF.Min(mergedMinY, surroundingLocalMinY);
-                        mergedMinZ = MathF.Min(mergedMinZ, surroundingLocalMinZ);
-                        mergedMaxX = MathF.Max(mergedMaxX, surroundingLocalMaxX);
-                        mergedMaxY = MathF.Max(mergedMaxY, surroundingLocalMaxY);
-                        mergedMaxZ = MathF.Max(mergedMaxZ, surroundingLocalMaxZ);
-                    }
-
-                    var specifiedSurroundingMins = collision.SpecifiedSurroundingMins;
-                    var specifiedSurroundingMaxs = collision.SpecifiedSurroundingMaxs;
-                    if (TryGetLocalBoundsCandidate(
-                            specifiedSurroundingMins,
-                            specifiedSurroundingMaxs,
-                            t.OriginX,
-                            t.OriginY,
-                            t.OriginZ,
-                            referenceMinX,
-                            referenceMinY,
-                            referenceMinZ,
-                            referenceMaxX,
-                            referenceMaxY,
-                            referenceMaxZ,
-                            out float specifiedLocalMinX,
-                            out float specifiedLocalMinY,
-                            out float specifiedLocalMinZ,
-                            out float specifiedLocalMaxX,
-                            out float specifiedLocalMaxY,
-                            out float specifiedLocalMaxZ))
-                    {
-                        mergedMinX = MathF.Min(mergedMinX, specifiedLocalMinX);
-                        mergedMinY = MathF.Min(mergedMinY, specifiedLocalMinY);
-                        mergedMinZ = MathF.Min(mergedMinZ, specifiedLocalMinZ);
-                        mergedMaxX = MathF.Max(mergedMaxX, specifiedLocalMaxX);
-                        mergedMaxY = MathF.Max(mergedMaxY, specifiedLocalMaxY);
-                        mergedMaxZ = MathF.Max(mergedMaxZ, specifiedLocalMaxZ);
-                    }
-
-                    if (targetPawnEntity is CBaseModelEntity targetModelEntity)
-                    {
-                        float hitboxExpandRadius = targetModelEntity.CHitboxComponent.BoundsExpandRadius;
-                        if (hitboxExpandRadius > 0.0f && hitboxExpandRadius <= 32.0f)
-                        {
-                            mergedMinX -= hitboxExpandRadius;
-                            mergedMinY -= hitboxExpandRadius;
-                            mergedMinZ -= hitboxExpandRadius;
-                            mergedMaxX += hitboxExpandRadius;
-                            mergedMaxY += hitboxExpandRadius;
-                            mergedMaxZ += hitboxExpandRadius;
-                        }
-                    }
-
-                    minsX = mergedMinX;
-                    minsY = mergedMinY;
-                    minsZ = mergedMinZ;
-                    maxsX = mergedMaxX;
-                    maxsY = mergedMaxY;
-                    maxsZ = mergedMaxZ;
-
-                    t.MinsX = minsX;
-                    t.MinsY = minsY;
-                    t.MinsZ = minsZ;
-                    t.MaxsX = maxsX;
-                    t.MaxsY = maxsY;
-                    t.MaxsZ = maxsZ;
-                    t.CenterX = (minsX + maxsX) * 0.5f;
-                    t.CenterY = (minsY + maxsY) * 0.5f;
-                    t.CenterZ = (minsZ + maxsZ) * 0.5f;
-
-                    var viewOffset = targetPawnEntity.ViewOffset;
-                    if (viewOffset != null)
-                    {
-                        t.ViewOffsetX = viewOffset.X;
-                        t.ViewOffsetY = viewOffset.Y;
-                        t.ViewOffsetZ = viewOffset.Z;
-                    }
-                    else
-                    {
-                        t.ViewOffsetX = 0;
-                        t.ViewOffsetY = 0;
-                        t.ViewOffsetZ = 64.0f;
-                    }
-
-                    t.EyeAnglesPitch = 0.0f;
-                    t.EyeAnglesYaw = 0.0f;
-                    t.FovNormalX = 1.0f;
-                    t.FovNormalY = 0.0f;
-                    t.FovNormalZ = 0.0f;
-
-                    var angles = targetCsPawn?.EyeAngles;
-                    if (angles != null)
-                    {
-                        t.EyeAnglesPitch = angles.X;
-                        t.EyeAnglesYaw = angles.Y;
-
-                        float pitchRad = angles.X * MathF.PI / 180.0f;
-                        float yawRad = angles.Y * MathF.PI / 180.0f;
-                        (float sinPitch, float cosPitch) = MathF.SinCos(pitchRad);
-                        (float sinYaw, float cosYaw) = MathF.SinCos(yawRad);
-
-                        t.FovNormalX = cosPitch * cosYaw;
-                        t.FovNormalY = cosPitch * sinYaw;
-                        t.FovNormalZ = -sinPitch;
-                    }
-
-                    // Fallback eye position: Origin + ViewOffset
-                    t.EyeX = t.OriginX + t.ViewOffsetX;
-                    t.EyeY = t.OriginY + t.ViewOffsetY;
-                    t.EyeZ = t.OriginZ + t.ViewOffsetZ;
-                    t.IsValid = true;
-                }
-                else
-                {
-                    SnapshotPawns[slot] = null;
-                }
-            }
-        }
-
-        // Count eligible viewers (respects BotsDoLOS setting).
-        int eligibleViewerCount = 0;
-        for (int i = 0; i < playerCount; i++)
-        {
-            if (!validPlayers[i].IsBot || config.Visibility.BotsDoLOS)
-            {
-                eligibleViewerCount++;
-            }
-        }
-
-        if (eligibleViewerCount == 0)
-        {
-            _staggeredViewerOffset = 0;
-            return true;
-        }
-
-        // Staggered batching: spread viewers across UpdateFrequencyTicks.
-        // For 20 eligible viewers with UpdateFrequencyTicks=2: process 10 per tick.
-        int updateTicks = Math.Max(1, config.Core.UpdateFrequencyTicks);
-        int viewersPerTick = (eligibleViewerCount + updateTicks - 1) / updateTicks;
-
-        if (_staggeredViewerOffset >= eligibleViewerCount)
-        {
-            _staggeredViewerOffset = 0;
-        }
-
-        int processedEligible = 0;
-        int currentEligibleIndex = 0;
-
-        for (int viewerIndex = 0; viewerIndex < playerCount && processedEligible < viewersPerTick; viewerIndex++)
-        {
-            var viewer = validPlayers[viewerIndex];
-            bool viewerIsBot = viewer.IsBot;
-            if (viewerIsBot && !config.Visibility.BotsDoLOS)
-            {
-                continue;
-            }
-
-            if (currentEligibleIndex < _staggeredViewerOffset)
-            {
-                currentEligibleIndex++;
-                continue;
-            }
-
-            currentEligibleIndex++;
-            processedEligible++;
-
-            int viewerSlot = viewer.Slot;
-            ViewerVisibilityRow? visibilityByTargetSlot = null;
-            if ((uint)viewerSlot < VisibilitySlotCapacity)
-            {
-                visibilityByTargetSlot = _visibilityCache[viewerSlot];
-                if (visibilityByTargetSlot == null)
-                {
-                    visibilityByTargetSlot = new ViewerVisibilityRow();
-                    _visibilityCache[viewerSlot] = visibilityByTargetSlot;
-                }
-            }
-            else
-            {
-                continue; // invalid slot
-            }
-
-            // Stationary-Visible optimization: if the viewer isn't moving, we can reuse
-            // cached Visible decisions for targets that also aren't moving. This skips
-            // expensive LOS evaluation entirely for stationary pairs (buy time, holds).
-            // Safe: keeping Visible is the optimistic direction (never hides visible players).
-            ref var viewerSnapshot = ref SnapshotTransforms[viewerSlot];
-            bool viewerStationary =
-                viewerSnapshot.IsValid &&
-                (viewerSnapshot.VelocityX * viewerSnapshot.VelocityX +
-                 viewerSnapshot.VelocityY * viewerSnapshot.VelocityY +
-                 viewerSnapshot.VelocityZ * viewerSnapshot.VelocityZ) < StationarySpeedSqThreshold;
-            int viewerTeam = viewer.TeamNum;
-
-            for (int targetIndex = 0; targetIndex < playerCount; targetIndex++)
-            {
-                if (targetIndex == viewerIndex)
-                {
-                    continue;
-                }
-
-                int targetSlot = _snapshotTargetSlots[targetIndex];
-                if ((uint)targetSlot < (uint)visibilityByTargetSlot.Decisions.Length)
-                {
-                    uint currentPawnHandle = _snapshotTargetPawnHandles[targetIndex];
-
-                    // Always-transmit fast paths that do not require LOS/predictor work.
-                    if (!config.Visibility.IncludeBots && _snapshotTargetIsBot[targetIndex])
-                    {
-                        visibilityByTargetSlot.Decisions[targetSlot] = true;
-                        visibilityByTargetSlot.Known[targetSlot] = true;
-                        visibilityByTargetSlot.PawnHandles[targetSlot] = currentPawnHandle;
-                        visibilityByTargetSlot.EvalTicks[targetSlot] = nowTick;
-                        continue;
-                    }
-
-                    if (!config.Visibility.IncludeTeammates && _snapshotTargetTeams[targetIndex] == viewerTeam)
-                    {
-                        visibilityByTargetSlot.Decisions[targetSlot] = true;
-                        visibilityByTargetSlot.Known[targetSlot] = true;
-                        visibilityByTargetSlot.PawnHandles[targetSlot] = currentPawnHandle;
-                        visibilityByTargetSlot.EvalTicks[targetSlot] = nowTick;
-                        continue;
-                    }
-
-                    // Reuse Visible decision if both are stationary and same pawn.
-                    // PawnHandle guard prevents stale reuse across player slot changes.
-                    if (viewerStationary &&
-                        visibilityByTargetSlot.Known[targetSlot] &&
-                        visibilityByTargetSlot.Decisions[targetSlot] &&
-                        currentPawnHandle != 0 &&
-                        visibilityByTargetSlot.PawnHandles[targetSlot] == currentPawnHandle)
-                    {
-                        if (_snapshotTargetStationary[targetIndex])
-                        {
-                            continue; // Reuse cached Visible - both stationary, same pawn.
-                        }
-                    }
-
-                    if (visibilityByTargetSlot.Known[targetSlot] &&
-                        visibilityByTargetSlot.EvalTicks[targetSlot] == nowTick &&
-                        currentPawnHandle != 0 &&
-                        visibilityByTargetSlot.PawnHandles[targetSlot] == currentPawnHandle)
-                    {
-                        continue; // Reuse decision already computed earlier this tick (e.g. transmit fallback path).
-                    }
-
-                    VisibilityEval visibilityEval = EvaluateVisibilitySafe(
-                        viewerSlot,
-                        targetSlot,
-                        viewerIsBot,
-                        config,
-                        nowTick,
-                        "cache rebuild");
-                    visibilityByTargetSlot.Decisions[targetSlot] = ResolveTransmitWithMemory(viewerSlot, targetSlot, visibilityEval, nowTick);
-                    visibilityByTargetSlot.Known[targetSlot] = true;
-                    visibilityByTargetSlot.PawnHandles[targetSlot] = currentPawnHandle;
-                    visibilityByTargetSlot.EvalTicks[targetSlot] = nowTick;
-                }
-            }
-        }
-
-        // Check if this batch completed a full cycle through all viewers.
-        bool isFullCycleComplete = (_staggeredViewerOffset + processedEligible) >= eligibleViewerCount;
-
-        if (isFullCycleComplete)
-        {
-            // Full cycle complete: purge stale viewer rows from cached state.
-            PurgeInactiveViewerRows();
-            _staggeredViewerOffset = 0;
-        }
-        else
-        {
-            _staggeredViewerOffset += processedEligible;
-        }
-
-        if (isFullCycleComplete && _collectDebugCounters && _lastDebugCachePlayerCount != validPlayers.Count)
-        {
-            DebugLog(
-                "Player count changed.",
-                $"{validPlayers.Count} alive players, checking {viewersPerTick} per tick.",
-                "Workload is spread evenly across ticks."
-            );
-            _lastDebugCachePlayerCount = validPlayers.Count;
-        }
-
-        return true;
-    }
-
-
-    private VisibilityEval EvaluateVisibilitySafe(
-        int viewerSlot,
-        int targetSlot,
-        bool viewerIsBot,
-        S2AWHConfig config,
-        int nowTick,
-        string phase)
-    {
-        if (_transmitFilter == null)
-        {
-            return VisibilityEval.UnknownTransient;
-        }
-
-        try
-        {
-            return _transmitFilter.EvaluateVisibility(
-                viewerSlot,
-                targetSlot,
-                viewerIsBot,
-                nowTick,
-                config,
-                SnapshotTransforms,
-                SnapshotPawns);
-        }
-        catch (Exception ex)
-        {
-            if (_collectDebugCounters)
-            {
-                _unknownFromExceptionInWindow++;
-            }
-
-            if (!_hasLoggedFilterEvaluationError)
-            {
-                WarnLog(
-                    "A visibility check had an error.",
-                    "A temporary issue occurred while checking if a player is visible.",
-                    "S2AWH handled it safely - no crash, no impact."
-                );
-                DebugLog(
-                    "Visibility error detail.",
-                    $"Phase: {phase}. Pair: {viewerSlot}->{targetSlot}. Error: {ex.Message}",
-                    "This message only shows once."
-                );
-                _hasLoggedFilterEvaluationError = true;
-            }
-
-            return VisibilityEval.UnknownTransient;
-        }
-    }
-
-    private bool TryGetLivePlayers(int nowTick, out List<CCSPlayerController> livePlayers)
-    {
-        if (_cachedLivePlayersTick == nowTick)
-        {
-            livePlayers = _cachedLivePlayers;
-            return _cachedLivePlayersValid;
-        }
-
-        _cachedLivePlayersTick = nowTick;
-        _cachedLivePlayers.Clear();
-        _cachedLivePlayersValid = false;
-
-        try
-        {
-            Array.Clear(_liveSlotFlags, 0, _liveSlotFlags.Length);
-
-            int maxPlayers = Math.Clamp(Server.MaxPlayers, 0, VisibilitySlotCapacity - 1);
-            for (int slot = 0; slot < maxPlayers; slot++)
-            {
-                var player = Utilities.GetPlayerFromSlot(slot);
-                if (IsLivePlayer(player))
-                {
-                    _cachedLivePlayers.Add(player!);
-                    _liveSlotFlags[slot] = true;
-                }
-            }
-
-            _hasLoggedGlobalsNotReady = false;
-            _hasLoggedPlayerScanError = false;
-            _cachedLivePlayersValid = true;
-            livePlayers = _cachedLivePlayers;
-            return _cachedLivePlayersValid;
-        }
-        catch (NativeException ex) when (ex.Message.Contains("Global Variables not initialized yet.", StringComparison.OrdinalIgnoreCase))
-        {
-            if (!_hasLoggedGlobalsNotReady)
-            {
-                WarnLog(
-                    "Server is still loading.",
-                    "Player data isn't available yet.",
-                    "S2AWH will start automatically once the server is ready."
-                );
-                _hasLoggedGlobalsNotReady = true;
-            }
-
-            _cachedLivePlayers.Clear();
-            _cachedLivePlayersValid = false;
-            Array.Clear(_liveSlotFlags, 0, _liveSlotFlags.Length);
-            livePlayers = _cachedLivePlayers;
-            return false;
-        }
-        catch (Exception ex)
-        {
-            if (!_hasLoggedPlayerScanError)
-            {
-                WarnLog(
-                    "Could not read player list.",
-                    "A temporary issue prevented reading who is alive.",
-                    "S2AWH skipped this tick and will retry."
-                );
-                DebugLog(
-                    "Player scan error detail.",
-                    $"Error: {ex.Message}",
-                    "This message only shows once."
-                );
-                _hasLoggedPlayerScanError = true;
-            }
-
-            _cachedLivePlayers.Clear();
-            _cachedLivePlayersValid = false;
-            Array.Clear(_liveSlotFlags, 0, _liveSlotFlags.Length);
-            livePlayers = _cachedLivePlayers;
-            return false;
-        }
-    }
-
-
 }

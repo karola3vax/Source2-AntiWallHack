@@ -20,8 +20,8 @@ internal sealed class LosEvaluator
         (1.0f, 0.75f),   // upper-right shoulder/arm side
         (-1.0f, 0.0f),   // mid-left arm/torso side
         (1.0f, 0.0f),    // mid-right arm/torso side
-        (-1.0f, -0.90f), // lower-left leg/foot side
-        (1.0f, -0.90f)   // lower-right leg/foot side
+        (0.0f, -0.90f),  // lower center leg/foot
+        (0.0f, 1.0f)     // artificial overhead fallback (target eye + configurable absolute offset)
     };
     private static readonly (float XFactor, float YFactor)[] MicroHullCapExtremityPattern =
     {
@@ -32,15 +32,13 @@ internal sealed class LosEvaluator
     };
     private static readonly float[] MicroHullSlitBandLateralPattern =
     {
-        -0.95f,
-        0.0f,
-        0.95f
+        -0.85f,
+        0.85f
     };
     private static readonly float[] MicroHullSlitBandVerticalPattern =
     {
-        0.55f,  // upper arm / shoulder band
-        0.05f,  // forearm / chest / waist band
-        -0.55f  // hip / knee / lower leg band
+        0.45f,  // upper band
+        -0.45f  // lower band
     };
     private static readonly (float PitchFactor, float YawFactor)[] AimRayPattern =
     {
@@ -68,7 +66,7 @@ internal sealed class LosEvaluator
     }
 
     private readonly CRayTraceInterface _rayTrace;
-    private readonly Action<int>? _recordViewerTraceAttempt;
+    private readonly Action<int, ViewerRayTraceStage>? _recordViewerTraceAttempt;
     private readonly TraceOptions _cachedTraceOptions = VisibilityGeometry.GetVisibilityTraceOptions();
     private readonly ViewerAimRayCacheEntry?[] _viewerAimCacheBySlot = new ViewerAimRayCacheEntry?[SlotCount];
     private readonly TargetSurfaceCacheEntry?[] _targetSurfaceCacheBySlot = new TargetSurfaceCacheEntry?[SlotCount];
@@ -78,7 +76,7 @@ internal sealed class LosEvaluator
     private readonly Vector _microHullMaxs = new(MicroHullHalfExtent, MicroHullHalfExtent, MicroHullHalfExtent);
     private int _activeViewerSlot = -1;
 
-    public LosEvaluator(CRayTraceInterface rayTrace, Action<int>? recordViewerTraceAttempt = null)
+    public LosEvaluator(CRayTraceInterface rayTrace, Action<int, ViewerRayTraceStage>? recordViewerTraceAttempt = null)
     {
         _rayTrace = rayTrace;
         _recordViewerTraceAttempt = recordViewerTraceAttempt;
@@ -122,7 +120,7 @@ internal sealed class LosEvaluator
         _activeViewerSlot = viewerSlot;
 
         SetVector(_traceStart, viewerSnapshot.EyeX, viewerSnapshot.EyeY, viewerSnapshot.EyeZ);
-        if (VisibilityGeometry.ShouldDrawDebugAabbBox())
+        if (VisibilityGeometry.ShouldDrawDebugAabbBox(DebugAabbKind.Los))
         {
             DrawLosDebugAabb(ref targetSnapshot, config);
         }
@@ -153,6 +151,22 @@ internal sealed class LosEvaluator
             return VisibilityEval.Visible;
         }
 
+        bool triedAimRayEarly = ShouldTryAimRayEarly(ref viewerSnapshot, ref targetSnapshot, config);
+        if (triedAimRayEarly &&
+            TryAimRayProximityFallback(
+                viewerPawn,
+                viewerSlot,
+                nowTick,
+                ref viewerSnapshot,
+                ref targetSnapshot,
+                config,
+                drawDebugBeams,
+                ref hasAnyTraceAttempt,
+                ref hasSuccessfulTraceCall))
+        {
+            return VisibilityEval.Visible;
+        }
+
         if (TryMicroHullFallback(
             viewerPawn,
             targetHandle,
@@ -171,6 +185,7 @@ internal sealed class LosEvaluator
             targetHandle,
             targetSlot,
             nowTick,
+            ref viewerSnapshot,
             ref targetSnapshot,
             config,
             drawDebugBeams,
@@ -180,17 +195,17 @@ internal sealed class LosEvaluator
             return VisibilityEval.Visible;
         }
 
-        if (TryAimRayProximityFallback(
-            viewerPawn,
-            viewerSlot,
-            targetSlot,
-            nowTick,
-            ref viewerSnapshot,
-            ref targetSnapshot,
-            config,
-            drawDebugBeams,
-            ref hasAnyTraceAttempt,
-            ref hasSuccessfulTraceCall))
+        if (!triedAimRayEarly &&
+            TryAimRayProximityFallback(
+                viewerPawn,
+                viewerSlot,
+                nowTick,
+                ref viewerSnapshot,
+                ref targetSnapshot,
+                config,
+                drawDebugBeams,
+                ref hasAnyTraceAttempt,
+                ref hasSuccessfulTraceCall))
         {
             return VisibilityEval.Visible;
         }
@@ -203,11 +218,58 @@ internal sealed class LosEvaluator
         return VisibilityEval.Hidden;
     }
 
-    private void RecordActiveViewerTraceAttempt()
+    private static bool ShouldTryAimRayEarly(
+        ref PlayerTransformSnapshot viewerSnapshot,
+        ref PlayerTransformSnapshot targetSnapshot,
+        S2AWHConfig config)
+    {
+        float hitRadius = config.Trace.AimRayHitRadius;
+        if (hitRadius <= 0.0f)
+        {
+            return false;
+        }
+
+        float centerX = targetSnapshot.OriginX + targetSnapshot.CenterX;
+        float centerY = targetSnapshot.OriginY + targetSnapshot.CenterY;
+        float centerZ = targetSnapshot.OriginZ + targetSnapshot.CenterZ;
+        float toTargetX = centerX - viewerSnapshot.EyeX;
+        float toTargetY = centerY - viewerSnapshot.EyeY;
+        float toTargetZ = centerZ - viewerSnapshot.EyeZ;
+        float distanceSq = (toTargetX * toTargetX) + (toTargetY * toTargetY) + (toTargetZ * toTargetZ);
+        if (distanceSq <= 0.0001f)
+        {
+            return true;
+        }
+
+        float maxDistance = config.Trace.AimRayMaxDistance;
+        if (maxDistance > 0.0f && distanceSq > (maxDistance * maxDistance))
+        {
+            return false;
+        }
+
+        float distance = MathF.Sqrt(distanceSq);
+        float halfX = (targetSnapshot.MaxsX - targetSnapshot.MinsX) * 0.5f * config.Aabb.LosHorizontalScale;
+        float halfY = (targetSnapshot.MaxsY - targetSnapshot.MinsY) * 0.5f * config.Aabb.LosHorizontalScale;
+        float halfZ = (targetSnapshot.MaxsZ - targetSnapshot.MinsZ) * 0.5f * config.Aabb.LosVerticalScale;
+        float effectiveRadius = MathF.Sqrt((halfX * halfX) + (halfY * halfY) + (halfZ * halfZ)) + hitRadius;
+        float angularAllowance = MathF.Asin(Math.Min(1.0f, effectiveRadius / distance)) + (config.Trace.AimRaySpreadDegrees * DegToRad);
+        float dotThreshold = MathF.Cos(MathF.Min(MathF.PI, angularAllowance));
+        float inverseDistance = 1.0f / distance;
+        float dirX = toTargetX * inverseDistance;
+        float dirY = toTargetY * inverseDistance;
+        float dirZ = toTargetZ * inverseDistance;
+        float alignment =
+            (dirX * viewerSnapshot.FovNormalX) +
+            (dirY * viewerSnapshot.FovNormalY) +
+            (dirZ * viewerSnapshot.FovNormalZ);
+        return alignment >= dotThreshold;
+    }
+
+    private void RecordActiveViewerTraceAttempt(ViewerRayTraceStage stage)
     {
         if (_activeViewerSlot >= 0)
         {
-            _recordViewerTraceAttempt?.Invoke(_activeViewerSlot);
+            _recordViewerTraceAttempt?.Invoke(_activeViewerSlot, stage);
         }
     }
 
@@ -236,9 +298,10 @@ internal sealed class LosEvaluator
             out float probeY,
             out float probeZ);
 
+        AabbGeometry.SetDistributedViewerOrigin(_traceStart, ref viewerSnapshot, _traceStart, probeX, probeY, probeZ);
         SetVector(_traceEnd, probeX, probeY, probeZ);
         hasAnyTraceAttempt = true;
-        RecordActiveViewerTraceAttempt();
+        RecordActiveViewerTraceAttempt(ViewerRayTraceStage.Los);
         if (!_rayTrace.TraceEndShape(_traceStart, _traceEnd, viewerPawn, _cachedTraceOptions, out var result))
         {
             return false;
@@ -300,7 +363,7 @@ internal sealed class LosEvaluator
         SetVector(_traceStart, groundStartX, groundStartY, groundStartZ);
         SetVector(_traceEnd, probeX, probeY, probeZ);
         hasAnyTraceAttempt = true;
-        RecordActiveViewerTraceAttempt();
+        RecordActiveViewerTraceAttempt(ViewerRayTraceStage.Los);
         if (!_rayTrace.TraceEndShape(_traceStart, _traceEnd, viewerPawn, _cachedTraceOptions, out var result))
         {
             SetVector(_traceStart, viewerSnapshot.EyeX, viewerSnapshot.EyeY, viewerSnapshot.EyeZ);
@@ -338,6 +401,7 @@ internal sealed class LosEvaluator
         nint targetHandle,
         int targetSlot,
         int nowTick,
+        ref PlayerTransformSnapshot viewerSnapshot,
         ref PlayerTransformSnapshot targetSnapshot,
         S2AWHConfig config,
         bool drawDebugBeams,
@@ -354,8 +418,10 @@ internal sealed class LosEvaluator
         for (int i = 0; i < pointCount; i++)
         {
             Vector point = points[i];
+            SetVector(_traceStart, viewerSnapshot.EyeX, viewerSnapshot.EyeY, viewerSnapshot.EyeZ);
+            AabbGeometry.SetDistributedViewerOrigin(_traceStart, ref viewerSnapshot, _traceStart, point.X, point.Y, point.Z);
             hasAnyTraceAttempt = true;
-            RecordActiveViewerTraceAttempt();
+            RecordActiveViewerTraceAttempt(ViewerRayTraceStage.Los);
             if (!_rayTrace.TraceEndShape(_traceStart, point, viewerPawn, _cachedTraceOptions, out var result))
             {
                 continue;
@@ -390,7 +456,6 @@ internal sealed class LosEvaluator
     private bool TryAimRayProximityFallback(
         CBasePlayerPawn viewerPawn,
         int viewerSlot,
-        int targetSlot,
         int nowTick,
         ref PlayerTransformSnapshot viewerSnapshot,
         ref PlayerTransformSnapshot targetSnapshot,
@@ -588,7 +653,7 @@ internal sealed class LosEvaluator
             out float nearestY,
             out float nearestZ);
 
-        if (TryMicroHullTrace(viewerPawn, targetHandle, nearestX, nearestY, nearestZ, drawDebugBeams, ref hasAnyTraceAttempt, ref hasSuccessfulTraceCall))
+        if (TryMicroHullTrace(viewerPawn, targetHandle, ref viewerSnapshot, nearestX, nearestY, nearestZ, drawDebugBeams, ref hasAnyTraceAttempt, ref hasSuccessfulTraceCall))
         {
             return true;
         }
@@ -598,7 +663,7 @@ internal sealed class LosEvaluator
             return true;
         }
 
-        if (TryMicroHullExtremityFallback(viewerPawn, targetHandle, ref viewerSnapshot, minX, minY, minZ, maxX, maxY, maxZ, drawDebugBeams, ref hasAnyTraceAttempt, ref hasSuccessfulTraceCall))
+        if (TryMicroHullExtremityFallback(viewerPawn, targetHandle, ref viewerSnapshot, ref targetSnapshot, minX, minY, minZ, maxX, maxY, maxZ, drawDebugBeams, ref hasAnyTraceAttempt, ref hasSuccessfulTraceCall, config))
         {
             return true;
         }
@@ -608,18 +673,19 @@ internal sealed class LosEvaluator
             return true;
         }
 
-        if (TryMicroHullTrace(viewerPawn, targetHandle, targetCenterX, targetCenterY, targetCenterZ, drawDebugBeams, ref hasAnyTraceAttempt, ref hasSuccessfulTraceCall))
+        if (TryMicroHullTrace(viewerPawn, targetHandle, ref viewerSnapshot, targetCenterX, targetCenterY, targetCenterZ, drawDebugBeams, ref hasAnyTraceAttempt, ref hasSuccessfulTraceCall))
         {
             return true;
         }
 
-        return TryMicroHullTrace(viewerPawn, targetHandle, targetSnapshot.EyeX, targetSnapshot.EyeY, targetSnapshot.EyeZ, drawDebugBeams, ref hasAnyTraceAttempt, ref hasSuccessfulTraceCall);
+        return TryMicroHullTrace(viewerPawn, targetHandle, ref viewerSnapshot, targetSnapshot.EyeX, targetSnapshot.EyeY, targetSnapshot.EyeZ, drawDebugBeams, ref hasAnyTraceAttempt, ref hasSuccessfulTraceCall);
     }
 
     private bool TryMicroHullExtremityFallback(
         CBasePlayerPawn viewerPawn,
         nint targetHandle,
         ref PlayerTransformSnapshot viewerSnapshot,
+        ref PlayerTransformSnapshot targetSnapshot,
         float minX,
         float minY,
         float minZ,
@@ -628,8 +694,10 @@ internal sealed class LosEvaluator
         float maxZ,
         bool drawDebugBeams,
         ref bool hasAnyTraceAttempt,
-        ref bool hasSuccessfulTraceCall)
+        ref bool hasSuccessfulTraceCall,
+        S2AWHConfig config)
     {
+        float overheadZOffset = config.Aabb.MicroHullOverheadZOffset;
         float centerX = (minX + maxX) * 0.5f;
         float centerY = (minY + maxY) * 0.5f;
         float centerZ = (minZ + maxZ) * 0.5f;
@@ -646,7 +714,16 @@ internal sealed class LosEvaluator
             {
                 float probeY = centerY + (halfY * MicroHullFaceExtremityPattern[i].LateralFactor);
                 float probeZ = centerZ + (halfZ * MicroHullFaceExtremityPattern[i].VerticalFactor);
-                if (TryMicroHullTrace(viewerPawn, targetHandle, faceX, probeY, probeZ, drawDebugBeams, ref hasAnyTraceAttempt, ref hasSuccessfulTraceCall))
+                bool isOverheadRay = i == MicroHullFaceExtremityPattern.Length - 1;
+                if (isOverheadRay)
+                {
+                    // Keep the extra reveal trace parallel to eye-level when distance changes.
+                    probeZ = targetSnapshot.EyeZ + overheadZOffset;
+                }
+
+                DebugTraceKind traceKind = isOverheadRay ? DebugTraceKind.MicroHullOverhead : DebugTraceKind.MicroHull;
+                float originZOffset = isOverheadRay ? overheadZOffset : 0.0f;
+                if (TryMicroHullTrace(viewerPawn, targetHandle, ref viewerSnapshot, faceX, probeY, probeZ, drawDebugBeams, ref hasAnyTraceAttempt, ref hasSuccessfulTraceCall, traceKind, isOverheadRay, originZOffset))
                 {
                     return true;
                 }
@@ -660,7 +737,16 @@ internal sealed class LosEvaluator
         {
             float probeX = centerX + (halfX * MicroHullFaceExtremityPattern[i].LateralFactor);
             float probeZ = centerZ + (halfZ * MicroHullFaceExtremityPattern[i].VerticalFactor);
-            if (TryMicroHullTrace(viewerPawn, targetHandle, probeX, faceY, probeZ, drawDebugBeams, ref hasAnyTraceAttempt, ref hasSuccessfulTraceCall))
+            bool isOverheadRay = i == MicroHullFaceExtremityPattern.Length - 1;
+            if (isOverheadRay)
+            {
+                // Keep the extra reveal trace parallel to eye-level when distance changes.
+                probeZ = targetSnapshot.EyeZ + overheadZOffset;
+            }
+
+            DebugTraceKind traceKind = isOverheadRay ? DebugTraceKind.MicroHullOverhead : DebugTraceKind.MicroHull;
+            float originZOffset = isOverheadRay ? overheadZOffset : 0.0f;
+            if (TryMicroHullTrace(viewerPawn, targetHandle, ref viewerSnapshot, probeX, faceY, probeZ, drawDebugBeams, ref hasAnyTraceAttempt, ref hasSuccessfulTraceCall, traceKind, isOverheadRay, originZOffset))
             {
                 return true;
             }
@@ -701,7 +787,7 @@ internal sealed class LosEvaluator
                 for (int lateralIndex = 0; lateralIndex < MicroHullSlitBandLateralPattern.Length; lateralIndex++)
                 {
                     float probeY = centerY + (halfY * MicroHullSlitBandLateralPattern[lateralIndex]);
-                    if (TryMicroHullTrace(viewerPawn, targetHandle, faceX, probeY, probeZ, drawDebugBeams, ref hasAnyTraceAttempt, ref hasSuccessfulTraceCall))
+                    if (TryMicroHullTrace(viewerPawn, targetHandle, ref viewerSnapshot, faceX, probeY, probeZ, drawDebugBeams, ref hasAnyTraceAttempt, ref hasSuccessfulTraceCall))
                     {
                         return true;
                     }
@@ -718,7 +804,7 @@ internal sealed class LosEvaluator
             for (int lateralIndex = 0; lateralIndex < MicroHullSlitBandLateralPattern.Length; lateralIndex++)
             {
                 float probeX = centerX + (halfX * MicroHullSlitBandLateralPattern[lateralIndex]);
-                if (TryMicroHullTrace(viewerPawn, targetHandle, probeX, faceY, probeZ, drawDebugBeams, ref hasAnyTraceAttempt, ref hasSuccessfulTraceCall))
+                if (TryMicroHullTrace(viewerPawn, targetHandle, ref viewerSnapshot, probeX, faceY, probeZ, drawDebugBeams, ref hasAnyTraceAttempt, ref hasSuccessfulTraceCall))
                 {
                     return true;
                 }
@@ -753,7 +839,7 @@ internal sealed class LosEvaluator
         {
             float probeX = centerX + (halfX * MicroHullCapExtremityPattern[i].XFactor);
             float probeY = centerY + (halfY * MicroHullCapExtremityPattern[i].YFactor);
-            if (TryMicroHullTrace(viewerPawn, targetHandle, probeX, probeY, capZ, drawDebugBeams, ref hasAnyTraceAttempt, ref hasSuccessfulTraceCall))
+            if (TryMicroHullTrace(viewerPawn, targetHandle, ref viewerSnapshot, probeX, probeY, capZ, drawDebugBeams, ref hasAnyTraceAttempt, ref hasSuccessfulTraceCall))
             {
                 return true;
             }
@@ -765,16 +851,25 @@ internal sealed class LosEvaluator
     private bool TryMicroHullTrace(
         CBasePlayerPawn viewerPawn,
         nint targetHandle,
+        ref PlayerTransformSnapshot viewerSnapshot,
         float targetX,
         float targetY,
         float targetZ,
         bool drawDebugBeams,
         ref bool hasAnyTraceAttempt,
-        ref bool hasSuccessfulTraceCall)
+        ref bool hasSuccessfulTraceCall,
+        DebugTraceKind traceKind = DebugTraceKind.MicroHull,
+        bool bypassViewerOffset = false,
+        float originZOffset = 0.0f)
     {
+        SetVector(_traceStart, viewerSnapshot.EyeX, viewerSnapshot.EyeY, viewerSnapshot.EyeZ + originZOffset);
+        if (!bypassViewerOffset)
+        {
+            AabbGeometry.SetDistributedViewerOrigin(_traceStart, ref viewerSnapshot, _traceStart, targetX, targetY, targetZ);
+        }
         SetVector(_traceEnd, targetX, targetY, targetZ);
         hasAnyTraceAttempt = true;
-        RecordActiveViewerTraceAttempt();
+        RecordActiveViewerTraceAttempt(ViewerRayTraceStage.Micro);
         if (!_rayTrace.TraceHullShape(_traceStart, _traceEnd, _microHullMins, _microHullMaxs, viewerPawn, _cachedTraceOptions, out var result))
         {
             return false;
@@ -783,7 +878,7 @@ internal sealed class LosEvaluator
         hasSuccessfulTraceCall = true;
         if (drawDebugBeams)
         {
-            VisibilityGeometry.DrawDebugTraceBeam(_traceStart, _traceEnd, result, DebugTraceKind.MicroHull);
+            VisibilityGeometry.DrawDebugTraceBeam(_traceStart, _traceEnd, result, traceKind);
         }
 
         return !result.DidHit || result.HitEntity == targetHandle;
@@ -839,7 +934,7 @@ internal sealed class LosEvaluator
                 _traceStart.Z + (dirZ * rayDistance));
 
             cache.AttemptedCount++;
-            RecordActiveViewerTraceAttempt();
+            RecordActiveViewerTraceAttempt(ViewerRayTraceStage.Aim);
             if (!_rayTrace.TraceEndShape(_traceStart, _traceEnd, viewerPawn, _cachedTraceOptions, out var result))
             {
                 continue;

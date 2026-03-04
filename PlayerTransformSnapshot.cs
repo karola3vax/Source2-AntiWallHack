@@ -31,6 +31,21 @@ internal struct PlayerTransformSnapshot
     public float ViewOffsetY;
     public float ViewOffsetZ;
 
+    // Duck / crouch transition state
+    public float DuckAmount;
+    public bool IsDucked;
+    public bool IsDucking;
+    public bool DuckReleasedThisTick;
+
+    // Jump state
+    public bool JumpPressedThisTick;
+    public bool JumpApexPending;
+    public bool IsGrounded;
+    public bool OnGroundLastTick;
+    public uint JumpTimeMsecs;
+    public float HeightAtJumpStart;
+    public float MaxJumpHeightThisJump;
+
     // Absolute Velocity
     public float VelocityX;
     public float VelocityY;

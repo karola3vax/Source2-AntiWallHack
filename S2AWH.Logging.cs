@@ -74,11 +74,25 @@ public partial class S2AWH
         int estimatedBaseLosRaysPerSnapshot = livePlayerCount > 1
             ? livePlayerCount * (livePlayerCount - 1) * baseLosSurfaceRaysPerPair
             : 0;
-        int currentViewerRayCountTotal = 0;
+        int currentLosRayCountTotal = 0;
+        int currentMicroRayCountTotal = 0;
+        int currentAimRayCountTotal = 0;
+        int currentPreloadRayCountTotal = 0;
+        int currentJumpRayCountTotal = 0;
         for (int i = 0; i < VisibilitySlotCapacity; i++)
         {
-            currentViewerRayCountTotal += _viewerRayCountsWorking[i];
+            currentLosRayCountTotal += _viewerRayCountsWorking[i, (int)ViewerRayTraceStage.Los];
+            currentMicroRayCountTotal += _viewerRayCountsWorking[i, (int)ViewerRayTraceStage.Micro];
+            currentAimRayCountTotal += _viewerRayCountsWorking[i, (int)ViewerRayTraceStage.Aim];
+            currentPreloadRayCountTotal += _viewerRayCountsWorking[i, (int)ViewerRayTraceStage.Preload];
+            currentJumpRayCountTotal += _viewerRayCountsWorking[i, (int)ViewerRayTraceStage.Jump];
         }
+        int currentViewerRayCountTotal =
+            currentLosRayCountTotal +
+            currentMicroRayCountTotal +
+            currentAimRayCountTotal +
+            currentPreloadRayCountTotal +
+            currentJumpRayCountTotal;
 
         float snapshotsPerSecond = 0.0f;
         if (config.Core.UpdateFrequencyTicks > 0 && Server.TickInterval > 0.0f)
@@ -103,7 +117,7 @@ public partial class S2AWH
             $"Tracking: {activeViewers} viewers, {visibilityPairCount} visibility decisions.",
             $"Anti pop-in: {revealHoldPairCount} reveal holds, {stableDecisionPairCount} saved decisions.",
             $"Rays: base LOS surface probes {baseLosSurfaceRaysPerPair} per pair, ~{estimatedBaseLosRaysPerSnapshot} per scan (plus aim/micro/preload).",
-            $"Current viewer ray count this tick: {currentViewerRayCountTotal}.",
+            $"Current viewer ray count this tick: {currentViewerRayCountTotal} (LOS {currentLosRayCountTotal}, MICRO {currentMicroRayCountTotal}, AIM {currentAimRayCountTotal}, PRELOAD {currentPreloadRayCountTotal}, JUMP {currentJumpRayCountTotal}).",
             $"Hidden {_transmitHiddenEntitiesInWindow} entities from wallhacks this window.",
             $"Safety checks: {_transmitFallbackChecksInWindow} extra, {_transmitRemovalNoEffectInWindow} redundant.",
             $"Reveal hold: {_holdRefreshInWindow} refreshed, {_holdHitKeepAliveInWindow} kept alive, {_holdExpiredInWindow} expired.",

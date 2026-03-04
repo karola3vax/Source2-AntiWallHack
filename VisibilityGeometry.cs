@@ -18,22 +18,28 @@ internal enum DebugTraceKind : byte
 {
     AimRay = 0,
     MicroHull = 1,
-    LosSurface = 2
+    LosSurface = 2,
+    Preload = 3,
+    JumpAssist = 4,
+    MicroHullOverhead = 5
 }
 
 internal static class VisibilityGeometry
 {
     private static readonly QAngle BeamRotationZero = new(0.0f, 0.0f, 0.0f);
     private static readonly Vector BeamVelocityZero = new(0.0f, 0.0f, 0.0f);
-    private static readonly Color LosSurfaceDebugBeamColor = Color.FromArgb(255, 190, 80, 255);
+    private static readonly Color LosSurfaceDebugBeamColor = Color.FromArgb(255, 0, 255, 0);
     private static readonly Color AimRayDebugBeamColor = Color.FromArgb(255, 255, 255, 255);
-    private static readonly Color MicroHullDebugBeamColor = Color.FromArgb(255, 255, 96, 96);
+    private static readonly Color MicroHullDebugBeamColor = Color.FromArgb(255, 0, 255, 0);
+    private static readonly Color PreloadDebugBeamColor = Color.FromArgb(255, 0, 120, 255);
+    private static readonly Color JumpAssistDebugBeamColor = Color.FromArgb(255, 0, 180, 255);
     private static readonly Color LosDebugAabbColor = Color.FromArgb(255, 255, 170, 0);
     private static readonly Color PredictorCurrentDebugAabbColor = Color.FromArgb(255, 0, 225, 120);
     private static readonly Color PredictorFutureDebugAabbColor = Color.FromArgb(255, 225, 80, 255);
+    private static readonly Color MicroHullOverheadDebugBeamColor = Color.FromArgb(255, 255, 0, 0); // Red
     private const float DebugBeamWidth = 0.1f;
-    private const float DebugBeamLifetimeSeconds = 0.08f;
-    private const float DebugAabbLineWidth = 1.2f;
+    private const float DebugBeamLifetimeSeconds = 0.001f;
+    private const float DebugAabbLineWidth = 0.1f;
     private const float DebugAabbLifetimeSeconds = 0.08f;
     private const int MaxDebugBeamEntitiesPerTick = 256;
     private static readonly (int Start, int End)[] DebugAabbEdges = new[]
@@ -77,9 +83,33 @@ internal static class VisibilityGeometry
     /// <summary>
     /// Returns whether debug AABB boxes should be rendered.
     /// </summary>
-    public static bool ShouldDrawDebugAabbBox()
+    public static bool ShouldDrawDebugAabbBox(DebugAabbKind kind)
     {
-        return S2AWHState.Current.Diagnostics.DrawDebugAabbBoxes;
+        var diagnostics = S2AWHState.Current.Diagnostics;
+        if (!diagnostics.DrawDebugAabbBoxes)
+        {
+            return false;
+        }
+
+        if (diagnostics.DrawOnlyPurpleAabb && kind != DebugAabbKind.PredictorPredicted)
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    public static Color GetViewerRayCounterColor(ViewerRayTraceStage stage)
+    {
+        return stage switch
+        {
+            ViewerRayTraceStage.Los => LosSurfaceDebugBeamColor,
+            ViewerRayTraceStage.Micro => MicroHullOverheadDebugBeamColor,
+            ViewerRayTraceStage.Aim => AimRayDebugBeamColor,
+            ViewerRayTraceStage.Preload => PreloadDebugBeamColor,
+            ViewerRayTraceStage.Jump => JumpAssistDebugBeamColor,
+            _ => AimRayDebugBeamColor
+        };
     }
 
     /// <summary>
@@ -138,7 +168,7 @@ internal static class VisibilityGeometry
         float maxZ,
         DebugAabbKind kind)
     {
-        if (kind == DebugAabbKind.None || !ShouldDrawDebugAabbBox())
+        if (kind == DebugAabbKind.None || !ShouldDrawDebugAabbBox(kind))
         {
             return;
         }
@@ -242,8 +272,11 @@ internal static class VisibilityGeometry
         return traceKind switch
         {
             DebugTraceKind.LosSurface => LosSurfaceDebugBeamColor,
+            DebugTraceKind.Preload => PreloadDebugBeamColor,
+            DebugTraceKind.JumpAssist => JumpAssistDebugBeamColor,
             DebugTraceKind.AimRay => AimRayDebugBeamColor,
             DebugTraceKind.MicroHull => MicroHullDebugBeamColor,
+            DebugTraceKind.MicroHullOverhead => MicroHullOverheadDebugBeamColor,
             _ => throw new ArgumentOutOfRangeException(nameof(traceKind), traceKind, "Unknown debug trace kind.")
         };
     }

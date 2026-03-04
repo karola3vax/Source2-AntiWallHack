@@ -12,8 +12,10 @@
 - Added a commented `S2AWH.example.json` written in plain language for easier setup.
 - Moved plugin logs onto CounterStrikeSharp's logger pipeline instead of raw console writes.
 - Added a per-tick debug beam budget so trace/AABB debug drawing cannot spam unlimited `env_beam` entities.
-- Added per-viewer debug ray count text above player heads to make live trace cost visible in-game.
-- Added `Diagnostics.DrawAmountOfRayNumber` so the overhead number above each viewer can be toggled independently from trace beam drawing.
+- Added per-viewer debug ray count HUD text in the center overlay to make live trace cost visible in-game.
+- Added `Diagnostics.DrawAmountOfRayNumber` so the center HUD ray counter can be toggled independently from trace beam drawing.
+- Added `Diagnostics.DrawOnlyPurpleAabb` so only the purple future predictor AABB can be drawn without LOS/current AABB clutter.
+- Split preload control into `Preload.EnabledForPeekers` and `Preload.EnabledForHolders`, with peeker-only preload as the default.
 - Reused same-tick visibility decisions during rebuild so transmit fallback work is not recomputed again in the same tick.
 - Reworked micro-hull around slit-band and extremity-biased sampling so thin visible body parts are found earlier.
 - Removed redundant LOS/preload face-grid probing after micro-hull took over that thin-slit role, cutting practical ray counts in real 1v1 tests.

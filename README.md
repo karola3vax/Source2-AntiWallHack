@@ -154,7 +154,7 @@ Use these as starting profiles, then benchmark on your own hardware.
 | `Core.Enabled` | `true` | Master on/off switch for the plugin |
 | `Core.UpdateFrequencyTicks` | `16` | How many ticks to spread viewer work across (higher = lower CPU, slower updates) |
 | `Trace.UseFovCulling` | `true` | Skip expensive checks for targets outside viewer cone using conservative AABB-aware culling |
-| `Trace.FovDegrees` | `220.0` | FOV cone size used by culling |
+| `Trace.FovDegrees` | `240.0` | FOV cone size used by culling |
 | `Trace.AimRayHitRadius` | `100.0` | Reveal radius around aim-ray hit points |
 | `Trace.AimRaySpreadDegrees` | `1.0` | Angular spacing for the aim-ray X pattern |
 | `Trace.AimRayCount` | `1` | Number of aim rays to cast per viewer (`1..5`) |
@@ -164,18 +164,19 @@ Use these as starting profiles, then benchmark on your own hardware.
 
 | Key | Default | Description |
 | :--- | :---: | :--- |
-| `Preload.EnablePreload` | `true` | Master switch for the whole preload system: predictor points, surface probes, and viewer peek assist |
+| `Preload.EnablePreload` | `true` | Master switch for holder preload and peeker preload; jump-peek assist stays active separately |
 | `Preload.SurfaceProbeHitRadius` | `64.0` | Accepts near-hit preload probes within this radius (`0..200`) |
 | `Preload.SurfaceProbeRows` | `1` | Probe rows per predictor face for preload surface probing (`1..3`, total cached probes = rows x 6, default starts from center-first sampling) |
-| `Preload.PredictorDistance` | `96.0` | Maximum forward look-ahead distance for prediction. Real lead is also capped by target speed and update interval |
-| `Preload.PredictorMinSpeed` | `1.0` | Minimum speed needed before prediction starts |
-| `Preload.PredictorFullSpeed` | `100.0` | Speed where preload look-ahead reaches full configured distance |
-| `Preload.EnableViewerPeekAssist` | `true` | Adds viewer movement prediction to reduce pop-in on peeks |
-| `Preload.ViewerPredictorDistanceFactor` | `0.85` | Strength multiplier for viewer peek prediction |
+| `Preload.PredictorDistance` | `160.0` | Maximum forward look-ahead distance for prediction. Real lead is also capped by target speed and update interval |
+| `Preload.PredictorMinSpeed` | `60.0` | Minimum speed needed before prediction starts |
+| `Preload.PredictorFullSpeed` | `120.0` | Speed where preload look-ahead reaches full configured distance |
+| `Preload.EnabledForPeekers` | `true` | Enables viewer-driven preload so peeking players reveal targets earlier |
+| `Preload.EnabledForHolders` | `false` | Enables target-driven preload for holder-style early reveal; keep off if leakage is a concern |
+| `Preload.ViewerPredictorDistanceFactor` | `1.0` | Strength multiplier for viewer peek prediction |
 | `Preload.RevealHoldSeconds` | `0.10` | Keep a target visible briefly after LOS is lost |
 
 > [!NOTE]
-> Older configs that still contain `Preload.EnableProbePreload` or `Preload.EnableSurfacePreload` are accepted as legacy aliases, but new auto-generated configs use `Preload.EnablePreload`.
+> Older configs that still contain `Preload.EnableProbePreload`, `Preload.EnableSurfacePreload`, or `Preload.EnableViewerPeekAssist` are accepted as legacy aliases, but new auto-generated configs use `Preload.EnablePreload`, `Preload.EnabledForPeekers`, and `Preload.EnabledForHolders`.
 
 ### AABB Scaling
 
@@ -185,11 +186,11 @@ Use these as starting profiles, then benchmark on your own hardware.
 | `Aabb.LosVerticalScale` | `1.0` | Vertical expansion used by LOS AABB sampling (orange box) |
 | `Aabb.PredictorHorizontalScale` | `1.0` | Maximum horizontal expansion used by preload predictor AABB at full movement speed (green/purple boxes) |
 | `Aabb.PredictorVerticalScale` | `1.0` | Maximum vertical expansion used by preload predictor AABB at full movement speed (green/purple boxes) |
-| `Aabb.PredictorScaleStartSpeed` | `80.0` | Speed where predictor AABB starts growing from LOS size toward predictor size |
-| `Aabb.PredictorScaleFullSpeed` | `200.0` | Speed where predictor AABB reaches full configured predictor size |
+| `Aabb.PredictorScaleStartSpeed` | `60.0` | Speed where predictor AABB starts growing from LOS size toward predictor size |
+| `Aabb.PredictorScaleFullSpeed` | `120.0` | Speed where predictor AABB reaches full configured predictor size |
 | `Aabb.EnableAdaptiveProfile` | `true` | Expands predictor AABB further as target speed increases |
-| `Aabb.ProfileSpeedStart` | `140.0` | Speed where extra adaptive predictor growth begins |
-| `Aabb.ProfileSpeedFull` | `260.0` | Speed where extra adaptive predictor growth reaches full multiplier |
+| `Aabb.ProfileSpeedStart` | `60.0` | Speed where extra adaptive predictor growth begins |
+| `Aabb.ProfileSpeedFull` | `120.0` | Speed where extra adaptive predictor growth reaches full multiplier |
 | `Aabb.ProfileHorizontalMaxMultiplier` | `1.70` | Max horizontal multiplier applied by adaptive predictor profile |
 | `Aabb.ProfileVerticalMaxMultiplier` | `1.35` | Max vertical multiplier applied by adaptive predictor profile |
 | `Aabb.EnableDirectionalShift` | `true` | Shifts the current predictor AABB forward along movement direction without double-shifting the future predicted box |
@@ -198,6 +199,7 @@ Use these as starting profiles, then benchmark on your own hardware.
 | `Aabb.LosSurfaceProbeHitRadius` | `64.0` | If a surface probe is blocked but ends within this radius of the probe point, count as visible |
 | `Aabb.LosSurfaceProbeRows` | `1` | Probe rows per LOS face for surface probing (`1..3`, total cached probes = rows x 6, default starts from center-first sampling) |
 | `Aabb.MicroHullMaxDistance` | `2000.0` | Skip LOS micro-hull fallback when target is farther than this distance (`0` disables) |
+| `Aabb.MicroHullOverheadZOffset` | `32.0` | Extra Z offset used by the red micro-hull overhead fallback ray on both viewer and target sides |
 
 ### Visibility Logic
 
@@ -214,7 +216,8 @@ Use these as starting profiles, then benchmark on your own hardware.
 | `Diagnostics.ShowDebugInfo` | `true` | Enables periodic debug summary logs |
 | `Diagnostics.DrawDebugTraceBeams` | `false` | Draw trace beams in-game (debug only, expensive if overused; S2AWH also caps debug beam spawns per tick) |
 | `Diagnostics.DrawDebugAabbBoxes` | `false` | Draw LOS/predictor AABB wireframe boxes in-game (debug only, very expensive; uses the same per-tick debug beam cap) |
-| `Diagnostics.DrawAmountOfRayNumber` | `false` | Draw the current total ray count above each viewer's head |
+| `Diagnostics.DrawOnlyPurpleAabb` | `false` | When AABB drawing is enabled, only draw the purple future predictor AABB |
+| `Diagnostics.DrawAmountOfRayNumber` | `false` | Draw a compact center HUD overlay with per-stage ray counts (`L`, `M`, `A`, `P`, `J`) plus `T` for each viewer |
 | `Diagnostics.DrawDebugTraceBeamsForHumans` | `true` | Beam drawing toggle for human viewers |
 | `Diagnostics.DrawDebugTraceBeamsForBots` | `true` | Beam drawing toggle for bot viewers |
 

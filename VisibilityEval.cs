@@ -6,3 +6,15 @@ internal enum VisibilityEval : byte
     Visible = 1,
     UnknownTransient = 2
 }
+
+internal readonly struct VisibilityDecision
+{
+    public VisibilityEval Eval { get; }
+    public bool IsPredictiveVisible { get; }
+
+    public VisibilityDecision(VisibilityEval eval, bool isPredictiveVisible = false)
+    {
+        Eval = eval;
+        IsPredictiveVisible = isPredictiveVisible;
+    }
+}

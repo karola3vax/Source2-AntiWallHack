@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Text.Json.Serialization;
 using CounterStrikeSharp.API.Core;
 
@@ -6,7 +7,7 @@ namespace S2AWH;
 #pragma warning disable CA1034 // Nested settings types intentionally mirror JSON sections.
 public sealed class S2AWHConfig : BasePluginConfig
 {
-    private float _fovDotThreshold = ComputeFovDotThreshold(200.0f);
+    private float _fovDotThreshold = ComputeFovDotThreshold(240.0f);
 
     public sealed class CoreSettings
     {
@@ -23,7 +24,7 @@ public sealed class S2AWHConfig : BasePluginConfig
         public bool UseFovCulling { get; set; } = true;
 
         [JsonPropertyName("FovDegrees")]
-        public float FovDegrees { get; set; } = 220.0f;
+        public float FovDegrees { get; set; } = 240.0f;
 
         [JsonPropertyName("AimRayHitRadius")]
         public float AimRayHitRadius { get; set; } = 100.0f;
@@ -50,23 +51,30 @@ public sealed class S2AWHConfig : BasePluginConfig
         public int SurfaceProbeRows { get; set; } = 1;
 
         [JsonPropertyName("PredictorDistance")]
-        public float PredictorDistance { get; set; } = 64.0f;
+        public float PredictorDistance { get; set; } = 160.0f;
 
         [JsonPropertyName("PredictorMinSpeed")]
-        public float PredictorMinSpeed { get; set; } = 1.0f;
+        public float PredictorMinSpeed { get; set; } = 60.0f;
 
         [JsonPropertyName("PredictorFullSpeed")]
-        public float PredictorFullSpeed { get; set; } = 100.0f;
+        public float PredictorFullSpeed { get; set; } = 120.0f;
 
-        [JsonPropertyName("EnableViewerPeekAssist")]
-        public bool EnableViewerPeekAssist { get; set; } = true;
+        [JsonPropertyName("EnabledForPeekers")]
+        public bool EnabledForPeekers { get; set; } = true;
+
+        [JsonPropertyName("EnabledForHolders")]
+        public bool EnabledForHolders { get; set; } = false;
 
         [JsonPropertyName("ViewerPredictorDistanceFactor")]
-        public float ViewerPredictorDistanceFactor { get; set; } = 0.85f;
+        public float ViewerPredictorDistanceFactor { get; set; } = 1.0f;
 
         [JsonPropertyName("RevealHoldSeconds")]
         public float RevealHoldSeconds { get; set; } = 0.10f;
 
+        [SuppressMessage(
+            "Design",
+            "CA2227:Collection properties should be read only",
+            Justification = "System.Text.Json extension-data capture needs a mutable dictionary property so legacy config aliases survive deserialization.")]
         [JsonExtensionData]
         public Dictionary<string, System.Text.Json.JsonElement>? ExtraJson { get; set; }
 
@@ -104,6 +112,31 @@ public sealed class S2AWHConfig : BasePluginConfig
             }
 
             warning = $"{aliasName} exists but is not a valid boolean. The plugin ignores it and keeps Preload.EnablePreload unchanged.";
+            return false;
+        }
+
+        public bool TryConsumeLegacyPeekersAlias(out bool enabled, out string aliasName, out string? warning)
+        {
+            aliasName = string.Empty;
+            enabled = false;
+            warning = null;
+            if (ExtraJson == null)
+            {
+                return false;
+            }
+
+            if (!ExtraJson.TryGetValue("EnableViewerPeekAssist", out var value))
+            {
+                return false;
+            }
+
+            aliasName = "Preload.EnableViewerPeekAssist";
+            if (TryReadLegacyBoolValue(value, out enabled))
+            {
+                return true;
+            }
+
+            warning = $"{aliasName} exists but is not a valid boolean. The plugin ignores it and keeps Preload.EnabledForPeekers unchanged.";
             return false;
         }
 
@@ -148,19 +181,19 @@ public sealed class S2AWHConfig : BasePluginConfig
         public float PredictorVerticalScale { get; set; } = 1.0f;
 
         [JsonPropertyName("PredictorScaleStartSpeed")]
-        public float PredictorScaleStartSpeed { get; set; } = 80.0f;
+        public float PredictorScaleStartSpeed { get; set; } = 60.0f;
 
         [JsonPropertyName("PredictorScaleFullSpeed")]
-        public float PredictorScaleFullSpeed { get; set; } = 200.0f;
+        public float PredictorScaleFullSpeed { get; set; } = 120.0f;
 
         [JsonPropertyName("EnableAdaptiveProfile")]
         public bool EnableAdaptiveProfile { get; set; } = true;
 
         [JsonPropertyName("ProfileSpeedStart")]
-        public float ProfileSpeedStart { get; set; } = 140.0f;
+        public float ProfileSpeedStart { get; set; } = 60.0f;
 
         [JsonPropertyName("ProfileSpeedFull")]
-        public float ProfileSpeedFull { get; set; } = 260.0f;
+        public float ProfileSpeedFull { get; set; } = 120.0f;
 
         [JsonPropertyName("ProfileHorizontalMaxMultiplier")]
         public float ProfileHorizontalMaxMultiplier { get; set; } = 1.70f;
@@ -185,6 +218,9 @@ public sealed class S2AWHConfig : BasePluginConfig
 
         [JsonPropertyName("MicroHullMaxDistance")]
         public float MicroHullMaxDistance { get; set; } = 2000.0f;
+
+        [JsonPropertyName("MicroHullOverheadZOffset")]
+        public float MicroHullOverheadZOffset { get; set; } = 32.0f;
     }
 
     public sealed class VisibilitySettings
@@ -209,6 +245,9 @@ public sealed class S2AWHConfig : BasePluginConfig
 
         [JsonPropertyName("DrawDebugAabbBoxes")]
         public bool DrawDebugAabbBoxes { get; set; } = false;
+
+        [JsonPropertyName("DrawOnlyPurpleAabb")]
+        public bool DrawOnlyPurpleAabb { get; set; } = false;
 
         [JsonPropertyName("DrawAmountOfRayNumber")]
         public bool DrawAmountOfRayNumber { get; set; } = false;
@@ -325,6 +364,16 @@ public sealed class S2AWHConfig : BasePluginConfig
             warnings.Add(preloadAliasWarning);
         }
 
+        if (Preload.TryConsumeLegacyPeekersAlias(out bool enablePeekersAlias, out string peekersAliasName, out string? peekersAliasWarning))
+        {
+            Preload.EnabledForPeekers = enablePeekersAlias;
+            warnings.Add($"{peekersAliasName} is a legacy key. The plugin maps it to Preload.EnabledForPeekers, but new auto-generated configs no longer include the old name.");
+        }
+        else if (!string.IsNullOrWhiteSpace(peekersAliasWarning))
+        {
+            warnings.Add(peekersAliasWarning);
+        }
+
         // --- Aabb ---
         float losHorizontalScale = Aabb.LosHorizontalScale;
         ClampWithWarning(ref losHorizontalScale, 1.0f, 10.0f, "Aabb.LosHorizontalScale", warnings);
@@ -352,14 +401,6 @@ public sealed class S2AWHConfig : BasePluginConfig
             float invalidValue = Aabb.PredictorScaleFullSpeed;
             Aabb.PredictorScaleFullSpeed = minPredictorScaleFullSpeed;
             warnings.Add($"Aabb.PredictorScaleFullSpeed was {invalidValue}. Because it must be at least PredictorScaleStartSpeed + 1, the plugin now uses {Aabb.PredictorScaleFullSpeed}.");
-        }
-
-        // Migrate old aggressive adaptive-profile defaults that made predictor AABB hit max size too early.
-        if (Aabb.ProfileSpeedStart == 80.0f && Aabb.ProfileSpeedFull == 100.0f)
-        {
-            Aabb.ProfileSpeedStart = 140.0f;
-            Aabb.ProfileSpeedFull = 260.0f;
-            warnings.Add("Aabb.ProfileSpeedStart/ProfileSpeedFull were using the old 80/100 defaults. The plugin upgraded them to 140/260 to avoid instant maximum predictor size on normal movement.");
         }
 
         float profileSpeedStart = Aabb.ProfileSpeedStart;
@@ -401,6 +442,10 @@ public sealed class S2AWHConfig : BasePluginConfig
         float microHullMaxDistance = Aabb.MicroHullMaxDistance;
         ClampWithWarning(ref microHullMaxDistance, 0.0f, 8192.0f, "Aabb.MicroHullMaxDistance", warnings);
         Aabb.MicroHullMaxDistance = microHullMaxDistance;
+
+        float microHullOverheadZOffset = Aabb.MicroHullOverheadZOffset;
+        ClampWithWarning(ref microHullOverheadZOffset, 0.0f, 128.0f, "Aabb.MicroHullOverheadZOffset", warnings);
+        Aabb.MicroHullOverheadZOffset = microHullOverheadZOffset;
 
         _fovDotThreshold = ComputeFovDotThreshold(Trace.FovDegrees);
         return warnings;

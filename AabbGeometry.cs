@@ -2,27 +2,26 @@ using CounterStrikeSharp.API.Modules.Utils;
 
 namespace S2AWH;
 
-internal enum AabbFaceAxis : byte
-{
-    X = 0,
-    Y = 1,
-    Z = 2
-}
-
 internal static class AabbGeometry
 {
+    private const float ViewerShoulderLateralOffset = 14.0f;
+    private const float ViewerShoulderVerticalDrop = 8.0f;
+    private const float ViewerChestVerticalDrop = 14.0f;
+    private const float ViewerShoulderLateralThreshold = 4.0f;
+    private const float ViewerChestVerticalThreshold = -4.0f;
+
     internal static readonly (float AxisFactor, float ZFactor)[] SurfaceProbePattern =
     {
         (0.0f, 0.0f),
-        (-1.0f, 1.0f),
-        (1.0f, -1.0f)
+        (-0.5f, 0.5f),
+        (0.5f, -0.5f)
     };
 
     internal static readonly (float XFactor, float YFactor)[] CapProbePattern =
     {
         (0.0f, 0.0f),
-        (-1.0f, 1.0f),
-        (1.0f, -1.0f)
+        (-0.5f, 1.0f),
+        (1.0f, -0.5f)
     };
 
     internal static void GetClosestPointOnSurface(
@@ -103,26 +102,48 @@ internal static class AabbGeometry
         }
     }
 
-    internal static void SetFacePoint(Vector point, float fixedAxisValue, float axis1, float axis2, AabbFaceAxis faceAxis)
+
+    internal static void SetDistributedViewerOrigin(
+        Vector origin,
+        ref PlayerTransformSnapshot viewerSnapshot,
+        Vector baseEye,
+        float targetX,
+        float targetY,
+        float targetZ)
     {
-        switch (faceAxis)
+        float verticalDelta = targetZ - baseEye.Z;
+        if (verticalDelta <= ViewerChestVerticalThreshold)
         {
-            case AabbFaceAxis.X:
-                point.X = fixedAxisValue;
-                point.Y = axis1;
-                point.Z = axis2;
-                break;
-            case AabbFaceAxis.Y:
-                point.X = axis1;
-                point.Y = fixedAxisValue;
-                point.Z = axis2;
-                break;
-            default:
-                point.X = axis1;
-                point.Y = axis2;
-                point.Z = fixedAxisValue;
-                break;
+            origin.X = baseEye.X;
+            origin.Y = baseEye.Y;
+            origin.Z = baseEye.Z - ViewerChestVerticalDrop;
+            return;
         }
+
+        GetHorizontalRight(ref viewerSnapshot, out float rightX, out float rightY);
+        float deltaX = targetX - baseEye.X;
+        float deltaY = targetY - baseEye.Y;
+        float lateral = (deltaX * rightX) + (deltaY * rightY);
+
+        if (lateral >= ViewerShoulderLateralThreshold)
+        {
+            origin.X = baseEye.X + (rightX * ViewerShoulderLateralOffset);
+            origin.Y = baseEye.Y + (rightY * ViewerShoulderLateralOffset);
+            origin.Z = baseEye.Z - ViewerShoulderVerticalDrop;
+            return;
+        }
+
+        if (lateral <= -ViewerShoulderLateralThreshold)
+        {
+            origin.X = baseEye.X - (rightX * ViewerShoulderLateralOffset);
+            origin.Y = baseEye.Y - (rightY * ViewerShoulderLateralOffset);
+            origin.Z = baseEye.Z - ViewerShoulderVerticalDrop;
+            return;
+        }
+
+        origin.X = baseEye.X;
+        origin.Y = baseEye.Y;
+        origin.Z = baseEye.Z;
     }
 
     internal static int FillSurfaceProbePoints(
@@ -163,5 +184,27 @@ internal static class AabbGeometry
         point.X = x;
         point.Y = y;
         point.Z = z;
+    }
+
+    private static void GetHorizontalRight(
+        ref PlayerTransformSnapshot viewerSnapshot,
+        out float rightX,
+        out float rightY)
+    {
+        float forwardX = viewerSnapshot.FovNormalX;
+        float forwardY = viewerSnapshot.FovNormalY;
+        float horizontalLengthSq = (forwardX * forwardX) + (forwardY * forwardY);
+        if (horizontalLengthSq <= 0.0001f)
+        {
+            rightX = 0.0f;
+            rightY = 1.0f;
+            return;
+        }
+
+        float inverseHorizontalLength = 1.0f / MathF.Sqrt(horizontalLengthSq);
+        forwardX *= inverseHorizontalLength;
+        forwardY *= inverseHorizontalLength;
+        rightX = -forwardY;
+        rightY = forwardX;
     }
 }

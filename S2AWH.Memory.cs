@@ -119,11 +119,25 @@ public partial class S2AWH
         return false;
     }
 
-    private bool ResolveTransmitWithMemory(int viewerSlot, int targetSlot, VisibilityEval visibilityEval, int nowTick)
+    private bool ResolveTransmitWithMemory(int viewerSlot, int targetSlot, VisibilityDecision visibilityDecision, int nowTick)
     {
+        VisibilityEval visibilityEval = visibilityDecision.Eval;
+
         switch (visibilityEval)
         {
             case VisibilityEval.Visible:
+                if (!visibilityDecision.IsPredictiveVisible &&
+                    !TryResolveVisibleReacquire(viewerSlot, targetSlot, nowTick))
+                {
+                    StoreStableDecision(viewerSlot, targetSlot, false, nowTick);
+                    return false;
+                }
+
+                if (visibilityDecision.IsPredictiveVisible)
+                {
+                    ClearVisibleConfirmEntry(viewerSlot, targetSlot);
+                }
+
                 StoreStableDecision(viewerSlot, targetSlot, true, nowTick);
                 if ((uint)targetSlot < VisibilitySlotCapacity)
                 {
@@ -168,6 +182,7 @@ public partial class S2AWH
                 return true;
 
             case VisibilityEval.Hidden:
+                ClearVisibleConfirmEntry(viewerSlot, targetSlot);
                 StoreStableDecision(viewerSlot, targetSlot, false, nowTick);
                 return TryResolveRevealHold(viewerSlot, targetSlot, nowTick, countAsGenericHoldHit: true);
 
@@ -175,6 +190,11 @@ public partial class S2AWH
                 if (_collectDebugCounters)
                 {
                     _unknownEvalInWindow++;
+                }
+
+                if (HasPendingVisibleConfirm(viewerSlot, targetSlot))
+                {
+                    return false;
                 }
 
                 if (TryGetStableDecision(viewerSlot, targetSlot, nowTick, out bool stickyDecision))
@@ -240,6 +260,82 @@ public partial class S2AWH
         }
     }
 
+    private bool TryResolveVisibleReacquire(int viewerSlot, int targetSlot, int nowTick)
+    {
+        if (VisibleReacquireConfirmTicks <= 0 ||
+            (uint)viewerSlot >= VisibilitySlotCapacity ||
+            (uint)targetSlot >= VisibilitySlotCapacity)
+        {
+            return true;
+        }
+
+        StableDecisionRow? stableRow = _stableDecisionRows[viewerSlot];
+        bool wasHidden = stableRow != null &&
+                         stableRow.Known[targetSlot] &&
+                         !stableRow.Decisions[targetSlot];
+        if (!wasHidden)
+        {
+            ClearVisibleConfirmEntry(viewerSlot, targetSlot);
+            return true;
+        }
+
+        VisibleConfirmRow? confirmRow = _visibleConfirmRows[viewerSlot];
+        if (confirmRow == null)
+        {
+            confirmRow = new VisibleConfirmRow();
+            _visibleConfirmRows[viewerSlot] = confirmRow;
+        }
+
+        if (!confirmRow.Known[targetSlot])
+        {
+            confirmRow.Known[targetSlot] = true;
+            confirmRow.FirstVisibleTick[targetSlot] = nowTick;
+            confirmRow.ActiveCount++;
+            return false;
+        }
+
+        if ((nowTick - confirmRow.FirstVisibleTick[targetSlot]) < VisibleReacquireConfirmTicks)
+        {
+            return false;
+        }
+
+        ClearVisibleConfirmEntry(viewerSlot, targetSlot);
+        return true;
+    }
+
+    private bool HasPendingVisibleConfirm(int viewerSlot, int targetSlot)
+    {
+        if ((uint)viewerSlot >= VisibilitySlotCapacity || (uint)targetSlot >= VisibilitySlotCapacity)
+        {
+            return false;
+        }
+
+        VisibleConfirmRow? confirmRow = _visibleConfirmRows[viewerSlot];
+        return confirmRow != null && confirmRow.Known[targetSlot];
+    }
+
+    private void ClearVisibleConfirmEntry(int viewerSlot, int targetSlot)
+    {
+        if ((uint)viewerSlot >= VisibilitySlotCapacity || (uint)targetSlot >= VisibilitySlotCapacity)
+        {
+            return;
+        }
+
+        VisibleConfirmRow? confirmRow = _visibleConfirmRows[viewerSlot];
+        if (confirmRow == null || !confirmRow.Known[targetSlot])
+        {
+            return;
+        }
+
+        confirmRow.Known[targetSlot] = false;
+        confirmRow.FirstVisibleTick[targetSlot] = 0;
+        confirmRow.ActiveCount--;
+        if (confirmRow.ActiveCount <= 0)
+        {
+            _visibleConfirmRows[viewerSlot] = null;
+        }
+    }
+
     private void PurgeInactiveViewerRows()
     {
         for (int i = 0; i < VisibilitySlotCapacity; i++)
@@ -249,6 +345,7 @@ public partial class S2AWH
                 _visibilityCache[i] = null;
                 _revealHoldRows[i] = null;
                 _stableDecisionRows[i] = null;
+                _visibleConfirmRows[i] = null;
             }
         }
     }
