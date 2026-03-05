@@ -53,7 +53,9 @@ internal static class VisibilityGeometry
         (InteractionLayers)0,
         InteractionLayers.MASK_WORLD_ONLY
     );
-    private static int _debugBudgetTick = -1;
+    [ThreadStatic]
+    private static int _debugBudgetTick;
+    [ThreadStatic]
     private static int _debugBeamEntitiesUsedThisTick;
 
     /// <summary>
@@ -205,17 +207,24 @@ internal static class VisibilityGeometry
         point.Z = z;
     }
 
-    private static readonly Vector[] DebugAabbCornerBuffer = CreateDebugAabbCornerBufferOnce();
+    [ThreadStatic]
+    private static Vector[]? _debugAabbCornerBuffer;
 
-    private static Vector[] CreateDebugAabbCornerBufferOnce()
+    private static Vector[] DebugAabbCornerBuffer
     {
-        Vector[] corners = new Vector[8];
-        for (int i = 0; i < corners.Length; i++)
+        get
         {
-            corners[i] = new Vector(0.0f, 0.0f, 0.0f);
-        }
+            if (_debugAabbCornerBuffer == null)
+            {
+                _debugAabbCornerBuffer = new Vector[8];
+                for (int i = 0; i < _debugAabbCornerBuffer.Length; i++)
+                {
+                    _debugAabbCornerBuffer[i] = new Vector(0.0f, 0.0f, 0.0f);
+                }
+            }
 
-        return corners;
+            return _debugAabbCornerBuffer;
+        }
     }
 
     private static void DrawDebugLine(Vector start, Vector end, Color color, float width, float lifetime)

@@ -57,48 +57,71 @@ internal static class AabbGeometry
         float distanceToMinZ = MathF.Abs(pointZ - minZ);
         float distanceToMaxZ = MathF.Abs(maxZ - pointZ);
 
-        float bestDistance = float.MaxValue;
-        if (distanceToMinX < bestDistance)
-        {
-            bestDistance = distanceToMinX;
-            closestX = minX;
-        }
+        float bestDistance = distanceToMinX;
+        int bestFace = 0; // 0=minX, 1=maxX, 2=minY, 3=maxY, 4=minZ, 5=maxZ
 
         if (distanceToMaxX < bestDistance)
         {
             bestDistance = distanceToMaxX;
-            closestX = maxX;
+            bestFace = 1;
         }
 
         if (distanceToMinY < bestDistance)
         {
             bestDistance = distanceToMinY;
-            closestX = Math.Clamp(pointX, minX, maxX);
-            closestY = minY;
-            closestZ = Math.Clamp(pointZ, minZ, maxZ);
+            bestFace = 2;
         }
 
         if (distanceToMaxY < bestDistance)
         {
             bestDistance = distanceToMaxY;
-            closestX = Math.Clamp(pointX, minX, maxX);
-            closestY = maxY;
-            closestZ = Math.Clamp(pointZ, minZ, maxZ);
+            bestFace = 3;
         }
 
         if (distanceToMinZ < bestDistance)
         {
             bestDistance = distanceToMinZ;
-            closestX = Math.Clamp(pointX, minX, maxX);
-            closestY = Math.Clamp(pointY, minY, maxY);
-            closestZ = minZ;
+            bestFace = 4;
         }
 
         if (distanceToMaxZ < bestDistance)
         {
-            closestX = Math.Clamp(pointX, minX, maxX);
-            closestY = Math.Clamp(pointY, minY, maxY);
-            closestZ = maxZ;
+            bestFace = 5;
+        }
+
+        // Project to the winning face, clamping the other two axes to stay on the surface.
+        switch (bestFace)
+        {
+            case 0: // -X face
+                closestX = minX;
+                closestY = Math.Clamp(pointY, minY, maxY);
+                closestZ = Math.Clamp(pointZ, minZ, maxZ);
+                break;
+            case 1: // +X face
+                closestX = maxX;
+                closestY = Math.Clamp(pointY, minY, maxY);
+                closestZ = Math.Clamp(pointZ, minZ, maxZ);
+                break;
+            case 2: // -Y face
+                closestX = Math.Clamp(pointX, minX, maxX);
+                closestY = minY;
+                closestZ = Math.Clamp(pointZ, minZ, maxZ);
+                break;
+            case 3: // +Y face
+                closestX = Math.Clamp(pointX, minX, maxX);
+                closestY = maxY;
+                closestZ = Math.Clamp(pointZ, minZ, maxZ);
+                break;
+            case 4: // -Z face
+                closestX = Math.Clamp(pointX, minX, maxX);
+                closestY = Math.Clamp(pointY, minY, maxY);
+                closestZ = minZ;
+                break;
+            default: // +Z face
+                closestX = Math.Clamp(pointX, minX, maxX);
+                closestY = Math.Clamp(pointY, minY, maxY);
+                closestZ = maxZ;
+                break;
         }
     }
 

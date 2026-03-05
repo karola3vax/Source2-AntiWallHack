@@ -116,7 +116,7 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
     }
 
     public override string ModuleName => "S2AWH (Source2 AntiWallhack)";
-    public override string ModuleVersion => "3.0.2";
+    public override string ModuleVersion => "3.0.3";
     public override string ModuleAuthor => "karola3vax";
     public override string ModuleDescription => "Prevents wallhacks from working using Ray-Trace by hiding players from out of line of sight.";
 

@@ -1,4 +1,4 @@
-using CounterStrikeSharp.API;
+﻿using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
 using CounterStrikeSharp.API.Modules.Entities;
 using CounterStrikeSharp.API.Modules.Utils;
@@ -606,9 +606,13 @@ public partial class S2AWH
 
     /// <summary>
     /// Resolves the scene-graph parent of an entity by walking
-    /// CBaseEntity → CBodyComponent → SceneNode → PParent → Owner.
+    /// CBaseEntity -> CBodyComponent -> SceneNode -> PParent -> Owner.
     /// Returns false if any step in the chain is null or invalid.
     /// </summary>
+    [SuppressMessage(
+        "Design",
+        "CA1031:Do not catch general exception types",
+        Justification = "Scene-graph parent lookup crosses native entity memory and must fail open on transient read faults.")]
     private static bool TryResolveSceneParentEntityHandle(uint childEntityHandleRaw, out uint parentEntityHandleRaw)
     {
         parentEntityHandleRaw = 0;

@@ -298,9 +298,29 @@ public partial class S2AWH
         }
 
         string normalized = value.Replace('\r', ' ').Replace('\n', ' ').Trim();
-        while (normalized.Contains("  ", StringComparison.Ordinal))
+        if (normalized.Contains("  ", StringComparison.Ordinal))
         {
-            normalized = normalized.Replace("  ", " ", StringComparison.Ordinal);
+            var sb = new System.Text.StringBuilder(normalized.Length);
+            bool previousWasSpace = false;
+            foreach (char c in normalized)
+            {
+                if (c == ' ')
+                {
+                    if (!previousWasSpace)
+                    {
+                        sb.Append(c);
+                    }
+
+                    previousWasSpace = true;
+                }
+                else
+                {
+                    sb.Append(c);
+                    previousWasSpace = false;
+                }
+            }
+
+            normalized = sb.ToString();
         }
 
         normalized = TrimPrefix(normalized, "So ");

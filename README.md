@@ -95,7 +95,7 @@ If all stages say "hidden", the enemy's entities (including weapons, wearables, 
 | `Trace.FovDegrees` | `240.0` | FOV cone width |
 | `Trace.AimRayHitRadius` | `100.0` | Reveal radius around aim-ray hits |
 | `Trace.AimRayCount` | `1` | Aim rays per viewer (1–5) |
-| `Trace.AimRayMaxDistance` | `2200.0` | Max aim-ray range (0 = off) |
+| `Trace.AimRayMaxDistance` | `3000.0` | Max aim-ray range (0 = off) |
 
 ### Prediction
 
@@ -112,10 +112,10 @@ If all stages say "hidden", the enemy's entities (including weapons, wearables, 
 
 | Key | Default | What It Does |
 |:---|:---:|:---|
-| `Aabb.LosHorizontalScale` | `1.0` | LOS box width multiplier |
-| `Aabb.LosVerticalScale` | `1.0` | LOS box height multiplier |
-| `Aabb.LosSurfaceProbeRows` | `1` | LOS probe density (1–3) |
-| `Aabb.MicroHullMaxDistance` | `2000.0` | Max range for micro-hull fallback |
+| `Aabb.LosHorizontalScale` | `1.15` | LOS box width multiplier |
+| `Aabb.LosVerticalScale` | `1.10` | LOS box height multiplier |
+| `Aabb.LosSurfaceProbeRows` | `2` | LOS probe density (1–3) |
+| `Aabb.MicroHullMaxDistance` | `3000.0` | Max range for micro-hull fallback |
 | `Aabb.EnableAdaptiveProfile` | `true` | Grow predictor box with speed |
 
 ### Visibility
