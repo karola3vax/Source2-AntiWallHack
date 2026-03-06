@@ -213,6 +213,47 @@ S2AWH/
 └─ S2AWH.csproj
 ```
 
+### Source Dependency Graph
+
+```mermaid
+graph TD
+    MAIN["S2AWH.cs — entry point"]
+    SNAP["S2AWH.Snapshot.cs — cache rebuild"]
+    XMIT["S2AWH.Transmit.cs — entity filter"]
+    MEM["S2AWH.Memory.cs — decision memory"]
+    LOG["S2AWH.Logging.cs — debug output"]
+    TF["TransmitFilter.cs"]
+    LOS["LosEvaluator.cs"]
+    PP["PreloadPredictor.cs"]
+    VG["VisibilityGeometry.cs"]
+    CFG["Config.cs"]
+    PTS["PlayerTransformSnapshot.cs"]
+    VE["VisibilityEval.cs"]
+
+    MAIN -->|creates| TF
+    MAIN -->|creates| LOS
+    MAIN -->|creates| PP
+    MAIN -->|reads| CFG
+    MAIN -->|owns| PTS
+
+    SNAP -->|fills| PTS
+    SNAP -->|calls| TF
+
+    XMIT -->|calls| MEM
+
+    TF -->|calls| LOS
+    TF -->|calls| PP
+    TF -->|uses| VE
+
+    LOS -->|uses| VG
+    LOS -->|reads| PTS
+
+    PP -->|uses| VG
+    PP -->|reads| PTS
+
+    LOG -->|reads| CFG
+```
+
 ## Development
 
 ```powershell
