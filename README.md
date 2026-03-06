@@ -19,19 +19,15 @@ S2AWH runs on the server and answers one question, over and over:
 
 > Should this player truly be able to see that enemy right now?
 
-If the answer is yes, the game behaves normally.  
-If the answer is no, the server withholds that data from the client.
+If the answer is yes, the game behaves normally. If the answer is no, the server withholds that data from the client.
 
-That is the entire idea.
+That is the whole idea.
 
 ## What This Means
 
-Wallhack-style cheats are strongest when the client already knows where everyone is.  
-S2AWH reduces that knowledge at the source.
+Wallhack-style cheats are strongest when the client already knows where everyone is. S2AWH reduces that knowledge at the source.
 
-It does not try to decorate the screen.  
-It does not try to fool the cheat.  
-It decides whether the information should be sent at all.
+It does not try to decorate the screen. It does not try to fool the cheat. It decides whether the information should be sent at all.
 
 ## How It Works
 
@@ -49,8 +45,8 @@ S2AWH uses a layered visibility pipeline:
 
 In practice:
 
-- visible enemies stay normal
-- hidden enemies stay unsent
+- visible enemies remain untouched
+- hidden enemies remain unsent
 - linked entities are handled together
 - uncertain states fail open instead of risking client stability
 
@@ -66,7 +62,7 @@ In practice:
 
 ### Release Package
 
-The GitHub release includes:
+The GitHub release package includes:
 
 - `S2AWH.dll`
 - `S2AWH.deps.json`
@@ -112,7 +108,7 @@ If you want a clean reset during an upgrade, remove your old `S2AWH.json` first.
 | Large server | `8` | `0.50` |
 | High population | `16` | `1.00` |
 
-Lower `UpdateFrequencyTicks` means more server work. Start conservatively, then move lower only when the server clearly has headroom.
+Lower `UpdateFrequencyTicks` means more server work. Start conservatively, then move lower only when the server clearly has the headroom.
 
 ## Settings That Matter First
 

@@ -1150,13 +1150,13 @@ public partial class S2AWH
 
             if (!bucketOverflowed && _dirtyOwnedEntityHandles.Count > 0)
             {
-                _ownedEntityBucketsTick = -1;
+                InvalidateOwnedEntityBucketsForFullResync();
                 return false;
             }
 
             if (bucketOverflowed)
             {
-                _ownedEntityBucketsTick = -1;
+                InvalidateOwnedEntityBucketsForFullResync();
                 if (!_hasLoggedEntityClosureCapError)
                 {
                     RecordClosureOffenderHandle(_lastOwnedEntityBucketOverflowOwnerHandleRaw);
@@ -1181,7 +1181,7 @@ public partial class S2AWH
         }
         catch (Exception ex)
         {
-            _ownedEntityBucketsTick = -1;
+            InvalidateOwnedEntityBucketsForFullResync();
 
             if (!_hasLoggedOwnedEntityScanError)
             {
@@ -1200,6 +1200,15 @@ public partial class S2AWH
 
             return false;
         }
+    }
+
+    private void InvalidateOwnedEntityBucketsForFullResync()
+    {
+        _ownedEntityBucketsTick = -1;
+        _ownedEntityLastFullResyncTick = -1;
+        _ownedEntityBucketsInitialized = false;
+        _ownedEntityBuckets.Clear();
+        _ownedEntityRelationsByChild.Clear();
     }
 
     private void PrimePendingOwnedEntityRescans(int nowTick)
