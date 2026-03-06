@@ -2,216 +2,196 @@
 
 # S2AWH
 
-### Server-side anti-wallhack for Counter-Strike 2
+### Server-Side Anti-Wallhack for Counter-Strike 2
 
 [![Version](https://img.shields.io/badge/Version-3.0.4-ec4899?style=for-the-badge&logoColor=white)](https://github.com/karola3vax/Source2-AntiWallHack/releases)
 [![CounterStrikeSharp](https://img.shields.io/badge/CounterStrikeSharp-v1.0.362%2B-db2777?style=for-the-badge&logoColor=white)](https://github.com/roflmuffin/CounterStrikeSharp/releases)
 [![Ray-Trace](https://img.shields.io/badge/Ray--Trace-v1.0.4-b0126f?style=for-the-badge&logoColor=white)](https://github.com/FUNPLAY-pro-CS2/Ray-Trace/releases)
 [![License](https://img.shields.io/badge/License-MIT-10b981?style=for-the-badge&logoColor=white)](./LICENSE)
 
-**S2AWH keeps hidden enemy information off the client.**
+*Wallhacks need data to work. S2AWH takes the data away.*
 
 </div>
 
 ---
 
-S2AWH runs on the server and answers one question, over and over:
+## The Problem
 
-> Should this player truly be able to see that enemy right now?
+In CS2, your client normally receives the positions of **every** player on the map — even enemies behind walls. Wallhack cheats exploit this by rendering those hidden positions on screen.
 
-If the answer is yes, the game behaves normally. If the answer is no, the server withholds that data from the client.
+## The Fix
 
-That is the whole idea.
+S2AWH runs on your server and answers one question every tick:
 
-## What This Means
+> **Can this viewer actually see that enemy right now?**
 
-Wallhack-style cheats are strongest when the client already knows where everyone is. S2AWH reduces that knowledge at the source.
+- **Yes →** game works normally, data is sent.
+- **No →** the server withholds the enemy data entirely. The cheat has nothing to display.
 
-It does not try to decorate the screen. It does not try to fool the cheat. It decides whether the information should be sent at all.
+No client-side install. No player downloads. Just drop it on your server.
 
-## How It Works
+---
 
-S2AWH uses a layered visibility pipeline:
+## ✨ Feature Highlights
 
-| Layer | Purpose |
+| Feature | What It Does |
 | :-- | :-- |
-| `FOV culling` | Skip clearly irrelevant targets early |
-| `LOS probes` | Sample the target body surface |
-| `Aim proximity` | Catch near-crosshair cases |
-| `Jump assist` | Reduce pop-in during short jump peeks |
-| `Predictive preload` | Look slightly ahead for moving viewer or target cases |
-| `Transmit closure` | Hide linked entities together |
-| `Reverse audit` | Refuse unsafe hides that could leave broken client references |
+| 🎯 **4×4 LOS Surface Probes** | Samples 16 points across the target's body to detect visibility through narrow gaps, behind boxes, and around corners |
+| 👁️ **FOV Culling** | Skips targets outside the viewer's cone early, saving CPU cycles |
+| 🏃 **Predictive Preload** | Looks slightly ahead of moving players to prevent pop-in on peeks |
+| 🦘 **Jump Assist** | Detects upcoming visibility during jumps and stair climbs before the player actually sees the enemy |
+| 🔫 **Aim Proximity** | Catches near-crosshair edge cases that surface probes might miss |
+| 🧩 **Entity Closure** | Hides not just the player model — but all attached weapons, wearables, equipment, particles, beams, and 18+ entity types together |
+| 🔒 **Reverse Audit** | A final safety pass that blocks any hide that could leave a broken reference on the client |
+| 🛡️ **Fail-Open Safety** | When in doubt, the plugin shows the player instead of risking a crash — stability over concealment |
 
-In practice:
+---
 
-- visible enemies remain untouched
-- hidden enemies remain unsent
-- linked entities are handled together
-- uncertain states fail open instead of risking client stability
-
-## Install
+## 🚀 Quick Start
 
 ### Requirements
 
-| Dependency | Required |
+| Dependency | Minimum Version |
 | :-- | :-- |
 | [CounterStrikeSharp](https://github.com/roflmuffin/CounterStrikeSharp/releases) | `v1.0.362+` |
 | [MetaMod:Source](https://www.sourcemm.net/downloads.php?branch=dev) | `1387+` |
 | [Ray-Trace](https://github.com/FUNPLAY-pro-CS2/Ray-Trace/releases) | `v1.0.4` |
 
-### Release Package
+### Install
 
-The GitHub release package includes:
+1. Install CounterStrikeSharp, MetaMod, and Ray-Trace on your server.
+2. Download the latest `S2AWH-x.x.x.zip` from [Releases](https://github.com/karola3vax/Source2-AntiWallHack/releases).
+3. Extract it into your server's root directory.
+4. Start the server and look for `[S2AWH]` in console.
 
-- `S2AWH.dll`
-- `S2AWH.deps.json`
-- `S2AWH.pdb`
-- `S2AWH.example.json`
-- `README.md`
-- `CHANGELOG.md`
-- `RELEASE_NOTES.md`
-- `LICENSE`
+That's it. S2AWH is active.
 
-The archive is versioned, for example `S2AWH-3.0.4.zip`.
+### File Locations
 
-### Paths
-
-Plugin files:
-
-```text
-addons/counterstrikesharp/plugins/S2AWH/
+```
+addons/counterstrikesharp/plugins/S2AWH/     ← plugin DLL + deps
+addons/counterstrikesharp/configs/plugins/S2AWH/  ← config
 ```
 
-Example config:
+> **Upgrading?** For the cleanest transition, delete your old `S2AWH.json` config before dropping in the new files.
 
-```text
-addons/counterstrikesharp/configs/plugins/S2AWH/
-```
+---
 
-### First Start
+## ⚙️ Configuration
 
-1. Install CounterStrikeSharp, MetaMod, and Ray-Trace.
-2. Download the latest S2AWH release archive.
-3. Extract it so the files land in the paths above.
-4. Start the server.
-5. Look for `[S2AWH]` in console.
+S2AWH ships with sane defaults. Tune only what your server needs.
 
-If you want a clean reset during an upgrade, remove your old `S2AWH.json` first.
+### Recommended Baselines
 
-## Recommended Baselines
-
-| Server Type | `UpdateFrequencyTicks` | `RevealHoldSeconds` |
+| Server Profile | `UpdateFrequencyTicks` | `RevealHoldSeconds` |
 | :-- | :--: | :--: |
-| Competitive | `2` | `0.30` |
-| Casual | `4` | `0.40` |
-| Large server | `8` | `0.50` |
-| High population | `16` | `1.00` |
+| 🏆 Competitive (5v5) | `2` | `0.30` |
+| 🎮 Casual | `4` | `0.40` |
+| 🌐 Large Server | `8` | `0.50` |
+| 🏟️ High Population | `16` | `1.00` |
 
-Lower `UpdateFrequencyTicks` means more server work. Start conservatively, then move lower only when the server clearly has the headroom.
+Lower `UpdateFrequencyTicks` = more precision, more CPU. Start conservative, then push lower only when the server has headroom.
 
-## Settings That Matter First
+### Key Settings
 
-### Core
+<details>
+<summary><b>Core</b></summary>
 
-| Key | Default | Meaning |
+| Key | Default | What It Does |
 | :-- | :--: | :-- |
-| `Core.Enabled` | `true` | Main switch |
-| `Core.UpdateFrequencyTicks` | `16` | How often visibility work runs |
+| `Core.Enabled` | `true` | Main on/off switch |
+| `Core.UpdateFrequencyTicks` | `16` | How often visibility checks run |
 
-### Trace
+</details>
 
-| Key | Default | Meaning |
+<details>
+<summary><b>Trace</b></summary>
+
+| Key | Default | What It Does |
 | :-- | :--: | :-- |
 | `Trace.UseFovCulling` | `true` | Skip targets outside the viewer cone |
-| `Trace.FovDegrees` | `240.0` | Viewer cone width |
-| `Trace.AimRayHitRadius` | `100.0` | Aim-proximity tolerance |
-| `Trace.AimRayCount` | `1` | Aim rays per viewer |
-| `Trace.AimRayMaxDistance` | `3000.0` | Aim-ray range |
+| `Trace.FovDegrees` | `240.0` | How wide the cone is |
+| `Trace.AimRayHitRadius` | `100.0` | Tolerance for aim proximity checks |
+| `Trace.AimRayCount` | `1` | Number of aim rays per viewer |
+| `Trace.AimRayMaxDistance` | `3000.0` | Max range for aim rays |
 
-### Preload
+</details>
 
-| Key | Default | Meaning |
+<details>
+<summary><b>Preload</b></summary>
+
+| Key | Default | What It Does |
 | :-- | :--: | :-- |
 | `Preload.EnablePreload` | `true` | Master preload switch |
-| `Preload.EnabledForPeekers` | `true` | Viewer prediction |
-| `Preload.EnabledForHolders` | `false` | Target prediction |
-| `Preload.PredictorDistance` | `160.0` | Look-ahead distance |
-| `Preload.RevealHoldSeconds` | `0.10` | Short anti-pop hold time |
+| `Preload.EnabledForPeekers` | `true` | Predict where the viewer is peeking |
+| `Preload.EnabledForHolders` | `false` | Predict where the target is moving |
+| `Preload.PredictorDistance` | `160.0` | How far ahead to look |
+| `Preload.RevealHoldSeconds` | `0.10` | Keep a target visible briefly after LOS breaks |
 
-### Visibility
+</details>
 
-| Key | Default | Meaning |
+<details>
+<summary><b>Visibility</b></summary>
+
+| Key | Default | What It Does |
 | :-- | :--: | :-- |
-| `Visibility.IncludeTeammates` | `false` | Apply logic to teammates too |
-| `Visibility.IncludeBots` | `true` | Include bots |
-| `Visibility.BotsDoLOS` | `true` | Let bots run LOS logic |
+| `Visibility.IncludeTeammates` | `false` | Apply logic to teammates |
+| `Visibility.IncludeBots` | `true` | Include bots as targets |
+| `Visibility.BotsDoLOS` | `true` | Let bots run LOS checks |
 
-### Diagnostics
+</details>
 
-| Key | Default | Meaning |
+<details>
+<summary><b>Diagnostics</b></summary>
+
+| Key | Default | What It Does |
 | :-- | :--: | :-- |
-| `Diagnostics.ShowDebugInfo` | `true` | Periodic console summary |
-| `Diagnostics.DrawDebugTraceBeams` | `false` | In-game trace beams |
-| `Diagnostics.DrawDebugAabbBoxes` | `false` | In-game AABB boxes |
-| `Diagnostics.DrawAmountOfRayNumber` | `false` | In-game ray count HUD |
+| `Diagnostics.ShowDebugInfo` | `true` | Periodic console health report |
+| `Diagnostics.DrawDebugTraceBeams` | `false` | Visualize trace rays in-game |
+| `Diagnostics.DrawDebugAabbBoxes` | `false` | Visualize AABB hitboxes in-game |
+| `Diagnostics.DrawAmountOfRayNumber` | `false` | Per-viewer ray counter HUD |
 
-## What To Watch
+</details>
 
-If debug logging is enabled, the most useful lines are:
+---
 
-- `Safety checks`
-- `Owned cache`
-- `Closure offenders`
+## 📊 Monitoring
 
-The `Owned cache` line is especially useful after the cache redesign:
+With `ShowDebugInfo` enabled, the console prints a status box every few seconds. The most important lines:
 
-- `full resyncs`
-- `dirty updates`
-- `post-spawn rescan marks`
-- `pending rescans`
+| Line | Healthy Pattern |
+| :-- | :-- |
+| `Owned cache` | Low `full resyncs`, higher `dirty updates` |
+| `Closure offenders` | `none` is ideal |
+| `Safety checks` | Low `fail-open` counts mean clean entity coverage |
+| `Reveal hold` | Active `refreshed` / `kept alive` counts show anti-pop-in working |
 
-Healthy pattern:
+---
 
-- low `full resyncs`
-- higher `dirty updates`
-- brief `pending rescans` spikes around entity creation or spawn
+## ❓ FAQ
 
-## Notes
+**Does this run on the client?**
+No. Server-side only.
 
-**Does this run on the client?**  
-No. It runs on the server.
-
-**Do players need to install anything?**  
+**Do players need to install anything?**
 No.
 
-**Is this just glow blocking or cosmetic anti-ESP?**  
-No. It is visibility-driven transmit filtering at the server level.
+**Is this just glow blocking or cosmetic anti-ESP?**
+No. It is visibility-driven transmit filtering at the server level. Hidden enemy data never reaches the client.
 
-**Does it stop every cheat?**  
-No. Its purpose is narrower than that: reduce hidden enemy information reaching the client.
+**Does it stop every cheat?**
+Its purpose is to cut off hidden enemy information. It does not address aimbots, trigger bots, or other exploits.
 
-**Can it affect performance?**  
-Yes. This is a real server-side visibility system. Tune `Core.UpdateFrequencyTicks` with care.
+**Can it affect performance?**
+Yes — this is real-time ray tracing on every tick. Tune `UpdateFrequencyTicks` to match your server's capacity.
 
-**Why does the plugin fail open sometimes?**  
-Because sending more than necessary is safer than sending a broken partial hide set that could destabilize clients.
+**Why does the plugin sometimes show players it shouldn't?**
+Because sending more data is safer than sending a broken partial set that could crash clients. This is the **fail-open** design — stability always wins.
 
-**Do I need `S2AWH.deps.json`?**  
-Yes. Ship it with the plugin.
+**Do I need `S2AWH.deps.json`?**
+Yes. Always ship it alongside the DLL.
 
-## Project Layout
-
-```text
-S2AWH/
-├─ src/        source code
-├─ scripts/    release tooling
-├─ configs/    example configuration
-├─ README.md
-├─ CHANGELOG.md
-├─ RELEASE_NOTES_3.0.4.md
-└─ S2AWH.csproj
-```
+---
 
 ### Source Dependency Graph
 
@@ -254,23 +234,18 @@ graph TD
     LOG -->|reads| CFG
 ```
 
-## Development
-
-```powershell
-dotnet build .\S2AWH\S2AWH.csproj
-powershell -ExecutionPolicy Bypass -File .\S2AWH\scripts\package-release.ps1
-```
+---
 
 ## Credits
 
-- **[karola3vax](https://github.com/karola3vax)** - Author
+- **[karola3vax](https://github.com/karola3vax)** — Author
 - **[CounterStrikeSharp](https://github.com/roflmuffin/CounterStrikeSharp)** by [roflmuffin](https://github.com/roflmuffin)
 - **[Ray-Trace](https://github.com/FUNPLAY-pro-CS2/Ray-Trace)** by [SlynxCZ](https://github.com/SlynxCZ)
 - **[MetaMod:Source](https://www.metamodsource.net/)** by [AlliedModders](https://github.com/alliedmodders)
 
 ## License
 
-MIT - see [LICENSE](./LICENSE)
+MIT — see [LICENSE](./LICENSE)
 
 <div align="center">
 <br>
