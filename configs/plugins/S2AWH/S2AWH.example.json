@@ -1,0 +1,148 @@
+// S2AWH example config
+// This file is written in plain language on purpose.
+// If you do not know what a setting does, keep the default.
+{
+  "Core": {
+    // Main on/off switch for the whole plugin.
+    "Enabled": true,
+
+    // Higher number = less CPU use, but visibility updates feel slower.
+    "UpdateFrequencyTicks": 16
+  },
+
+  "Trace": {
+    // If true, targets outside your view cone are skipped early.
+    "UseFovCulling": true,
+
+    // Wider cone = safer visibility, but more work.
+    "FovDegrees": 240.0,
+
+    // If an aim ray lands this close to the target box, count it as visible.
+    "AimRayHitRadius": 100.0,
+
+    // How far side rays spread from your crosshair.
+    "AimRaySpreadDegrees": 1.0,
+
+    // Number of aim rays. 1 is cheapest, 5 is heaviest.
+    "AimRayCount": 1,
+
+    // Skip aim-ray fallback for very far targets. 0 disables the limit.
+    "AimRayMaxDistance": 3000.0
+  },
+
+  "Preload": {
+    // Predict visibility a little early to reduce pop-in on peeks.
+    // Jump peek assist stays separate and is not controlled by this switch.
+    "EnablePreload": true,
+
+    // If a preload probe lands near the predicted box, accept it.
+    "SurfaceProbeHitRadius": 80.0,
+
+    // Maximum distance to predict target movement forward.
+    // Real lead is also limited by target speed and the plugin update interval.
+    "PredictorDistance": 160.0,
+
+    // Minimum speed before prediction starts to matter.
+    "PredictorMinSpeed": 60.0,
+
+    // Speed where prediction reaches full distance.
+    "PredictorFullSpeed": 120.0,
+
+    // Enable viewer-driven preload. This is the peeker-friendly path.
+    "EnabledForPeekers": true,
+
+    // Enable target-driven preload. This can reveal holders earlier too, but is more leak-prone.
+    "EnabledForHolders": false,
+
+    // Strength of the viewer peek preload.
+    "ViewerPredictorDistanceFactor": 1.0,
+
+    // Keep a target visible for a short time after LOS breaks.
+    "RevealHoldSeconds": 0.10
+  },
+
+  "Aabb": {
+    // LOS box width. Bigger helps thin edges, but can over-reveal.
+    "LosHorizontalScale": 0.5,
+
+    // LOS box height.
+    "LosVerticalScale": 0.7,
+
+    // Maximum predictor box width at full movement speed.
+    "PredictorHorizontalScale": 1.0,
+
+    // Maximum predictor box height at full movement speed.
+    "PredictorVerticalScale": 1.0,
+
+    // Speed where the predictor box starts growing beyond the LOS box.
+    "PredictorScaleStartSpeed": 60.0,
+
+    // Speed where the predictor box reaches its full size.
+    "PredictorScaleFullSpeed": 120.0,
+
+    // Grow predictor box more when the target moves faster.
+    "EnableAdaptiveProfile": true,
+
+    // Speed where extra adaptive growth starts.
+    "ProfileSpeedStart": 60.0,
+
+    // Speed where extra adaptive growth reaches maximum.
+    "ProfileSpeedFull": 120.0,
+
+    // Maximum extra horizontal growth from the adaptive profile.
+    "ProfileHorizontalMaxMultiplier": 1.70,
+
+    // Maximum extra vertical growth from the adaptive profile.
+    "ProfileVerticalMaxMultiplier": 1.35,
+
+    // Push the current predictor box forward in the movement direction.
+    // The future predicted box is not pushed a second time.
+    "EnableDirectionalShift": true,
+
+    // Maximum forward push amount.
+    "DirectionalForwardShiftMaxUnits": 34.0,
+
+    // Overall strength of directional pushing.
+    "DirectionalPredictorShiftFactor": 0.65,
+
+    // If a LOS surface probe lands this close to the box surface, accept it.
+    "LosSurfaceProbeHitRadius": 80.0
+  },
+
+  "Visibility": {
+    // If false, teammates are always sent to the client.
+    "IncludeTeammates": false,
+
+    // If false, bots are always sent to the client.
+    "IncludeBots": true,
+
+    // If false, bot viewers do not run LOS checks.
+    "BotsDoLOS": true
+  },
+
+  "Diagnostics": {
+    // Periodic status logs in server console.
+    "ShowDebugInfo": true,
+
+    // Draw debug rays in game. Expensive.
+    // S2AWH also hard-limits debug beam spawning per tick to avoid runaway spam.
+    "DrawDebugTraceBeams": false,
+
+    // Draw debug AABB boxes in game. Very expensive.
+    // These use the same per-tick debug beam budget.
+    "DrawDebugAabbBoxes": false,
+
+    // If true, only the purple future predictor AABB is drawn.
+    "DrawOnlyPurpleAabb": false,
+
+    // Draw a compact center HUD overlay with per-stage ray counts and total for each viewer.
+    // Format: L:x M:x A:x P:x J:x T:x on one compact line.
+    "DrawAmountOfRayNumber": false,
+
+    // Draw rays for human viewers.
+    "DrawDebugTraceBeamsForHumans": true,
+
+    // Draw rays for bot viewers.
+    "DrawDebugTraceBeamsForBots": true
+  }
+}
