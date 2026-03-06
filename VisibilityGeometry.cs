@@ -17,11 +17,9 @@ internal enum DebugAabbKind : byte
 internal enum DebugTraceKind : byte
 {
     AimRay = 0,
-    MicroHull = 1,
-    LosSurface = 2,
-    Preload = 3,
-    JumpAssist = 4,
-    MicroHullOverhead = 5
+    LosSurface = 1,
+    Preload = 2,
+    JumpAssist = 3
 }
 
 internal static class VisibilityGeometry
@@ -30,17 +28,18 @@ internal static class VisibilityGeometry
     private static readonly Vector BeamVelocityZero = new(0.0f, 0.0f, 0.0f);
     private static readonly Color LosSurfaceDebugBeamColor = Color.FromArgb(255, 0, 255, 0);
     private static readonly Color AimRayDebugBeamColor = Color.FromArgb(255, 255, 255, 255);
-    private static readonly Color MicroHullDebugBeamColor = Color.FromArgb(255, 0, 255, 0);
     private static readonly Color PreloadDebugBeamColor = Color.FromArgb(255, 0, 120, 255);
     private static readonly Color JumpAssistDebugBeamColor = Color.FromArgb(255, 0, 180, 255);
     private static readonly Color LosDebugAabbColor = Color.FromArgb(255, 255, 170, 0);
+    private static readonly Color LosDebugProbePointColor = Color.FromArgb(255, 255, 40, 40);
     private static readonly Color PredictorCurrentDebugAabbColor = Color.FromArgb(255, 0, 225, 120);
     private static readonly Color PredictorFutureDebugAabbColor = Color.FromArgb(255, 225, 80, 255);
-    private static readonly Color MicroHullOverheadDebugBeamColor = Color.FromArgb(255, 255, 0, 0); // Red
     private const float DebugBeamWidth = 0.1f;
     private const float DebugBeamLifetimeSeconds = 0.001f;
     private const float DebugAabbLineWidth = 0.1f;
     private const float DebugAabbLifetimeSeconds = 0.08f;
+    private const float DebugAabbProbeHalfLength = 0.06f;
+    private const float DebugAabbProbeLineWidth = 0.16f;
     private const int MaxDebugBeamEntitiesPerTick = 256;
     private static readonly (int Start, int End)[] DebugAabbEdges = new[]
     {
@@ -106,7 +105,6 @@ internal static class VisibilityGeometry
         return stage switch
         {
             ViewerRayTraceStage.Los => LosSurfaceDebugBeamColor,
-            ViewerRayTraceStage.Micro => MicroHullOverheadDebugBeamColor,
             ViewerRayTraceStage.Aim => AimRayDebugBeamColor,
             ViewerRayTraceStage.Preload => PreloadDebugBeamColor,
             ViewerRayTraceStage.Jump => JumpAssistDebugBeamColor,
@@ -199,6 +197,30 @@ internal static class VisibilityGeometry
         }
     }
 
+    /// <summary>
+    /// Draws a short-lived marker used to visualize sampled AABB LOS probe points.
+    /// </summary>
+    public static void DrawDebugAabbProbePoint(float x, float y, float z, DebugAabbKind kind)
+    {
+        if (kind == DebugAabbKind.None || !ShouldDrawDebugAabbBox(kind))
+        {
+            return;
+        }
+
+        const int markerLineCount = 1;
+        if (!TryConsumeDebugBeamBudget(markerLineCount))
+        {
+            return;
+        }
+
+        Color color = ResolveDebugProbeColor(kind);
+        Vector[] markerBuffer = DebugAabbProbeMarkerBuffer;
+
+        SetPoint(markerBuffer, 0, x - DebugAabbProbeHalfLength, y, z);
+        SetPoint(markerBuffer, 1, x + DebugAabbProbeHalfLength, y, z);
+        DrawDebugLine(markerBuffer[0], markerBuffer[1], color, DebugAabbProbeLineWidth, DebugAabbLifetimeSeconds);
+    }
+
     private static void SetPoint(Vector[] pointBuffer, int index, float x, float y, float z)
     {
         Vector point = pointBuffer[index];
@@ -209,6 +231,8 @@ internal static class VisibilityGeometry
 
     [ThreadStatic]
     private static Vector[]? _debugAabbCornerBuffer;
+    [ThreadStatic]
+    private static Vector[]? _debugAabbProbeMarkerBuffer;
 
     private static Vector[] DebugAabbCornerBuffer
     {
@@ -224,6 +248,23 @@ internal static class VisibilityGeometry
             }
 
             return _debugAabbCornerBuffer;
+        }
+    }
+
+    private static Vector[] DebugAabbProbeMarkerBuffer
+    {
+        get
+        {
+            if (_debugAabbProbeMarkerBuffer == null)
+            {
+                _debugAabbProbeMarkerBuffer = new Vector[2];
+                for (int i = 0; i < _debugAabbProbeMarkerBuffer.Length; i++)
+                {
+                    _debugAabbProbeMarkerBuffer[i] = new Vector(0.0f, 0.0f, 0.0f);
+                }
+            }
+
+            return _debugAabbProbeMarkerBuffer;
         }
     }
 
@@ -286,9 +327,16 @@ internal static class VisibilityGeometry
             DebugTraceKind.Preload => PreloadDebugBeamColor,
             DebugTraceKind.JumpAssist => JumpAssistDebugBeamColor,
             DebugTraceKind.AimRay => AimRayDebugBeamColor,
-            DebugTraceKind.MicroHull => MicroHullDebugBeamColor,
-            DebugTraceKind.MicroHullOverhead => MicroHullOverheadDebugBeamColor,
             _ => throw new ArgumentOutOfRangeException(nameof(traceKind), traceKind, "Unknown debug trace kind.")
+        };
+    }
+
+    private static Color ResolveDebugProbeColor(DebugAabbKind kind)
+    {
+        return kind switch
+        {
+            DebugAabbKind.Los => LosDebugProbePointColor,
+            _ => ResolveDebugAabbColor(kind)
         };
     }
 }

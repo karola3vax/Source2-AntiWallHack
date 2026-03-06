@@ -4,7 +4,7 @@
 
 ### Server-side anti-wallhack for Counter-Strike 2
 
-[![Version](https://img.shields.io/badge/VERSION-3.0.3-ec4899?style=for-the-badge&logoColor=white)](https://github.com/karola3vax/Source2-AntiWallHack/releases)
+[![Version](https://img.shields.io/badge/VERSION-3.0.4-ec4899?style=for-the-badge&logoColor=white)](https://github.com/karola3vax/Source2-AntiWallHack/releases)
 [![CounterStrikeSharp](https://img.shields.io/badge/CSSHARP-v1.0.362%2B-db2777?style=for-the-badge&logoColor=white)](https://github.com/roflmuffin/CounterStrikeSharp/releases)
 [![Ray-Trace](https://img.shields.io/badge/RAY--TRACE-v1.0.4-b0126f?style=for-the-badge&logoColor=white)](https://github.com/FUNPLAY-pro-CS2/Ray-Trace/releases)
 [![License](https://img.shields.io/badge/LICENSE-MIT-10b981?style=for-the-badge&logoColor=white)](./LICENSE)
@@ -27,10 +27,12 @@ Every tick, S2AWH checks if each enemy is actually visible to each player using 
 
 | Stage | What It Does |
 |:---:|:---|
-| **1** | Surface ray probes — fast closest-point checks |
-| **2** | Micro-hull traces — catches thin slits, limbs, edge peeks |
-| **3** | Aim-ray proximity — checks near the player's crosshair |
-| **4** | Predictive preload — look-ahead to prevent pop-in while peeking |
+| **1** | FOV culling — skips targets clearly outside the viewer cone |
+| **2** | LOS face probes — 4x4 body-face sampling with dual-face path when needed |
+| **3** | Aim-ray proximity — checks near the viewer crosshair |
+| **4** | Jump assist — predicts short jump peeks before pop-in |
+| **5** | Predictive preload — look-ahead for peeker/holder visibility |
+| **6** | Transmit closure + reverse audit — hides linked entities safely and fails open if closure is incomplete |
 
 If all stages say "hidden", the enemy's entities (including weapons, wearables, and cosmetics) are removed from transmit. This complete coverage ensures the cheat sees nothing and prevents `missing client entity` game crashes.
 
@@ -49,14 +51,24 @@ If all stages say "hidden", the enemy's entities (including weapons, wearables, 
 ### Install
 
 1. Install **CounterStrikeSharp** + **MetaMod** + **Ray-Trace** (match your OS).
-2. Drop `S2AWH.dll` into:
+2. Copy the release package contents so these files end up here:
 
    ```
    addons/counterstrikesharp/plugins/S2AWH/
    ```
 
-3. Start your server. A default config is auto-generated.
-4. Check console for `[S2AWH]` — you're live.
+   Required files:
+   - `S2AWH.dll`
+   - `S2AWH.deps.json`
+
+3. Copy the example config to:
+
+   ```
+   addons/counterstrikesharp/configs/plugins/S2AWH/
+   ```
+
+4. Start your server.
+5. Check console for `[S2AWH]` — you're live.
 
 > [!TIP]
 > Upgrading? Delete `S2AWH.json` first to get fresh defaults.
@@ -102,20 +114,19 @@ If all stages say "hidden", the enemy's entities (including weapons, wearables, 
 | Key | Default | What It Does |
 |:---|:---:|:---|
 | `Preload.EnablePreload` | `true` | Master preload switch |
+| `Preload.SurfaceProbeHitRadius` | `80.0` | Accept preload probe near-hit radius |
 | `Preload.PredictorDistance` | `160.0` | Look-ahead distance |
 | `Preload.EnabledForPeekers` | `true` | Viewer peek prediction |
 | `Preload.EnabledForHolders` | `false` | Target movement prediction |
 | `Preload.RevealHoldSeconds` | `0.10` | Keep visible briefly after LOS lost |
-| `Preload.SurfaceProbeRows` | `1` | Preload probe density (1–3) |
 
 ### AABB
 
 | Key | Default | What It Does |
 |:---|:---:|:---|
-| `Aabb.LosHorizontalScale` | `1.15` | LOS box width multiplier |
-| `Aabb.LosVerticalScale` | `1.10` | LOS box height multiplier |
-| `Aabb.LosSurfaceProbeRows` | `2` | LOS probe density (1–3) |
-| `Aabb.MicroHullMaxDistance` | `3000.0` | Max range for micro-hull fallback |
+| `Aabb.LosHorizontalScale` | `0.5` | LOS box width multiplier |
+| `Aabb.LosVerticalScale` | `0.7` | LOS box height multiplier |
+| `Aabb.LosSurfaceProbeHitRadius` | `80.0` | LOS probe near-hit acceptance radius |
 | `Aabb.EnableAdaptiveProfile` | `true` | Grow predictor box with speed |
 
 ### Visibility
@@ -143,10 +154,10 @@ If all stages say "hidden", the enemy's entities (including weapons, wearables, 
 
 ```powershell
 # Build
-dotnet build S2AWH/S2AWH.csproj
+dotnet build .\S2AWH\S2AWH.csproj
 
 # Package release
-powershell -ExecutionPolicy Bypass -File .\scripts\package-release.ps1
+powershell -ExecutionPolicy Bypass -File .\S2AWH\scripts\package-release.ps1
 ```
 
 Local dependency paths are auto-resolved. Override with `-p:CssApiPath=...` if needed.

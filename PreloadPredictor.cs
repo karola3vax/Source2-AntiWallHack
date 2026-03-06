@@ -8,47 +8,53 @@ namespace S2AWH;
 internal sealed class PreloadPredictor
 {
     private const int SlotCount = 65;
-    private const int PredictorTracePointCount = 5; // eye + center + 3 boundaries
-    private const int SurfaceProbePointCount = 18; // max: 3 probe rows * 6 faces
+    private const int DirectedPreloadProbePointCount = 32; // 4x4 per face, up to 2 horizontal faces
+    private const float DirectedPreloadDualFaceRatioThreshold = 1.35f;
     private const float StandingViewOffsetZ = 64.0f;
+    private const float DirectedPreloadVerticalOffsetUnits = 1.0f;
     private const float MinStandUpLeadUnits = 1.0f;
     private const float StandUpHeadroomMultiplier = 2.0f;
     private const float MinViewerHorizontalPreloadLeadUnits = 18.0f;
     private const float MaxPreloadTargetHeadroomUnits = 12.0f;
     private const float MinJumpLeadUnits = 4.0f;
-    private const float JumpAssistHeadroomUnits = 64.0f;
-    private const float MinJumpAssistLeadUnits = 48.0f;
-    private const float MaxJumpAssistLeadUnits = 96.0f;
+    private const float JumpAssistHeadroomUnits = 32.0f;
+    private const float MinJumpAssistLeadUnits = 24.0f;
+    private const float MaxJumpAssistLeadUnits = 64.0f;
     private const float JumpAssistGravityUnitsPerSecondSq = 800.0f;
     private const float DefaultJumpImpulseUnitsPerSecond = 301.0f;
-    private const float MaxJumpAssistHorizontalLeadUnits = 96.0f;
+    private const float MaxJumpAssistHorizontalLeadUnits = 32.0f;
+    private static readonly float[] DirectedPreloadRowFactors =
+    {
+        0.97f,
+        0.33f,
+        -0.33f,
+        -0.97f
+    };
+    private static readonly float[] DirectedPreloadColumnFactors =
+    {
+        -0.97f,
+        -0.33f,
+        0.33f,
+        0.97f
+    };
 
     private sealed class PredictorTargetCacheEntry
     {
         public int Tick = -1;
         public bool HasTargetLookahead;
-        public int PredictedPointCount;
-        public Vector[] PredictedPoints = CreatePredictorPointBuffer();
-        public int PredictedSurfacePointCount;
-        public Vector[] PredictedSurfacePoints = CreateSurfaceProbePointBuffer();
-        public bool CurrentPointsReady;
-        public int CurrentPointCount;
-        public Vector[] CurrentPoints = CreatePredictorPointBuffer();
-        public bool CurrentSurfacePointsReady;
-        public int CurrentSurfacePointCount;
-        public Vector[] CurrentSurfacePoints = CreateSurfaceProbePointBuffer();
+        public Vector PredictedOrigin = new(0.0f, 0.0f, 0.0f);
     }
 
     private readonly CRayTraceInterface _rayTrace;
     private readonly Action<int, ViewerRayTraceStage>? _recordViewerTraceAttempt;
     private readonly Vector _viewerEyeBuffer = new(0.0f, 0.0f, 0.0f);
-    private readonly Vector _predictedTargetOrigin = new(0.0f, 0.0f, 0.0f);
     private readonly Vector _currentTargetOrigin = new(0.0f, 0.0f, 0.0f);
     private readonly Vector _traceStart = new(0.0f, 0.0f, 0.0f);
     private readonly Vector _predictedViewerEye = new(0.0f, 0.0f, 0.0f);
     private readonly Vector _predictedViewerJumpEye = new(0.0f, 0.0f, 0.0f);
     private readonly Vector _predictedViewerHighEye = new(0.0f, 0.0f, 0.0f);
     private readonly Vector _surfaceTraceEnd = new(0.0f, 0.0f, 0.0f);
+    private readonly Vector[] _directedPreloadProbePoints = CreateDirectedPreloadProbeBuffer();
 
     private readonly TraceOptions _cachedTraceOptions = VisibilityGeometry.GetVisibilityTraceOptions();
     private readonly PredictorTargetCacheEntry?[] _targetCacheBySlot = new PredictorTargetCacheEntry?[SlotCount];
@@ -66,7 +72,7 @@ internal sealed class PreloadPredictor
 
     /// <summary>
     /// Predicts if target will be visible to viewer in the near future (to prevent pop-in).
-    /// Uses both predictor points and predictor surface probes.
+    /// Uses directed preload surface probes with nearest-first and highest-point fallback.
     /// </summary>
     internal bool WillBeVisible(
         int viewerSlot,
@@ -130,103 +136,70 @@ internal sealed class PreloadPredictor
         if (VisibilityGeometry.ShouldDrawDebugAabbBox(DebugAabbKind.PredictorCurrent) ||
             VisibilityGeometry.ShouldDrawDebugAabbBox(DebugAabbKind.PredictorPredicted))
         {
-            EnsureCurrentPoints(targetCache, ref targetSnapshot, _currentTargetOrigin, config);
+            DrawPredictorDebugAabb(ref targetSnapshot, _currentTargetOrigin, config, applyDirectionalShift: true, DebugAabbKind.PredictorCurrent);
         }
 
-        if (config.Preload.EnabledForHolders &&
-            targetCache.HasTargetLookahead &&
-            CanSeePreloadPath(
-                viewerPawn,
-                targetPawn,
-                _viewerEyeBuffer,
-                ref viewerSnapshot,
-                ref targetSnapshot,
-                _predictedTargetOrigin,
-                applyDirectionalShift: false,
-                targetCache.PredictedPoints,
-                targetCache.PredictedPointCount,
-                targetCache.PredictedSurfacePoints,
-                targetCache.PredictedSurfacePointCount,
-                surfaceHitRadiusSq,
-                float.PositiveInfinity,
-                DebugTraceKind.Preload,
-                drawDebugBeams,
-                config))
-        {
-            return true;
-        }
-
-        if (!config.Preload.EnabledForPeekers)
-        {
-            return false;
-        }
-
-        if (!TryGetViewerPeekLookahead(
+        // Preload uses up to two trace rays per evaluation (nearest + highest fallback).
+        // Priority: peeker path (when viewer lookahead exists) -> holder path.
+        if (config.Preload.EnabledForPeekers &&
+            TryGetViewerPeekLookahead(
                 ref viewerSnapshot,
                 config,
                 out float viewerLookaheadX,
                 out float viewerLookaheadY,
                 out float viewerLookaheadZ))
         {
-            return false;
+            _predictedViewerEye.X = _viewerEyeBuffer.X + viewerLookaheadX;
+            _predictedViewerEye.Y = _viewerEyeBuffer.Y + viewerLookaheadY;
+            _predictedViewerEye.Z = _viewerEyeBuffer.Z + Math.Max(0.0f, viewerLookaheadZ);
+
+            // Validate: the predicted eye must be reachable through world geometry.
+            // If a wall blocks the path, clamp the predicted eye to just before the wall.
+            ClampPredictedEyeToWorld(viewerPawn, _viewerEyeBuffer, _predictedViewerEye);
+
+            Vector selectedEye = _predictedViewerEye;
+            float highStandUpTargetEyeOffsetZ = GetViewerHighStandUpTargetEyeOffset(ref viewerSnapshot);
+            float highStandUpTargetEyeZ = viewerSnapshot.OriginZ + highStandUpTargetEyeOffsetZ;
+            if (highStandUpTargetEyeZ > _predictedViewerEye.Z)
+            {
+                _predictedViewerHighEye.X = _predictedViewerEye.X;
+                _predictedViewerHighEye.Y = _predictedViewerEye.Y;
+                _predictedViewerHighEye.Z = highStandUpTargetEyeZ;
+                ClampPredictedEyeToWorld(viewerPawn, _viewerEyeBuffer, _predictedViewerHighEye);
+                selectedEye = _predictedViewerHighEye;
+            }
+
+            return CanSeeNearestSurfaceProbe(
+                viewerPawn,
+                targetPawn,
+                selectedEye,
+                ref viewerSnapshot,
+                ref targetSnapshot,
+                _currentTargetOrigin,
+                surfaceHitRadiusSq,
+                maxPreloadTargetPointZ,
+                DebugTraceKind.Preload,
+                drawDebugBeams,
+                config);
         }
 
-        _predictedViewerEye.X = _viewerEyeBuffer.X + viewerLookaheadX;
-        _predictedViewerEye.Y = _viewerEyeBuffer.Y + viewerLookaheadY;
-        _predictedViewerEye.Z = _viewerEyeBuffer.Z + Math.Max(0.0f, viewerLookaheadZ);
-
-        EnsureCurrentPoints(targetCache, ref targetSnapshot, _currentTargetOrigin, config);
-        EnsureCurrentSurfacePoints(targetCache, ref targetSnapshot, _currentTargetOrigin, config);
-
-        if (CanSeePreloadPath(
-            viewerPawn,
-            targetPawn,
-            _predictedViewerEye,
-            ref viewerSnapshot,
-            ref targetSnapshot,
-            _currentTargetOrigin,
-            applyDirectionalShift: true,
-            targetCache.CurrentPoints,
-            targetCache.CurrentPointCount,
-            targetCache.CurrentSurfacePoints,
-            targetCache.CurrentSurfacePointCount,
-            surfaceHitRadiusSq,
-            maxPreloadTargetPointZ,
-            DebugTraceKind.Preload,
-            drawDebugBeams,
-            config))
+        if (config.Preload.EnabledForHolders && targetCache.HasTargetLookahead)
         {
-            return true;
+            return CanSeeNearestSurfaceProbe(
+                viewerPawn,
+                targetPawn,
+                _viewerEyeBuffer,
+                ref viewerSnapshot,
+                ref targetSnapshot,
+                targetCache.PredictedOrigin,
+                surfaceHitRadiusSq,
+                float.PositiveInfinity,
+                DebugTraceKind.Preload,
+                drawDebugBeams,
+                config);
         }
 
-        float highStandUpTargetEyeOffsetZ = GetViewerHighStandUpTargetEyeOffset(ref viewerSnapshot);
-        float highStandUpTargetEyeZ = viewerSnapshot.OriginZ + highStandUpTargetEyeOffsetZ;
-        if (highStandUpTargetEyeZ <= _predictedViewerEye.Z)
-        {
-            return false;
-        }
-
-        _predictedViewerHighEye.X = _viewerEyeBuffer.X + viewerLookaheadX;
-        _predictedViewerHighEye.Y = _viewerEyeBuffer.Y + viewerLookaheadY;
-        _predictedViewerHighEye.Z = highStandUpTargetEyeZ;
-
-        return CanSeePreloadPath(
-            viewerPawn,
-            targetPawn,
-            _predictedViewerHighEye,
-            ref viewerSnapshot,
-            ref targetSnapshot,
-            _currentTargetOrigin,
-            applyDirectionalShift: true,
-            targetCache.CurrentPoints,
-            targetCache.CurrentPointCount,
-            targetCache.CurrentSurfacePoints,
-            targetCache.CurrentSurfacePointCount,
-            surfaceHitRadiusSq,
-            maxPreloadTargetPointZ,
-            DebugTraceKind.Preload,
-            drawDebugBeams,
-            config);
+        return false;
     }
 
     internal bool WillBeVisibleFromJumpPeek(
@@ -271,12 +244,16 @@ internal sealed class PreloadPredictor
         float jumpHitRadiusSq = config.Aabb.LosSurfaceProbeHitRadius * config.Aabb.LosSurfaceProbeHitRadius;
         bool drawDebugBeams = _cachedDrawDebugBeams;
         SetJumpAssistEyePosition(ref viewerSnapshot);
+
+        // Validate: the predicted jump eye must be reachable through world geometry.
+        ClampPredictedEyeToWorld(viewerPawn, _viewerEyeBuffer, _predictedViewerJumpEye);
+
         if (_predictedViewerJumpEye.Z <= viewerSnapshot.EyeZ)
         {
             return false;
         }
 
-        return CanSeeNearestJumpAssistSurfaceProbe(
+        return CanSeeJumpAssistSurfaceProbes(
             viewerPawn,
             targetPawn,
             _predictedViewerJumpEye,
@@ -286,68 +263,46 @@ internal sealed class PreloadPredictor
             config);
     }
 
-    private bool CanSeePreloadPath(
-        CBasePlayerPawn viewerPawn,
-        CBasePlayerPawn targetPawn,
-        Vector eyePosition,
-        ref PlayerTransformSnapshot viewerSnapshot,
-        ref PlayerTransformSnapshot targetSnapshot,
-        Vector targetOrigin,
-        bool applyDirectionalShift,
-        Vector[] predictorPoints,
-        int predictorPointCount,
-        Vector[] surfacePoints,
-        int surfacePointCount,
-        float hitRadiusSq,
-        float maxTargetPointZ,
-        DebugTraceKind traceKind,
-        bool drawDebugBeams,
-        S2AWHConfig config)
+    /// <summary>
+    /// Traces from current eye to predicted eye. If a wall blocks the path,
+    /// the predicted eye is clamped to just before the wall so preload traces
+    /// never originate from inside world geometry.
+    /// </summary>
+    private void ClampPredictedEyeToWorld(CBasePlayerPawn viewerPawn, Vector currentEye, Vector predictedEye)
     {
-        if (CanSeeNearestSurfaceProbe(
-                viewerPawn,
-                targetPawn,
-                eyePosition,
-                ref viewerSnapshot,
-                ref targetSnapshot,
-                targetOrigin,
-                applyDirectionalShift,
-                hitRadiusSq,
-                maxTargetPointZ,
-                traceKind,
-                drawDebugBeams,
-                config))
+        _surfaceTraceEnd.X = predictedEye.X;
+        _surfaceTraceEnd.Y = predictedEye.Y;
+        _surfaceTraceEnd.Z = predictedEye.Z;
+
+        if (!_rayTrace.TraceEndShape(currentEye, _surfaceTraceEnd, viewerPawn, _cachedTraceOptions, out var result))
         {
-            return true;
+            return; // Trace failed; keep predicted eye as-is (fail-open).
         }
 
-        if (predictorPointCount > 0 &&
-            CanSeeAnyTargetPoint(
-                viewerPawn,
-                targetPawn,
-                eyePosition,
-                ref viewerSnapshot,
-                predictorPoints,
-                predictorPointCount,
-                maxTargetPointZ,
-                traceKind,
-                drawDebugBeams))
+        if (!result.DidHit)
         {
-            return true;
+            return; // No wall between current and predicted — all clear.
         }
 
-        return surfacePointCount > 0 &&
-               CanSeeAnySurfaceProbe(
-                   viewerPawn,
-                   targetPawn,
-                   eyePosition,
-                   ref viewerSnapshot,
-                   surfacePoints,
-                   surfacePointCount,
-                   hitRadiusSq,
-                   maxTargetPointZ,
-                   traceKind,
-                   drawDebugBeams);
+        // Pull back 2 units toward the viewer so the origin is safely in open space.
+        const float pullbackUnits = 2.0f;
+        float dx = currentEye.X - predictedEye.X;
+        float dy = currentEye.Y - predictedEye.Y;
+        float dz = currentEye.Z - predictedEye.Z;
+        float distanceSq = (dx * dx) + (dy * dy) + (dz * dz);
+        if (distanceSq > 0.0001f)
+        {
+            float inverseDistance = 1.0f / MathF.Sqrt(distanceSq);
+            predictedEye.X = result.EndPosX + (dx * inverseDistance * pullbackUnits);
+            predictedEye.Y = result.EndPosY + (dy * inverseDistance * pullbackUnits);
+            predictedEye.Z = result.EndPosZ + (dz * inverseDistance * pullbackUnits);
+        }
+        else
+        {
+            predictedEye.X = currentEye.X;
+            predictedEye.Y = currentEye.Y;
+            predictedEye.Z = currentEye.Z;
+        }
     }
 
     private void RecordActiveViewerTraceAttempt(ViewerRayTraceStage stage)
@@ -358,47 +313,6 @@ internal sealed class PreloadPredictor
         }
     }
 
-    private bool CanSeeAnyTargetPoint(
-        CBasePlayerPawn viewerPawn,
-        CBasePlayerPawn targetPawn,
-        Vector eyePosition,
-        ref PlayerTransformSnapshot viewerSnapshot,
-        Vector[] targetPoints,
-        int targetPointCount,
-        float maxTargetPointZ,
-        DebugTraceKind traceKind,
-        bool drawDebugBeams)
-    {
-        nint targetHandle = targetPawn.Handle;
-        for (int i = 0; i < targetPointCount; i++)
-        {
-            Vector targetPoint = targetPoints[i];
-            if (targetPoint.Z > maxTargetPointZ)
-            {
-                continue;
-            }
-
-            AabbGeometry.SetDistributedViewerOrigin(_traceStart, ref viewerSnapshot, eyePosition, targetPoint.X, targetPoint.Y, targetPoint.Z);
-            RecordActiveViewerTraceAttempt(ViewerRayTraceStage.Preload);
-            if (!_rayTrace.TraceEndShape(_traceStart, targetPoint, viewerPawn, _cachedTraceOptions, out var result))
-            {
-                continue;
-            }
-
-            if (drawDebugBeams)
-            {
-                VisibilityGeometry.DrawDebugTraceBeam(_traceStart, targetPoint, result, traceKind);
-            }
-
-            if (!result.DidHit || result.HitEntity == targetHandle)
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
     private bool CanSeeNearestSurfaceProbe(
         CBasePlayerPawn viewerPawn,
         CBasePlayerPawn targetPawn,
@@ -406,34 +320,91 @@ internal sealed class PreloadPredictor
         ref PlayerTransformSnapshot viewerSnapshot,
         ref PlayerTransformSnapshot targetSnapshot,
         Vector targetOrigin,
-        bool applyDirectionalShift,
         float hitRadiusSq,
         float maxTargetPointZ,
         DebugTraceKind traceKind,
         bool drawDebugBeams,
         S2AWHConfig config)
     {
-        GetPredictorWorldBounds(ref targetSnapshot, targetOrigin, config, applyDirectionalShift, out float minX, out float minY, out float minZ, out float maxX, out float maxY, out float maxZ);
-        AabbGeometry.GetClosestPointOnSurface(
-            eyePosition.X,
-            eyePosition.Y,
-            eyePosition.Z,
+        // Preload probe candidates intentionally mirror LOS geometry.
+        GetLosWorldBounds(ref targetSnapshot, targetOrigin, config, out float minX, out float minY, out float minZ, out float maxX, out float maxY, out float maxZ);
+        int probeCount = FillDirectedPreloadProbePoints(
+            eyePosition,
             minX,
             minY,
             minZ,
             maxX,
             maxY,
             maxZ,
-            out float probeX,
-            out float probeY,
-            out float probeZ);
-
-        if (probeZ > maxTargetPointZ)
+            _directedPreloadProbePoints);
+        if (probeCount <= 0)
         {
-            probeZ = maxTargetPointZ;
+            return false;
         }
 
-        AabbGeometry.SetDistributedViewerOrigin(_traceStart, ref viewerSnapshot, eyePosition, probeX, probeY, probeZ);
+        int bestIndex = -1;
+        float bestDistanceSq = float.MaxValue;
+        int highestIndex = -1;
+        float highestZ = float.MinValue;
+        for (int i = 0; i < probeCount; i++)
+        {
+            Vector candidateProbe = _directedPreloadProbePoints[i];
+            if (candidateProbe.Z > maxTargetPointZ)
+            {
+                continue;
+            }
+
+            float dx = candidateProbe.X - eyePosition.X;
+            float dy = candidateProbe.Y - eyePosition.Y;
+            float dz = candidateProbe.Z - eyePosition.Z;
+            float distanceSq = (dx * dx) + (dy * dy) + (dz * dz);
+            if (distanceSq < bestDistanceSq)
+            {
+                bestDistanceSq = distanceSq;
+                bestIndex = i;
+            }
+
+            if (candidateProbe.Z > highestZ)
+            {
+                highestZ = candidateProbe.Z;
+                highestIndex = i;
+            }
+        }
+
+        if (bestIndex < 0)
+        {
+            return false;
+        }
+
+        // Try nearest probe first; if blocked, try highest (head area) as fallback.
+        if (TraceSinglePreloadProbe(viewerPawn, targetPawn, eyePosition, bestIndex, hitRadiusSq, traceKind, drawDebugBeams))
+        {
+            return true;
+        }
+
+        if (highestIndex >= 0 && highestIndex != bestIndex)
+        {
+            return TraceSinglePreloadProbe(viewerPawn, targetPawn, eyePosition, highestIndex, hitRadiusSq, traceKind, drawDebugBeams);
+        }
+
+        return false;
+    }
+
+    private bool TraceSinglePreloadProbe(
+        CBasePlayerPawn viewerPawn,
+        CBasePlayerPawn targetPawn,
+        Vector eyePosition,
+        int probeIndex,
+        float hitRadiusSq,
+        DebugTraceKind traceKind,
+        bool drawDebugBeams)
+    {
+        Vector probe = _directedPreloadProbePoints[probeIndex];
+        float probeX = probe.X;
+        float probeY = probe.Y;
+        float probeZ = probe.Z;
+
+        AabbGeometry.SetViewerOrigin(_traceStart, eyePosition);
         _surfaceTraceEnd.X = probeX;
         _surfaceTraceEnd.Y = probeY;
         _surfaceTraceEnd.Z = probeZ;
@@ -458,52 +429,114 @@ internal sealed class PreloadPredictor
                DistanceSquared(probeX, probeY, probeZ, result.EndPosX, result.EndPosY, result.EndPosZ) <= hitRadiusSq;
     }
 
-    private bool CanSeeAnySurfaceProbe(
-        CBasePlayerPawn viewerPawn,
-        CBasePlayerPawn targetPawn,
+    private static int FillDirectedPreloadProbePoints(
         Vector eyePosition,
-        ref PlayerTransformSnapshot viewerSnapshot,
-        Vector[] surfacePoints,
-        int surfacePointCount,
-        float hitRadiusSq,
-        float maxTargetPointZ,
-        DebugTraceKind traceKind,
-        bool drawDebugBeams)
+        float minX,
+        float minY,
+        float minZ,
+        float maxX,
+        float maxY,
+        float maxZ,
+        Vector[] pointBuffer)
     {
-        nint targetHandle = targetPawn.Handle;
-        for (int i = 0; i < surfacePointCount; i++)
+        if (pointBuffer.Length < DirectedPreloadProbePointCount)
         {
-            Vector probePoint = surfacePoints[i];
-            if (probePoint.Z > maxTargetPointZ)
+            return 0;
+        }
+
+        float centerX = (minX + maxX) * 0.5f;
+        float centerY = (minY + maxY) * 0.5f;
+        float centerZ = (minZ + maxZ) * 0.5f;
+        float halfX = (maxX - minX) * 0.5f;
+        float halfY = (maxY - minY) * 0.5f;
+        float halfZ = (maxZ - minZ) * 0.5f;
+        float absDx = MathF.Abs(eyePosition.X - centerX);
+        float absDy = MathF.Abs(eyePosition.Y - centerY);
+        float maxAxis = MathF.Max(absDx, absDy);
+        float minAxis = MathF.Min(absDx, absDy);
+        bool includeBothHorizontalFaces = minAxis > 0.0001f && (maxAxis / minAxis) <= DirectedPreloadDualFaceRatioThreshold;
+        float faceX = eyePosition.X <= centerX ? minX : maxX;
+        float faceY = eyePosition.Y <= centerY ? minY : maxY;
+        int pointIndex = 0;
+
+        if (includeBothHorizontalFaces)
+        {
+            if (absDx >= absDy)
             {
-                continue;
+                pointIndex = AppendDirectedXFaceProbePoints(pointBuffer, pointIndex, faceX, centerY, centerZ, halfY, halfZ, DirectedPreloadColumnFactors);
+                pointIndex = AppendDirectedYFaceProbePoints(pointBuffer, pointIndex, faceY, centerX, centerZ, halfX, halfZ, DirectedPreloadColumnFactors);
+            }
+            else
+            {
+                pointIndex = AppendDirectedYFaceProbePoints(pointBuffer, pointIndex, faceY, centerX, centerZ, halfX, halfZ, DirectedPreloadColumnFactors);
+                pointIndex = AppendDirectedXFaceProbePoints(pointBuffer, pointIndex, faceX, centerY, centerZ, halfY, halfZ, DirectedPreloadColumnFactors);
             }
 
-            AabbGeometry.SetDistributedViewerOrigin(_traceStart, ref viewerSnapshot, eyePosition, probePoint.X, probePoint.Y, probePoint.Z);
-            RecordActiveViewerTraceAttempt(ViewerRayTraceStage.Preload);
-            if (!_rayTrace.TraceEndShape(_traceStart, probePoint, viewerPawn, _cachedTraceOptions, out var result))
-            {
-                continue;
-            }
+            return pointIndex;
+        }
 
-            if (drawDebugBeams)
-            {
-                VisibilityGeometry.DrawDebugTraceBeam(_traceStart, probePoint, result, traceKind);
-            }
+        if (absDx >= absDy)
+        {
+            return AppendDirectedXFaceProbePoints(pointBuffer, pointIndex, faceX, centerY, centerZ, halfY, halfZ, DirectedPreloadColumnFactors);
+        }
 
-            if (!result.DidHit || result.HitEntity == targetHandle)
-            {
-                return true;
-            }
+        return AppendDirectedYFaceProbePoints(pointBuffer, pointIndex, faceY, centerX, centerZ, halfX, halfZ, DirectedPreloadColumnFactors);
+    }
 
-            if (hitRadiusSq > 0.0f &&
-                DistanceSquared(probePoint.X, probePoint.Y, probePoint.Z, result.EndPosX, result.EndPosY, result.EndPosZ) <= hitRadiusSq)
+    private static int AppendDirectedXFaceProbePoints(
+        Vector[] pointBuffer,
+        int pointIndex,
+        float faceX,
+        float centerY,
+        float centerZ,
+        float halfY,
+        float halfZ,
+        float[] columnFactors)
+    {
+        for (int row = 0; row < DirectedPreloadRowFactors.Length; row++)
+        {
+            float rowZ = centerZ + (halfZ * DirectedPreloadRowFactors[row]) + DirectedPreloadVerticalOffsetUnits;
+            for (int col = 0; col < columnFactors.Length; col++)
             {
-                return true;
+                if (pointIndex >= pointBuffer.Length)
+                {
+                    return pointIndex;
+                }
+
+                float columnY = centerY + (halfY * columnFactors[col]);
+                SetPoint(pointBuffer, pointIndex++, faceX, columnY, rowZ);
             }
         }
 
-        return false;
+        return pointIndex;
+    }
+
+    private static int AppendDirectedYFaceProbePoints(
+        Vector[] pointBuffer,
+        int pointIndex,
+        float faceY,
+        float centerX,
+        float centerZ,
+        float halfX,
+        float halfZ,
+        float[] columnFactors)
+    {
+        for (int row = 0; row < DirectedPreloadRowFactors.Length; row++)
+        {
+            float rowZ = centerZ + (halfZ * DirectedPreloadRowFactors[row]) + DirectedPreloadVerticalOffsetUnits;
+            for (int col = 0; col < columnFactors.Length; col++)
+            {
+                if (pointIndex >= pointBuffer.Length)
+                {
+                    return pointIndex;
+                }
+
+                float columnX = centerX + (halfX * columnFactors[col]);
+                SetPoint(pointBuffer, pointIndex++, columnX, faceY, rowZ);
+            }
+        }
+
+        return pointIndex;
     }
 
     private PredictorTargetCacheEntry GetOrRefreshTargetCache(
@@ -527,10 +560,6 @@ internal sealed class PreloadPredictor
         ref var targetSnapshot = ref transforms[targetSlot];
 
         cache.Tick = nowTick;
-        cache.CurrentPointsReady = false;
-        cache.CurrentPointCount = 0;
-        cache.CurrentSurfacePointsReady = false;
-        cache.CurrentSurfacePointCount = 0;
         cache.HasTargetLookahead = TryGetLookahead(
             targetSnapshot.VelocityX,
             targetSnapshot.VelocityY,
@@ -545,149 +574,49 @@ internal sealed class PreloadPredictor
 
         if (!cache.HasTargetLookahead)
         {
-            cache.PredictedPointCount = 0;
-            cache.PredictedSurfacePointCount = 0;
             return cache;
         }
 
-        _predictedTargetOrigin.X = targetSnapshot.OriginX + targetLookaheadX;
-        _predictedTargetOrigin.Y = targetSnapshot.OriginY + targetLookaheadY;
-        _predictedTargetOrigin.Z = targetSnapshot.OriginZ + targetLookaheadZ;
-
-        cache.PredictedPointCount = FillPredictorTargetPoints(
-            ref targetSnapshot,
-            _predictedTargetOrigin,
-            cache.PredictedPoints,
-            config,
-            applyDirectionalShift: false,
-            DebugAabbKind.PredictorPredicted);
-        cache.PredictedSurfacePointCount = FillSurfaceProbePoints(
-            ref targetSnapshot,
-            _predictedTargetOrigin,
-            cache.PredictedSurfacePoints,
-            config,
-            applyDirectionalShift: false);
+        cache.PredictedOrigin.X = targetSnapshot.OriginX + targetLookaheadX;
+        cache.PredictedOrigin.Y = targetSnapshot.OriginY + targetLookaheadY;
+        cache.PredictedOrigin.Z = targetSnapshot.OriginZ + targetLookaheadZ;
+        if (VisibilityGeometry.ShouldDrawDebugAabbBox(DebugAabbKind.PredictorPredicted))
+        {
+            DrawPredictorDebugAabb(
+                ref targetSnapshot,
+                cache.PredictedOrigin,
+                config,
+                applyDirectionalShift: false,
+                DebugAabbKind.PredictorPredicted);
+        }
 
         return cache;
     }
 
-    private static void EnsureCurrentPoints(
-        PredictorTargetCacheEntry cache,
+    private static void DrawPredictorDebugAabb(
         ref PlayerTransformSnapshot targetSnapshot,
         Vector targetOrigin,
-        S2AWHConfig config)
-    {
-        if (cache.CurrentPointsReady)
-        {
-            return;
-        }
-
-        cache.CurrentPointCount = FillPredictorTargetPoints(
-            ref targetSnapshot,
-            targetOrigin,
-            cache.CurrentPoints,
-            config,
-            applyDirectionalShift: true,
-            DebugAabbKind.PredictorCurrent);
-        cache.CurrentPointsReady = true;
-    }
-
-    private static void EnsureCurrentSurfacePoints(
-        PredictorTargetCacheEntry cache,
-        ref PlayerTransformSnapshot targetSnapshot,
-        Vector targetOrigin,
-        S2AWHConfig config)
-    {
-        if (cache.CurrentSurfacePointsReady)
-        {
-            return;
-        }
-
-        cache.CurrentSurfacePointCount = FillSurfaceProbePoints(
-            ref targetSnapshot,
-            targetOrigin,
-            cache.CurrentSurfacePoints,
-            config,
-            applyDirectionalShift: true);
-        cache.CurrentSurfacePointsReady = true;
-    }
-
-    private static int FillPredictorTargetPoints(
-        ref PlayerTransformSnapshot targetSnapshot,
-        Vector targetOrigin,
-        Vector[] pointBuffer,
         S2AWHConfig config,
         bool applyDirectionalShift,
-        DebugAabbKind debugAabbKind)
+        DebugAabbKind kind)
     {
-        if (pointBuffer.Length < PredictorTracePointCount || !targetSnapshot.IsValid)
+        if (!VisibilityGeometry.ShouldDrawDebugAabbBox(kind))
         {
-            return 0;
+            return;
         }
 
-        GetPredictorWorldBox(
+        GetPredictorWorldBounds(
             ref targetSnapshot,
             targetOrigin,
             config,
             applyDirectionalShift,
-            out float centerX,
-            out float centerY,
-            out float centerZ,
-            out float halfX,
-            out float halfY,
-            out float halfZ);
-
-        SetPoint(pointBuffer, 0, targetOrigin.X + targetSnapshot.ViewOffsetX, targetOrigin.Y + targetSnapshot.ViewOffsetY, targetOrigin.Z + targetSnapshot.ViewOffsetZ);
-        SetPoint(pointBuffer, 1, centerX, centerY, centerZ);
-        SetPoint(pointBuffer, 2, centerX - halfX, centerY - halfY, centerZ - halfZ);
-        SetPoint(pointBuffer, 3, centerX + halfX, centerY - halfY, centerZ - halfZ);
-        SetPoint(pointBuffer, 4, centerX + halfX, centerY + halfY, centerZ + halfZ);
-
-        VisibilityGeometry.DrawDebugAabbBox(
-            centerX - halfX,
-            centerY - halfY,
-            centerZ - halfZ,
-            centerX + halfX,
-            centerY + halfY,
-            centerZ + halfZ,
-            debugAabbKind);
-
-        return PredictorTracePointCount;
-    }
-
-    private static int FillSurfaceProbePoints(
-        ref PlayerTransformSnapshot targetSnapshot,
-        Vector targetOrigin,
-        Vector[] pointBuffer,
-        S2AWHConfig config,
-        bool applyDirectionalShift)
-    {
-        if (pointBuffer.Length < SurfaceProbePointCount || !targetSnapshot.IsValid)
-        {
-            return 0;
-        }
-
-        GetPredictorWorldBox(
-            ref targetSnapshot,
-            targetOrigin,
-            config,
-            applyDirectionalShift,
-            out float centerX,
-            out float centerY,
-            out float centerZ,
-            out float halfX,
-            out float halfY,
-            out float halfZ);
-
-        return AabbGeometry.FillSurfaceProbePoints(
-            pointBuffer,
-            config.Preload.SurfaceProbeRows,
-            centerX,
-            centerY,
-            centerZ,
-            halfX,
-            halfY,
-            halfZ);
+            out float minX,
+            out float minY,
+            out float minZ,
+            out float maxX,
+            out float maxY,
+            out float maxZ);
+        VisibilityGeometry.DrawDebugAabbBox(minX, minY, minZ, maxX, maxY, maxZ, kind);
     }
 
     private static void GetPredictorWorldBounds(
@@ -826,10 +755,11 @@ internal sealed class PreloadPredictor
         out float lookaheadZ)
     {
         float viewerPredictDistance = config.Preload.PredictorDistance * config.Preload.ViewerPredictorDistanceFactor;
+        float upwardVelocity = MathF.Max(0.0f, viewerSnapshot.VelocityZ);
         bool hasVelocityLookahead = TryGetLookahead(
             viewerSnapshot.VelocityX,
             viewerSnapshot.VelocityY,
-            0.0f,
+            upwardVelocity,
             config.Preload.PredictorMinSpeed,
             config.Preload.PredictorFullSpeed,
             viewerPredictDistance,
@@ -853,8 +783,18 @@ internal sealed class PreloadPredictor
 
             if (currentHorizontalLead < desiredMinimumLead)
             {
+                // If we boost the horizontal lead, we must proportionally boost the vertical lead
+                // so the trajectory angle is maintained (e.g. when slowly climbing stairs).
+                float boostRatio = currentHorizontalLead > 0.001f ? desiredMinimumLead / currentHorizontalLead : 0.0f;
+                
                 lookaheadX = viewerSnapshot.VelocityX * inverseHorizontalSpeed * desiredMinimumLead;
                 lookaheadY = viewerSnapshot.VelocityY * inverseHorizontalSpeed * desiredMinimumLead;
+                
+                if (boostRatio > 0.0f)
+                {
+                    lookaheadZ *= boostRatio;
+                }
+                
                 hasVelocityLookahead = true;
             }
         }
@@ -1002,7 +942,7 @@ internal sealed class PreloadPredictor
 
 
 
-    private bool CanSeeNearestJumpAssistSurfaceProbe(
+    private bool CanSeeJumpAssistSurfaceProbes(
         CBasePlayerPawn viewerPawn,
         CBasePlayerPawn targetPawn,
         Vector eyePosition,
@@ -1012,23 +952,78 @@ internal sealed class PreloadPredictor
         S2AWHConfig config)
     {
         GetJumpAssistWorldBounds(ref targetSnapshot, config, out float minX, out float minY, out float minZ, out float maxX, out float maxY, out float maxZ);
-        AabbGeometry.GetClosestPointOnSurface(
-            eyePosition.X,
-            eyePosition.Y,
-            eyePosition.Z,
+        int probeCount = FillDirectedPreloadProbePoints(
+            eyePosition,
             minX,
             minY,
             minZ,
             maxX,
             maxY,
             maxZ,
-            out float probeX,
-            out float probeY,
-            out float probeZ);
+            _directedPreloadProbePoints);
+        if (probeCount <= 0)
+        {
+            return false;
+        }
 
-        _traceStart.X = eyePosition.X;
-        _traceStart.Y = eyePosition.Y;
-        _traceStart.Z = eyePosition.Z;
+        int bestIndex = -1;
+        float bestDistanceSq = float.MaxValue;
+        int highestIndex = -1;
+        float highestZ = float.MinValue;
+        for (int i = 0; i < probeCount; i++)
+        {
+            Vector probe = _directedPreloadProbePoints[i];
+            float dx = probe.X - eyePosition.X;
+            float dy = probe.Y - eyePosition.Y;
+            float dz = probe.Z - eyePosition.Z;
+            float distanceSq = (dx * dx) + (dy * dy) + (dz * dz);
+            
+            if (distanceSq < bestDistanceSq)
+            {
+                bestDistanceSq = distanceSq;
+                bestIndex = i;
+            }
+
+            if (probe.Z > highestZ)
+            {
+                highestZ = probe.Z;
+                highestIndex = i;
+            }
+        }
+
+        if (bestIndex < 0)
+        {
+            return false;
+        }
+
+        // Try nearest probe first; if blocked, try highest (head area) as fallback.
+        if (TraceSingleJumpAssistProbe(viewerPawn, targetPawn, eyePosition, bestIndex, hitRadiusSq, drawDebugBeams))
+        {
+            return true;
+        }
+
+        if (highestIndex >= 0 && highestIndex != bestIndex)
+        {
+            return TraceSingleJumpAssistProbe(viewerPawn, targetPawn, eyePosition, highestIndex, hitRadiusSq, drawDebugBeams);
+        }
+
+        return false;
+    }
+
+    private bool TraceSingleJumpAssistProbe(
+        CBasePlayerPawn viewerPawn,
+        CBasePlayerPawn targetPawn,
+        Vector eyePosition,
+        int probeIndex,
+        float hitRadiusSq,
+        bool drawDebugBeams)
+    {
+        Vector probe = _directedPreloadProbePoints[probeIndex];
+        float probeX = probe.X;
+        float probeY = probe.Y;
+        float probeZ = probe.Z;
+
+        AabbGeometry.SetViewerOrigin(_traceStart, eyePosition);
         _surfaceTraceEnd.X = probeX;
         _surfaceTraceEnd.Y = probeY;
         _surfaceTraceEnd.Z = probeZ;
@@ -1066,6 +1061,32 @@ internal sealed class PreloadPredictor
         float centerX = targetSnapshot.OriginX + targetSnapshot.CenterX;
         float centerY = targetSnapshot.OriginY + targetSnapshot.CenterY;
         float centerZ = targetSnapshot.OriginZ + targetSnapshot.CenterZ;
+        float halfX = (targetSnapshot.MaxsX - targetSnapshot.MinsX) * 0.5f * config.Aabb.LosHorizontalScale;
+        float halfY = (targetSnapshot.MaxsY - targetSnapshot.MinsY) * 0.5f * config.Aabb.LosHorizontalScale;
+        float halfZ = (targetSnapshot.MaxsZ - targetSnapshot.MinsZ) * 0.5f * config.Aabb.LosVerticalScale;
+
+        minX = centerX - halfX;
+        minY = centerY - halfY;
+        minZ = centerZ - halfZ;
+        maxX = centerX + halfX;
+        maxY = centerY + halfY;
+        maxZ = centerZ + halfZ;
+    }
+
+    private static void GetLosWorldBounds(
+        ref PlayerTransformSnapshot targetSnapshot,
+        Vector targetOrigin,
+        S2AWHConfig config,
+        out float minX,
+        out float minY,
+        out float minZ,
+        out float maxX,
+        out float maxY,
+        out float maxZ)
+    {
+        float centerX = targetOrigin.X + targetSnapshot.CenterX;
+        float centerY = targetOrigin.Y + targetSnapshot.CenterY;
+        float centerZ = targetOrigin.Z + targetSnapshot.CenterZ;
         float halfX = (targetSnapshot.MaxsX - targetSnapshot.MinsX) * 0.5f * config.Aabb.LosHorizontalScale;
         float halfY = (targetSnapshot.MaxsY - targetSnapshot.MinsY) * 0.5f * config.Aabb.LosHorizontalScale;
         float halfZ = (targetSnapshot.MaxsZ - targetSnapshot.MinsZ) * 0.5f * config.Aabb.LosVerticalScale;
@@ -1175,20 +1196,9 @@ internal sealed class PreloadPredictor
         return (dx * dx) + (dy * dy) + (dz * dz);
     }
 
-    private static Vector[] CreatePredictorPointBuffer()
+    private static Vector[] CreateDirectedPreloadProbeBuffer()
     {
-        Vector[] buffer = new Vector[PredictorTracePointCount];
-        for (int i = 0; i < buffer.Length; i++)
-        {
-            buffer[i] = new Vector(0.0f, 0.0f, 0.0f);
-        }
-
-        return buffer;
-    }
-
-    private static Vector[] CreateSurfaceProbePointBuffer()
-    {
-        Vector[] buffer = new Vector[SurfaceProbePointCount];
+        Vector[] buffer = new Vector[DirectedPreloadProbePointCount];
         for (int i = 0; i < buffer.Length; i++)
         {
             buffer[i] = new Vector(0.0f, 0.0f, 0.0f);

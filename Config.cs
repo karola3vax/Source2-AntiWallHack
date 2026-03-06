@@ -48,9 +48,6 @@ public sealed class S2AWHConfig : BasePluginConfig
         [JsonPropertyName("SurfaceProbeHitRadius")]
         public float SurfaceProbeHitRadius { get; set; } = 80.0f;
 
-        [JsonPropertyName("SurfaceProbeRows")]
-        public int SurfaceProbeRows { get; set; } = 1;
-
         [JsonPropertyName("PredictorDistance")]
         public float PredictorDistance { get; set; } = 160.0f;
 
@@ -170,10 +167,10 @@ public sealed class S2AWHConfig : BasePluginConfig
     public sealed class AabbSettings
     {
         [JsonPropertyName("LosHorizontalScale")]
-        public float LosHorizontalScale { get; set; } = 1.15f;
+        public float LosHorizontalScale { get; set; } = 0.5f;
 
         [JsonPropertyName("LosVerticalScale")]
-        public float LosVerticalScale { get; set; } = 1.10f;
+        public float LosVerticalScale { get; set; } = 0.7f;
 
         [JsonPropertyName("PredictorHorizontalScale")]
         public float PredictorHorizontalScale { get; set; } = 1.0f;
@@ -213,15 +210,6 @@ public sealed class S2AWHConfig : BasePluginConfig
 
         [JsonPropertyName("LosSurfaceProbeHitRadius")]
         public float LosSurfaceProbeHitRadius { get; set; } = 80.0f;
-
-        [JsonPropertyName("LosSurfaceProbeRows")]
-        public int LosSurfaceProbeRows { get; set; } = 2;
-
-        [JsonPropertyName("MicroHullMaxDistance")]
-        public float MicroHullMaxDistance { get; set; } = 3000.0f;
-
-        [JsonPropertyName("MicroHullOverheadZOffset")]
-        public float MicroHullOverheadZOffset { get; set; } = 32.0f;
     }
 
     public sealed class VisibilitySettings
@@ -333,10 +321,6 @@ public sealed class S2AWHConfig : BasePluginConfig
         ClampWithWarning(ref surfaceProbeHitRadius, 0.0f, 200.0f, "Preload.SurfaceProbeHitRadius", warnings);
         Preload.SurfaceProbeHitRadius = surfaceProbeHitRadius;
 
-        int surfaceProbeRows = Preload.SurfaceProbeRows;
-        ClampWithWarning(ref surfaceProbeRows, 1, 3, "Preload.SurfaceProbeRows", warnings);
-        Preload.SurfaceProbeRows = surfaceProbeRows;
-
         float predictorMinSpeed = Preload.PredictorMinSpeed;
         ClampWithWarning(ref predictorMinSpeed, 0.0f, 100.0f, "Preload.PredictorMinSpeed", warnings);
         Preload.PredictorMinSpeed = predictorMinSpeed;
@@ -380,11 +364,11 @@ public sealed class S2AWHConfig : BasePluginConfig
 
         // --- Aabb ---
         float losHorizontalScale = Aabb.LosHorizontalScale;
-        ClampWithWarning(ref losHorizontalScale, 1.0f, 10.0f, "Aabb.LosHorizontalScale", warnings);
+        ClampWithWarning(ref losHorizontalScale, 0.10f, 10.0f, "Aabb.LosHorizontalScale", warnings);
         Aabb.LosHorizontalScale = losHorizontalScale;
 
         float losVerticalScale = Aabb.LosVerticalScale;
-        ClampWithWarning(ref losVerticalScale, 1.0f, 10.0f, "Aabb.LosVerticalScale", warnings);
+        ClampWithWarning(ref losVerticalScale, 0.10f, 10.0f, "Aabb.LosVerticalScale", warnings);
         Aabb.LosVerticalScale = losVerticalScale;
 
         float predictorHorizontalScale = Aabb.PredictorHorizontalScale;
@@ -438,18 +422,6 @@ public sealed class S2AWHConfig : BasePluginConfig
         float losSurfaceProbeHitRadius = Aabb.LosSurfaceProbeHitRadius;
         ClampWithWarning(ref losSurfaceProbeHitRadius, 0.0f, 200.0f, "Aabb.LosSurfaceProbeHitRadius", warnings);
         Aabb.LosSurfaceProbeHitRadius = losSurfaceProbeHitRadius;
-
-        int losSurfaceProbeRows = Aabb.LosSurfaceProbeRows;
-        ClampWithWarning(ref losSurfaceProbeRows, 1, 3, "Aabb.LosSurfaceProbeRows", warnings);
-        Aabb.LosSurfaceProbeRows = losSurfaceProbeRows;
-
-        float microHullMaxDistance = Aabb.MicroHullMaxDistance;
-        ClampWithWarning(ref microHullMaxDistance, 0.0f, 8192.0f, "Aabb.MicroHullMaxDistance", warnings);
-        Aabb.MicroHullMaxDistance = microHullMaxDistance;
-
-        float microHullOverheadZOffset = Aabb.MicroHullOverheadZOffset;
-        ClampWithWarning(ref microHullOverheadZOffset, 0.0f, 128.0f, "Aabb.MicroHullOverheadZOffset", warnings);
-        Aabb.MicroHullOverheadZOffset = microHullOverheadZOffset;
 
         _fovDotThreshold = ComputeFovDotThreshold(Trace.FovDegrees);
         _halfFovRadians = ComputeHalfFovRadians(Trace.FovDegrees);

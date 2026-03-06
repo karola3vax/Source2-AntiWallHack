@@ -1,8 +1,10 @@
 ﻿using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
 using CounterStrikeSharp.API.Modules.Entities;
+using CounterStrikeSharp.API.Modules.Memory;
 using CounterStrikeSharp.API.Modules.Utils;
 using System.Diagnostics.CodeAnalysis;
+using System.Runtime.InteropServices;
 
 namespace S2AWH;
 
@@ -110,6 +112,10 @@ public partial class S2AWH
                     continue;
                 }
                 TargetTransmitEntities targetEntities = targetEntry.Entities;
+                if (targetEntities.ForceVisibleUntilTick >= nowTick)
+                {
+                    continue;
+                }
 
                 // Always-transmit fast paths.
                 if (skipTeammates && targetEntry.TargetTeam == viewerTeam)
@@ -218,11 +224,49 @@ public partial class S2AWH
 
     private bool RemoveTargetTransmitEntities(CCheckTransmitInfo info, TargetTransmitEntities targetEntities)
     {
-        PrepareTargetTransmitEntitiesForRemoval(targetEntities, Server.TickCount);
+        int nowTick = Server.TickCount;
+        if (!PrepareTargetTransmitEntitiesForRemoval(targetEntities, nowTick))
+        {
+            ApplyFailOpenVisibleQuarantine(targetEntities, nowTick);
+            RecordTargetClosureOffenderSample(targetEntities, 6);
+
+            if (_collectDebugCounters)
+            {
+                _transmitFailOpenOwnedClosureInWindow++;
+                if (targetEntities.BaseHitEntityCap || targetEntities.HitEntityCap || targetEntities.HitSceneClosureBudget)
+                {
+                    _transmitFailOpenEntityClosureCapInWindow++;
+                }
+            }
+
+            if ((targetEntities.BaseHitEntityCap || targetEntities.HitEntityCap || targetEntities.HitSceneClosureBudget) &&
+                !_hasLoggedEntityClosureCapError)
+            {
+                string targetEntitySample = DescribeTargetEntitySample(targetEntities, 6);
+                WarnLog(
+                    "Transmit closure hit a safety cap.",
+                    $"A target had more linked entities than the configured closure budget. Sample: {targetEntitySample}.",
+                    "Increase entity closure limits or reduce attachment-heavy entities to avoid fail-open."
+                );
+                _hasLoggedEntityClosureCapError = true;
+            }
+            return false;
+        }
 
         int entityCount = targetEntities.Count;
         if (entityCount <= 0)
         {
+            return false;
+        }
+
+        if (HasUnsafeReverseTransmitReferences(info, targetEntities, nowTick))
+        {
+            ApplyFailOpenVisibleQuarantine(targetEntities, nowTick);
+            if (_collectDebugCounters)
+            {
+                _transmitFailOpenReverseAuditInWindow++;
+            }
+
             return false;
         }
 
@@ -261,6 +305,66 @@ public partial class S2AWH
         }
 
         return removedAny;
+    }
+
+    private bool HasUnsafeReverseTransmitReferences(CCheckTransmitInfo info, TargetTransmitEntities targetEntities, int nowTick)
+    {
+        if (!TryEnsureOwnedEntityBuckets(nowTick))
+        {
+            return true;
+        }
+
+        int targetEntityCount = targetEntities.Count;
+        _targetTransmitHandleMembership.Clear();
+        for (int i = 0; i < targetEntityCount; i++)
+        {
+            _targetTransmitHandleMembership.Add(targetEntities.RawHandles[i]);
+        }
+
+        for (int i = 0; i < targetEntityCount; i++)
+        {
+            uint referencedHandleRaw = targetEntities.RawHandles[i];
+            if (!_ownedEntityBuckets.TryGetValue(referencedHandleRaw, out OwnedEntityBucket? bucket) || bucket.Count <= 0)
+            {
+                continue;
+            }
+
+            for (int bucketIndex = 0; bucketIndex < bucket.Count; bucketIndex++)
+            {
+                uint referencingHandleRaw = bucket.RawHandles[bucketIndex];
+                if (_targetTransmitHandleMembership.Contains(referencingHandleRaw))
+                {
+                    continue;
+                }
+
+                if (!TryResolveEntityHandleIndexForTransmit(referencingHandleRaw, out int referencingEntityIndex))
+                {
+                    continue;
+                }
+
+                if (!info.TransmitEntities.Contains(referencingEntityIndex))
+                {
+                    continue;
+                }
+
+                RecordClosureOffenderHandle(referencingHandleRaw);
+                RecordClosureOffenderHandle(referencedHandleRaw);
+
+                if (!_hasLoggedReverseReferenceAuditError)
+                {
+                    WarnLog(
+                        "Reverse transmit audit blocked a hide.",
+                        $"A still-transmitted entity references a soon-to-hide entity: {DescribeOwnedRelationSample(referencedHandleRaw, referencingHandleRaw)}.",
+                        "S2AWH failed open for safety and will retry after quarantine."
+                    );
+                    _hasLoggedReverseReferenceAuditError = true;
+                }
+
+                return true;
+            }
+        }
+
+        return false;
     }
 
     [SuppressMessage(
@@ -310,9 +414,17 @@ public partial class S2AWH
         if (mustRefreshFullList)
         {
             targetEntities.LastFullRefreshTick = nowTick;
+            if (targetEntities.PawnHandleRaw != pawnHandleRaw)
+            {
+                targetEntities.ForceVisibleUntilTick = -1;
+            }
             targetEntities.PawnHandleRaw = pawnHandleRaw;
             targetEntities.Count = 0;
+            targetEntities.BaseCount = 0;
             targetEntities.OwnedClosureTick = -1;
+            targetEntities.BaseHitEntityCap = false;
+            targetEntities.HitEntityCap = false;
+            targetEntities.HitSceneClosureBudget = false;
             AddUniqueEntityHandle(targetEntities, pawnHandleRaw);
 
             try
@@ -352,18 +464,28 @@ public partial class S2AWH
                         }
                     }
                 }
+
+                var myWearables = targetPawnEntity.MyWearables;
+                int myWearableCount = myWearables.Count;
+                for (int i = 0; i < myWearableCount; i++)
+                {
+                    if (TryResolveLiveOwnedEntityHandle(myWearables[i], targetPawnIndex, targetControllerIndex, out uint wearableHandleRaw))
+                    {
+                        AddUniqueEntityHandle(targetEntities, wearableHandleRaw);
+                    }
+                }
             }
             catch (Exception ex)
             {
                 if (!_hasLoggedWeaponSyncError)
                 {
                     WarnLog(
-                        "Weapon sync hiccup.",
-                        "There was a brief issue reading a player's weapon data.",
+                        "Owned entity sync hiccup.",
+                        "There was a brief issue reading a player's weapon or wearable data.",
                         "S2AWH handled it safely and will retry next tick."
                     );
                     DebugLog(
-                        "Weapon sync error detail.",
+                        "Owned entity sync error detail.",
                         $"Error: {ex.Message}",
                         "This message only shows once."
                     );
@@ -371,6 +493,9 @@ public partial class S2AWH
                 }
             }
 
+            targetEntities.BaseHitEntityCap = targetEntities.HitEntityCap;
+            targetEntities.HitEntityCap = false;
+            targetEntities.BaseCount = targetEntities.Count;
         }
 
         if (targetEntities.SanitizeTick != nowTick)
@@ -402,6 +527,7 @@ public partial class S2AWH
         {
             if (targetEntities.RawHandles.Length >= MaxTrackedTransmitEntitiesPerTarget)
             {
+                targetEntities.HitEntityCap = true;
                 return;
             }
 
@@ -426,31 +552,48 @@ public partial class S2AWH
             return false;
         }
 
-        uint rawHandle = weaponHandle.Raw;
-        IntPtr? weaponPointer = EntitySystem.GetEntityByHandle(rawHandle);
-        if (!weaponPointer.HasValue || weaponPointer.Value == IntPtr.Zero)
+        return TryResolveLiveOwnedEntityHandle(weaponHandle, targetPawnIndex, targetControllerIndex, out entityHandleRaw);
+    }
+
+    [SuppressMessage(
+        "Design",
+        "CA1031:Do not catch general exception types",
+        Justification = "Owned entity resolution crosses unstable native boundaries and must stay non-fatal inside transmit filtering.")]
+    private static bool TryResolveLiveOwnedEntityHandle<T>(CHandle<T> entityHandle, int targetPawnIndex, int targetControllerIndex, out uint entityHandleRaw)
+        where T : NativeEntity
+    {
+        entityHandleRaw = 0;
+
+        if (!entityHandle.IsValid)
         {
             return false;
         }
 
-        CBasePlayerWeapon weaponEntity;
+        uint rawHandle = entityHandle.Raw;
+        IntPtr? entityPointer = EntitySystem.GetEntityByHandle(rawHandle);
+        if (!entityPointer.HasValue || entityPointer.Value == IntPtr.Zero)
+        {
+            return false;
+        }
+
+        CBaseEntity entity;
         try
         {
-            weaponEntity = new CBasePlayerWeapon(weaponPointer.Value);
+            entity = new CBaseEntity(entityPointer.Value);
         }
         catch
         {
             return false;
         }
 
-        if (!weaponEntity.IsValid)
+        if (!entity.IsValid)
         {
             return false;
         }
 
-        // Weapon service arrays can be transient during inventory/model updates.
+        // Weapon and wearable service arrays can be transient during inventory/model updates.
         // Reject resolved owner mismatches so we never hide another player's entity.
-        var ownerHandle = weaponEntity.OwnerEntity;
+        var ownerHandle = entity.OwnerEntity;
         if (ownerHandle.IsValid)
         {
             IntPtr? ownerPointer = EntitySystem.GetEntityByHandle(ownerHandle.Raw);
@@ -475,7 +618,7 @@ public partial class S2AWH
             }
         }
 
-        entityHandleRaw = weaponEntity.EntityHandle.Raw;
+        entityHandleRaw = entity.EntityHandle.Raw;
         int entityIndex = (int)(entityHandleRaw & (Utilities.MaxEdicts - 1));
         if (entityIndex <= 0 || entityIndex >= Utilities.MaxEdicts)
         {
@@ -488,27 +631,45 @@ public partial class S2AWH
     private void SanitizeTargetEntityList(TargetTransmitEntities targetEntities)
     {
         int writeIndex = 0;
+        int writeBaseCount = 0;
         int count = targetEntities.Count;
         for (int i = 0; i < count; i++)
         {
             uint entityHandleRaw = targetEntities.RawHandles[i];
-            if (!ShouldKeepTargetEntityHandle(targetEntities, entityHandleRaw))
+            bool isBaseHandle = i < targetEntities.BaseCount;
+            bool shouldKeep = isBaseHandle
+                ? TryResolveEntityHandleIndexForTransmit(entityHandleRaw, out _)
+                : ShouldKeepTargetEntityHandle(targetEntities, entityHandleRaw);
+            if (!shouldKeep)
             {
                 continue;
             }
 
             targetEntities.RawHandles[writeIndex++] = entityHandleRaw;
+            if (isBaseHandle)
+            {
+                writeBaseCount++;
+            }
         }
 
         targetEntities.Count = writeIndex;
+        targetEntities.BaseCount = Math.Min(writeBaseCount, writeIndex);
     }
 
-    private void PrepareTargetTransmitEntitiesForRemoval(TargetTransmitEntities targetEntities, int nowTick)
+    private bool PrepareTargetTransmitEntitiesForRemoval(TargetTransmitEntities targetEntities, int nowTick)
     {
         bool appendedOwnedClosure = false;
         if (targetEntities.OwnedClosureTick != nowTick)
         {
-            AppendOwnedEntityHandleClosure(targetEntities, targetEntities.ControllerHandleRaw, nowTick);
+            // Rebuild transient closure from the stable per-target base set every tick.
+            // Carrying previous tick's attachments forward can compound stale handles and hit caps early.
+            targetEntities.Count = Math.Min(targetEntities.BaseCount, targetEntities.Count);
+            targetEntities.HitEntityCap = false;
+            targetEntities.HitSceneClosureBudget = false;
+            if (!AppendOwnedEntityHandleClosure(targetEntities, targetEntities.ControllerHandleRaw, nowTick))
+            {
+                return false;
+            }
             targetEntities.OwnedClosureTick = nowTick;
             appendedOwnedClosure = true;
         }
@@ -518,6 +679,13 @@ public partial class S2AWH
             SanitizeTargetEntityList(targetEntities);
             targetEntities.SanitizeTick = nowTick;
         }
+
+        if (targetEntities.BaseHitEntityCap || targetEntities.HitEntityCap || targetEntities.HitSceneClosureBudget)
+        {
+            return false;
+        }
+
+        return true;
     }
 
     private bool ShouldKeepTargetEntityHandle(TargetTransmitEntities targetEntities, uint entityHandleRaw)
@@ -527,12 +695,14 @@ public partial class S2AWH
             return false;
         }
 
-        if (entityHandleRaw == targetEntities.PawnHandleRaw)
+        if (entityHandleRaw == targetEntities.PawnHandleRaw ||
+            entityHandleRaw == targetEntities.ControllerHandleRaw)
         {
             return true;
         }
 
         return TryResolveOwnerChainToTarget(targetEntities, entityHandleRaw) ||
+               TryResolveEffectChainToTarget(targetEntities, entityHandleRaw) ||
                TryResolveParentChainToTarget(targetEntities, entityHandleRaw);
     }
 
@@ -604,10 +774,53 @@ public partial class S2AWH
         return false;
     }
 
+    private static bool TryResolveEffectChainToTarget(TargetTransmitEntities targetEntities, uint entityHandleRaw)
+    {
+        uint currentHandleRaw = entityHandleRaw;
+        for (int depth = 0; depth < 8; depth++)
+        {
+            IntPtr? entityPointer = EntitySystem.GetEntityByHandle(currentHandleRaw);
+            if (!entityPointer.HasValue || entityPointer.Value == IntPtr.Zero)
+            {
+                return false;
+            }
+
+            var entity = new CBaseEntity(entityPointer.Value);
+            if (!entity.IsValid)
+            {
+                return false;
+            }
+
+            var effectHandle = entity.EffectEntity;
+            if (!effectHandle.IsValid)
+            {
+                return false;
+            }
+
+            uint effectHandleRaw = effectHandle.Raw;
+            if (effectHandleRaw == targetEntities.PawnHandleRaw ||
+                effectHandleRaw == targetEntities.ControllerHandleRaw)
+            {
+                return true;
+            }
+
+            if (effectHandleRaw == 0 || effectHandleRaw == currentHandleRaw)
+            {
+                return false;
+            }
+
+            currentHandleRaw = effectHandleRaw;
+        }
+
+        return false;
+    }
+
     /// <summary>
     /// Resolves the scene-graph parent of an entity by walking
     /// CBaseEntity -> CBodyComponent -> SceneNode -> PParent -> Owner.
-    /// Returns false if any step in the chain is null or invalid.
+    /// Falls back to the networked CGameSceneNode::m_hParent owner handle when the
+    /// wrapper's parent pointer is transiently unavailable. Returns false if every
+    /// path is null or invalid.
     /// </summary>
     [SuppressMessage(
         "Design",
@@ -637,21 +850,12 @@ public partial class S2AWH
                 return false;
             }
 
-            var parentSceneNode = sceneNode.PParent;
-            if (parentSceneNode == null)
+            if (TryResolveSceneParentEntityHandleFromPointer(sceneNode, out parentEntityHandleRaw))
             {
-                return false;
+                return true;
             }
 
-            var parentOwner = parentSceneNode.Owner;
-            if (parentOwner == null || !parentOwner.IsValid)
-            {
-                return false;
-            }
-
-            parentEntityHandleRaw = parentOwner.EntityHandle.Raw;
-            int parentIndex = (int)(parentEntityHandleRaw & (Utilities.MaxEdicts - 1));
-            return parentIndex > 0 && parentIndex < Utilities.MaxEdicts;
+            return TryResolveSceneParentEntityHandleFromNetwork(sceneNode, out parentEntityHandleRaw);
         }
         catch
         {
@@ -659,11 +863,80 @@ public partial class S2AWH
         }
     }
 
-    private void AppendOwnedEntityHandleClosure(TargetTransmitEntities targetEntities, uint extraOwnerHandleRaw, int nowTick)
+    private static bool TryResolveSceneParentEntityHandleFromPointer(CGameSceneNode sceneNode, out uint parentEntityHandleRaw)
+    {
+        parentEntityHandleRaw = 0;
+
+        var parentSceneNode = sceneNode.PParent;
+        if (parentSceneNode == null)
+        {
+            return false;
+        }
+
+        var parentOwner = parentSceneNode.Owner;
+        if (parentOwner == null || !parentOwner.IsValid)
+        {
+            return false;
+        }
+
+        return TryResolveLiveEntityHandleRaw(parentOwner.EntityHandle.Raw, out parentEntityHandleRaw);
+    }
+
+    private static bool TryResolveSceneParentEntityHandleFromNetwork(CGameSceneNode sceneNode, out uint parentEntityHandleRaw)
+    {
+        parentEntityHandleRaw = 0;
+
+        if (sceneNode.Handle == IntPtr.Zero)
+        {
+            return false;
+        }
+
+        short parentHandleOffset = Schema.GetSchemaOffset("CGameSceneNode", "m_hParent");
+        IntPtr parentOwnerHandlePointer = sceneNode.Handle + parentHandleOffset + 0x8;
+        uint parentHandleRaw = unchecked((uint)Marshal.ReadInt32(parentOwnerHandlePointer));
+        return TryResolveLiveEntityHandleRaw(parentHandleRaw, out parentEntityHandleRaw);
+    }
+
+    private static bool TryResolveLiveEntityHandleRaw(uint entityHandleRaw, out uint liveEntityHandleRaw)
+    {
+        liveEntityHandleRaw = 0;
+
+        int entityIndex = (int)(entityHandleRaw & (Utilities.MaxEdicts - 1));
+        if (entityIndex <= 0 || entityIndex >= Utilities.MaxEdicts)
+        {
+            return false;
+        }
+
+        IntPtr? entityPointer = EntitySystem.GetEntityByHandle(entityHandleRaw);
+        if (!entityPointer.HasValue || entityPointer.Value == IntPtr.Zero)
+        {
+            return false;
+        }
+
+        liveEntityHandleRaw = entityHandleRaw;
+        return true;
+    }
+
+    private void ApplyFailOpenVisibleQuarantine(TargetTransmitEntities targetEntities, int nowTick)
+    {
+        int quarantineUntilTick = nowTick + FailOpenVisibleQuarantineTicks;
+        if (targetEntities.ForceVisibleUntilTick >= quarantineUntilTick)
+        {
+            return;
+        }
+
+        targetEntities.ForceVisibleUntilTick = quarantineUntilTick;
+        if (_collectDebugCounters)
+        {
+            _transmitFailOpenQuarantineInWindow++;
+        }
+    }
+
+    private bool AppendOwnedEntityHandleClosure(TargetTransmitEntities targetEntities, uint extraOwnerHandleRaw, int nowTick)
     {
         if (!TryEnsureOwnedEntityBuckets(nowTick))
         {
-            return;
+            return false;
         }
 
         if (extraOwnerHandleRaw != 0 && extraOwnerHandleRaw != uint.MaxValue)
@@ -675,7 +948,24 @@ public partial class S2AWH
         while (readIndex < targetEntities.Count)
         {
             AppendOwnedChildren(targetEntities, targetEntities.RawHandles[readIndex++]);
+            if (targetEntities.HitEntityCap)
+            {
+                return false;
+            }
         }
+
+        AppendSceneDescendantHandles(targetEntities, targetEntities.PawnHandleRaw);
+        if (extraOwnerHandleRaw != 0 && extraOwnerHandleRaw != uint.MaxValue)
+        {
+            AppendSceneDescendantHandles(targetEntities, extraOwnerHandleRaw);
+        }
+
+        if (targetEntities.HitEntityCap || targetEntities.HitSceneClosureBudget)
+        {
+            return false;
+        }
+
+        return true;
     }
 
     private void AppendOwnedChildren(TargetTransmitEntities targetEntities, uint ownerHandleRaw)
@@ -688,6 +978,124 @@ public partial class S2AWH
         for (int i = 0; i < bucket.Count; i++)
         {
             AddUniqueEntityHandle(targetEntities, bucket.RawHandles[i]);
+            if (targetEntities.HitEntityCap)
+            {
+                return;
+            }
+        }
+    }
+
+    [SuppressMessage(
+        "Design",
+        "CA1031:Do not catch general exception types",
+        Justification = "Scene graph traversal reads native pointers that can be transiently invalid; treat faults as bounded fail-open.")]
+    private void AppendSceneDescendantHandles(TargetTransmitEntities targetEntities, uint rootEntityHandleRaw)
+    {
+        if (rootEntityHandleRaw == 0 || rootEntityHandleRaw == uint.MaxValue)
+        {
+            return;
+        }
+
+        try
+        {
+            IntPtr? rootPointer = EntitySystem.GetEntityByHandle(rootEntityHandleRaw);
+            if (!rootPointer.HasValue || rootPointer.Value == IntPtr.Zero)
+            {
+                return;
+            }
+
+            var rootEntity = new CBaseEntity(rootPointer.Value);
+            if (!rootEntity.IsValid)
+            {
+                return;
+            }
+
+            CGameSceneNode? firstChild = rootEntity.CBodyComponent?.SceneNode?.Child;
+            if (firstChild == null)
+            {
+                return;
+            }
+
+            _sceneClosureVisitedNodes.Clear();
+            int visitedNodeCount = 0;
+            AppendSceneNodeBranch(targetEntities, firstChild, 0, ref visitedNodeCount);
+        }
+        catch
+        {
+            targetEntities.HitSceneClosureBudget = true;
+        }
+    }
+
+    [SuppressMessage(
+        "Design",
+        "CA1031:Do not catch general exception types",
+        Justification = "Scene node child/sibling traversal can cross transient native state while entities spawn/despawn.")]
+    private void AppendSceneNodeBranch(TargetTransmitEntities targetEntities, CGameSceneNode? branchNode, int depth, ref int visitedNodeCount)
+    {
+        if (branchNode == null)
+        {
+            return;
+        }
+
+        if (depth > MaxSceneNodeClosureDepth)
+        {
+            targetEntities.HitSceneClosureBudget = true;
+            return;
+        }
+
+        CGameSceneNode? currentNode = branchNode;
+        while (currentNode != null)
+        {
+            if (visitedNodeCount >= MaxSceneNodeClosureNodesPerTarget)
+            {
+                targetEntities.HitSceneClosureBudget = true;
+                return;
+            }
+
+            CGameSceneNode? childNode;
+            CGameSceneNode? nextSiblingNode;
+            try
+            {
+                nint nodeHandle = currentNode.Handle;
+                if (nodeHandle == nint.Zero)
+                {
+                    currentNode = currentNode.NextSibling;
+                    continue;
+                }
+
+                if (!_sceneClosureVisitedNodes.Add(nodeHandle))
+                {
+                    currentNode = currentNode.NextSibling;
+                    continue;
+                }
+
+                visitedNodeCount++;
+
+                var ownerEntity = currentNode.Owner;
+                if (ownerEntity != null && ownerEntity.IsValid)
+                {
+                    AddUniqueEntityHandle(targetEntities, ownerEntity.EntityHandle.Raw);
+                }
+
+                childNode = currentNode.Child;
+                nextSiblingNode = currentNode.NextSibling;
+            }
+            catch
+            {
+                targetEntities.HitSceneClosureBudget = true;
+                return;
+            }
+
+            if (childNode != null)
+            {
+                AppendSceneNodeBranch(targetEntities, childNode, depth + 1, ref visitedNodeCount);
+                if (targetEntities.HitSceneClosureBudget || targetEntities.HitEntityCap)
+                {
+                    return;
+                }
+            }
+
+            currentNode = nextSiblingNode;
         }
     }
 
@@ -704,65 +1112,67 @@ public partial class S2AWH
 
         try
         {
-            _ownedEntityBuckets.Clear();
+            _lastOwnedEntityBucketOverflowOwnerHandleRaw = 0;
+            _lastOwnedEntityBucketOverflowEntityHandleRaw = 0;
+            bool bucketOverflowed = false;
+            int syncPass = 0;
 
-            foreach (CEntityInstance entityInstance in Utilities.GetAllEntities())
+            do
             {
-                if (entityInstance == null || !entityInstance.IsValid)
-                {
-                    continue;
-                }
+                PrimePendingOwnedEntityRescans(nowTick);
 
-                var entity = new CBaseEntity(entityInstance.Handle);
-                if (!entity.IsValid)
-                {
-                    continue;
-                }
+                bool shouldFullResync =
+                    !_ownedEntityBucketsInitialized ||
+                    _dirtyOwnedEntityHandles.Count >= MaxDirtyOwnedEntityHandlesBeforeFullResync ||
+                    _ownedEntityLastFullResyncTick < 0 ||
+                    (nowTick - _ownedEntityLastFullResyncTick) >= OwnedEntityFullResyncIntervalTicks;
 
-                uint entityHandleRaw = entity.EntityHandle.Raw;
-                int entityIndex = (int)(entityHandleRaw & (Utilities.MaxEdicts - 1));
-                if (entityIndex <= 0 || entityIndex >= Utilities.MaxEdicts)
+                if (shouldFullResync)
                 {
-                    continue;
-                }
-
-                var ownerHandle = entity.OwnerEntity;
-                bool hasOwner = ownerHandle.IsValid;
-                bool hasParent = TryResolveSceneParentEntityHandle(entityHandleRaw, out uint sceneParentHandleRaw);
-
-                if (!hasOwner && !hasParent)
-                {
-                    continue;
-                }
-
-                // Bucket under OwnerEntity (gameplay ownership: weapons, etc.)
-                if (hasOwner)
-                {
-                    uint ownerHandleRaw = ownerHandle.Raw;
-                    if (ownerHandleRaw != 0 && ownerHandleRaw != entityHandleRaw)
+                    FullRebuildOwnedEntityBuckets(ref bucketOverflowed);
+                    _ownedEntityLastFullResyncTick = nowTick;
+                    _ownedEntityBucketsInitialized = true;
+                    if (_collectDebugCounters)
                     {
-                        if (!_ownedEntityBuckets.TryGetValue(ownerHandleRaw, out OwnedEntityBucket? ownerBucket))
-                        {
-                            ownerBucket = new OwnedEntityBucket();
-                            _ownedEntityBuckets[ownerHandleRaw] = ownerBucket;
-                        }
-
-                        AddOwnedEntityBucketHandle(ownerBucket, entityHandleRaw);
+                        _ownedEntityFullResyncsInWindow++;
                     }
                 }
-
-                // Bucket under scene-graph parent (spatial parenting: wearables, bone-attached cosmetics, etc.)
-                if (hasParent && sceneParentHandleRaw != 0 && sceneParentHandleRaw != entityHandleRaw &&
-                    (!hasOwner || sceneParentHandleRaw != ownerHandle.Raw))
+                else if (_dirtyOwnedEntityHandles.Count > 0)
                 {
-                    if (!_ownedEntityBuckets.TryGetValue(sceneParentHandleRaw, out OwnedEntityBucket? parentBucket))
-                    {
-                        parentBucket = new OwnedEntityBucket();
-                        _ownedEntityBuckets[sceneParentHandleRaw] = parentBucket;
-                    }
-
-                    AddOwnedEntityBucketHandle(parentBucket, entityHandleRaw);
+                    ProcessDirtyOwnedEntities(ref bucketOverflowed);
                 }
+
+                syncPass++;
+            }
+            while (!bucketOverflowed &&
+                   _dirtyOwnedEntityHandles.Count > 0 &&
+                   syncPass < MaxOwnedEntityDirtySyncPassesPerTick);
+
+            if (!bucketOverflowed && _dirtyOwnedEntityHandles.Count > 0)
+            {
+                _ownedEntityBucketsTick = -1;
+                return false;
+            }
+
+            if (bucketOverflowed)
+            {
+                _ownedEntityBucketsTick = -1;
+                if (!_hasLoggedEntityClosureCapError)
+                {
+                    RecordClosureOffenderHandle(_lastOwnedEntityBucketOverflowOwnerHandleRaw);
+                    RecordClosureOffenderHandle(_lastOwnedEntityBucketOverflowEntityHandleRaw);
+                    string relationSample = DescribeOwnedRelationSample(
+                        _lastOwnedEntityBucketOverflowOwnerHandleRaw,
+                        _lastOwnedEntityBucketOverflowEntityHandleRaw);
+                    WarnLog(
+                        "Entity closure scan hit a safety cap.",
+                        $"At least one owner bucket exceeded the maximum tracked linked entities. Sample: {relationSample}.",
+                        "S2AWH failed open for safety and will retry next tick."
+                    );
+                    _hasLoggedEntityClosureCapError = true;
+                }
+
+                return false;
             }
 
             _hasLoggedOwnedEntityScanError = false;
@@ -792,7 +1202,747 @@ public partial class S2AWH
         }
     }
 
-    private static void AddOwnedEntityBucketHandle(OwnedEntityBucket bucket, uint entityHandleRaw)
+    private void PrimePendingOwnedEntityRescans(int nowTick)
+    {
+        if (_pendingOwnedEntityRescanUntilTick.Count <= 0)
+        {
+            return;
+        }
+
+        _ownedEntityPendingRescanRemovalScratch.Clear();
+        foreach (var pair in _pendingOwnedEntityRescanUntilTick)
+        {
+            if (pair.Value < nowTick)
+            {
+                _ownedEntityPendingRescanRemovalScratch.Add(pair.Key);
+                continue;
+            }
+
+            _dirtyOwnedEntityHandles.Add(pair.Key);
+        }
+
+        int removalCount = _ownedEntityPendingRescanRemovalScratch.Count;
+        for (int i = 0; i < removalCount; i++)
+        {
+            _pendingOwnedEntityRescanUntilTick.Remove(_ownedEntityPendingRescanRemovalScratch[i]);
+        }
+    }
+
+    private void FullRebuildOwnedEntityBuckets(ref bool bucketOverflowed)
+    {
+        _ownedEntityBuckets.Clear();
+        _ownedEntityRelationsByChild.Clear();
+        _dirtyOwnedEntityHandles.Clear();
+
+        foreach (CEntityInstance entityInstance in Utilities.GetAllEntities())
+        {
+            UpsertOwnedEntityRelations(entityInstance, ref bucketOverflowed);
+            if (bucketOverflowed)
+            {
+                return;
+            }
+        }
+    }
+
+    private void ProcessDirtyOwnedEntities(ref bool bucketOverflowed)
+    {
+        _ownedEntityDirtyHandleScratch.Clear();
+        _ownedEntityDirtyHandleScratch.AddRange(_dirtyOwnedEntityHandles);
+        _dirtyOwnedEntityHandles.Clear();
+
+        int dirtyCount = _ownedEntityDirtyHandleScratch.Count;
+        for (int i = 0; i < dirtyCount; i++)
+        {
+            uint entityHandleRaw = _ownedEntityDirtyHandleScratch[i];
+            RemoveOwnedEntityRelationsForHandle(entityHandleRaw);
+
+            IntPtr? entityPointer = EntitySystem.GetEntityByHandle(entityHandleRaw);
+            if (!entityPointer.HasValue || entityPointer.Value == IntPtr.Zero)
+            {
+                continue;
+            }
+
+            var entityInstance = new CEntityInstance(entityPointer.Value);
+            if (!entityInstance.IsValid)
+            {
+                continue;
+            }
+
+            UpsertOwnedEntityRelations(entityInstance, ref bucketOverflowed);
+            if (bucketOverflowed)
+            {
+                return;
+            }
+        }
+
+        if (_collectDebugCounters)
+        {
+            _ownedEntityDirtyEntityUpdatesInWindow += dirtyCount;
+        }
+    }
+
+    private void UpsertOwnedEntityRelations(CEntityInstance entityInstance, ref bool bucketOverflowed)
+    {
+        if (entityInstance == null || !entityInstance.IsValid)
+        {
+            return;
+        }
+
+        var entity = new CBaseEntity(entityInstance.Handle);
+        if (!entity.IsValid)
+        {
+            return;
+        }
+
+        uint entityHandleRaw = entity.EntityHandle.Raw;
+        int entityIndex = (int)(entityHandleRaw & (Utilities.MaxEdicts - 1));
+        if (entityIndex <= 0 || entityIndex >= Utilities.MaxEdicts)
+        {
+            return;
+        }
+
+        CollectLinkedOwnerHandles(entityInstance, entity, entityHandleRaw, _ownedEntityScratchHandles, ref bucketOverflowed);
+        if (bucketOverflowed || _ownedEntityScratchHandles.Count <= 0)
+        {
+            return;
+        }
+
+        if (!_ownedEntityRelationsByChild.TryGetValue(entityHandleRaw, out OwnedEntityBucket? childRelations))
+        {
+            childRelations = new OwnedEntityBucket();
+            _ownedEntityRelationsByChild[entityHandleRaw] = childRelations;
+        }
+
+        CopyOwnedEntityBucket(_ownedEntityScratchHandles, childRelations);
+        for (int i = 0; i < childRelations.Count; i++)
+        {
+            TryAddOwnedEntityRelation(childRelations.RawHandles[i], entityHandleRaw, ref bucketOverflowed);
+            if (bucketOverflowed)
+            {
+                return;
+            }
+        }
+    }
+
+    private void CollectLinkedOwnerHandles(
+        CEntityInstance entityInstance,
+        CBaseEntity entity,
+        uint entityHandleRaw,
+        OwnedEntityBucket ownerHandles,
+        ref bool bucketOverflowed)
+    {
+        ownerHandles.Count = 0;
+
+        AddCollectedOwnerHandle(ownerHandles, entity.OwnerEntity.Raw, ref bucketOverflowed);
+        if (bucketOverflowed)
+        {
+            return;
+        }
+
+        uint effectHandleRaw = entity.EffectEntity.Raw;
+        if (effectHandleRaw != entity.OwnerEntity.Raw)
+        {
+            AddCollectedOwnerHandle(ownerHandles, effectHandleRaw, ref bucketOverflowed);
+            if (bucketOverflowed)
+            {
+                return;
+            }
+        }
+
+        if (TryResolveSceneParentEntityHandle(entityHandleRaw, out uint sceneParentHandleRaw))
+        {
+            AddCollectedOwnerHandle(ownerHandles, sceneParentHandleRaw, ref bucketOverflowed);
+            if (bucketOverflowed)
+            {
+                return;
+            }
+        }
+
+        AppendDesignerSpecificLinkedEntityRelations(entityInstance, ownerHandles, ref bucketOverflowed);
+    }
+
+    private static void AddCollectedOwnerHandle(OwnedEntityBucket ownerHandles, uint ownerHandleRaw, ref bool bucketOverflowed)
+    {
+        if (ownerHandleRaw == 0 || ownerHandleRaw == uint.MaxValue)
+        {
+            return;
+        }
+
+        if (!TryResolveLiveEntityHandleRaw(ownerHandleRaw, out uint liveOwnerHandleRaw))
+        {
+            return;
+        }
+
+        AddUniqueBucketHandle(ownerHandles, liveOwnerHandleRaw, ref bucketOverflowed);
+    }
+
+    private static void AddUniqueBucketHandle(OwnedEntityBucket bucket, uint handleRaw, ref bool bucketOverflowed)
+    {
+        int count = bucket.Count;
+        for (int i = 0; i < count; i++)
+        {
+            if (bucket.RawHandles[i] == handleRaw)
+            {
+                return;
+            }
+        }
+
+        if (count >= bucket.RawHandles.Length)
+        {
+            if (bucket.RawHandles.Length >= MaxTrackedTransmitEntitiesPerTarget)
+            {
+                bucketOverflowed = true;
+                return;
+            }
+
+            int newLength = Math.Min(MaxTrackedTransmitEntitiesPerTarget, bucket.RawHandles.Length * 2);
+            Array.Resize(ref bucket.RawHandles, newLength);
+        }
+
+        bucket.RawHandles[count] = handleRaw;
+        bucket.Count = count + 1;
+    }
+
+    private static void CopyOwnedEntityBucket(OwnedEntityBucket source, OwnedEntityBucket destination)
+    {
+        if (destination.RawHandles.Length < source.Count)
+        {
+            Array.Resize(ref destination.RawHandles, source.Count);
+        }
+
+        Array.Copy(source.RawHandles, destination.RawHandles, source.Count);
+        destination.Count = source.Count;
+    }
+
+    private void RemoveOwnedEntityRelationsForHandle(uint entityHandleRaw)
+    {
+        if (!_ownedEntityRelationsByChild.TryGetValue(entityHandleRaw, out OwnedEntityBucket? childRelations))
+        {
+            return;
+        }
+
+        for (int i = 0; i < childRelations.Count; i++)
+        {
+            RemoveOwnedEntityRelation(childRelations.RawHandles[i], entityHandleRaw);
+        }
+
+        _ownedEntityRelationsByChild.Remove(entityHandleRaw);
+    }
+
+    private void RemoveOwnedEntityRelation(uint ownerHandleRaw, uint entityHandleRaw)
+    {
+        if (!_ownedEntityBuckets.TryGetValue(ownerHandleRaw, out OwnedEntityBucket? bucket))
+        {
+            return;
+        }
+
+        RemoveOwnedEntityBucketHandle(bucket, entityHandleRaw);
+        if (bucket.Count <= 0)
+        {
+            _ownedEntityBuckets.Remove(ownerHandleRaw);
+        }
+    }
+
+    private static void RemoveOwnedEntityBucketHandle(OwnedEntityBucket bucket, uint entityHandleRaw)
+    {
+        int count = bucket.Count;
+        for (int i = 0; i < count; i++)
+        {
+            if (bucket.RawHandles[i] != entityHandleRaw)
+            {
+                continue;
+            }
+
+            int lastIndex = count - 1;
+            bucket.RawHandles[i] = bucket.RawHandles[lastIndex];
+            bucket.RawHandles[lastIndex] = 0;
+            bucket.Count = lastIndex;
+            return;
+        }
+    }
+
+    private void MarkOwnedEntityDirty(CEntityInstance entity, bool scheduleRescan)
+    {
+        if (entity == null || !entity.IsValid)
+        {
+            return;
+        }
+
+        uint entityHandleRaw = entity.EntityHandle.Raw;
+        int entityIndex = (int)(entityHandleRaw & (Utilities.MaxEdicts - 1));
+        if (entityIndex <= 0 || entityIndex >= Utilities.MaxEdicts)
+        {
+            return;
+        }
+
+        _dirtyOwnedEntityHandles.Add(entityHandleRaw);
+        if (scheduleRescan)
+        {
+            int rescanUntilTick = Server.TickCount + OwnedEntityPostSpawnRescanTicks;
+            if (_pendingOwnedEntityRescanUntilTick.TryGetValue(entityHandleRaw, out int existingRescanUntilTick) &&
+                existingRescanUntilTick > rescanUntilTick)
+            {
+                rescanUntilTick = existingRescanUntilTick;
+            }
+
+            if (_collectDebugCounters &&
+                (!_pendingOwnedEntityRescanUntilTick.TryGetValue(entityHandleRaw, out int currentRescanUntilTick) ||
+                 currentRescanUntilTick < rescanUntilTick))
+            {
+                _ownedEntityPostSpawnRescanMarksInWindow++;
+            }
+
+            _pendingOwnedEntityRescanUntilTick[entityHandleRaw] = rescanUntilTick;
+        }
+
+        _ownedEntityBucketsTick = -1;
+    }
+
+    [SuppressMessage(
+        "Design",
+        "CA1031:Do not catch general exception types",
+        Justification = "Designer-specific attachment probing is best-effort hardening and must never break the main ownership scan.")]
+    private void AppendDesignerSpecificLinkedEntityRelations(CEntityInstance entityInstance, OwnedEntityBucket ownerHandles, ref bool bucketOverflowed)
+    {
+        if (bucketOverflowed)
+        {
+            return;
+        }
+
+        string? designerName = entityInstance.DesignerName;
+        if (string.IsNullOrWhiteSpace(designerName))
+        {
+            return;
+        }
+
+        try
+        {
+            if (designerName.Contains("beam", StringComparison.OrdinalIgnoreCase) ||
+                designerName.Contains("laser", StringComparison.OrdinalIgnoreCase))
+            {
+                AppendBeamEntityRelations(entityInstance, ownerHandles, ref bucketOverflowed);
+            }
+
+            if (!bucketOverflowed && LooksLikeGrenadeLinkedEntity(designerName))
+            {
+                AppendGrenadeEntityRelations(entityInstance, ownerHandles, ref bucketOverflowed);
+            }
+
+            if (!bucketOverflowed && designerName.Contains("weapon_", StringComparison.OrdinalIgnoreCase))
+            {
+                AppendWeaponEntityRelations(entityInstance, ownerHandles, ref bucketOverflowed);
+            }
+
+            if (!bucketOverflowed && designerName.Contains("particle", StringComparison.OrdinalIgnoreCase))
+            {
+                AppendParticleEntityRelations(entityInstance, ownerHandles, ref bucketOverflowed);
+            }
+
+            if (!bucketOverflowed && designerName.Contains("sprite", StringComparison.OrdinalIgnoreCase))
+            {
+                AppendSpriteEntityRelations(entityInstance, ownerHandles, ref bucketOverflowed);
+            }
+
+            if (!bucketOverflowed && designerName.Contains("flame", StringComparison.OrdinalIgnoreCase))
+            {
+                AppendFlameEntityRelations(entityInstance, ownerHandles, ref bucketOverflowed);
+            }
+
+            if (!bucketOverflowed && designerName.Contains("rope", StringComparison.OrdinalIgnoreCase))
+            {
+                AppendRopeEntityRelations(entityInstance, ownerHandles, ref bucketOverflowed);
+            }
+
+            if (!bucketOverflowed && designerName.Contains("trigger", StringComparison.OrdinalIgnoreCase))
+            {
+                AppendTriggerEntityRelations(entityInstance, ownerHandles, ref bucketOverflowed);
+            }
+
+            if (!bucketOverflowed && designerName.Contains("ambient", StringComparison.OrdinalIgnoreCase))
+            {
+                AppendAmbientEntityRelations(entityInstance, ownerHandles, ref bucketOverflowed);
+            }
+
+            if (!bucketOverflowed && designerName.Contains("chicken", StringComparison.OrdinalIgnoreCase))
+            {
+                AppendChickenEntityRelations(entityInstance, ownerHandles, ref bucketOverflowed);
+            }
+
+            if (!bucketOverflowed && LooksLikePlayerPingEntity(designerName))
+            {
+                AppendPlayerPingEntityRelations(entityInstance, ownerHandles, ref bucketOverflowed);
+            }
+
+            if (!bucketOverflowed && LooksLikePhysBoxEntity(designerName))
+            {
+                AppendPhysBoxEntityRelations(entityInstance, ownerHandles, ref bucketOverflowed);
+            }
+
+            if (!bucketOverflowed && designerName.Contains("dogtags", StringComparison.OrdinalIgnoreCase))
+            {
+                AppendDogtagsEntityRelations(entityInstance, ownerHandles, ref bucketOverflowed);
+            }
+
+            if (!bucketOverflowed && LooksLikePlantedC4Entity(designerName))
+            {
+                AppendPlantedC4EntityRelations(entityInstance, ownerHandles, ref bucketOverflowed);
+            }
+
+            if (!bucketOverflowed && designerName.Contains("hostage", StringComparison.OrdinalIgnoreCase))
+            {
+                AppendHostageEntityRelations(entityInstance, ownerHandles, ref bucketOverflowed);
+            }
+
+            if (!bucketOverflowed && LooksLikeBreakableEntity(designerName))
+            {
+                AppendBreakableEntityRelations(entityInstance, ownerHandles, ref bucketOverflowed);
+            }
+
+            if (!bucketOverflowed && LooksLikeInstructorEntity(designerName))
+            {
+                AppendInstructorEntityRelations(entityInstance, ownerHandles, ref bucketOverflowed);
+            }
+        }
+        catch
+        {
+            // Designer-specific attachment probing is optional hardening only.
+        }
+    }
+
+    private static bool LooksLikeGrenadeLinkedEntity(string designerName)
+    {
+        return designerName.Contains("grenade", StringComparison.OrdinalIgnoreCase) ||
+               designerName.Contains("projectile", StringComparison.OrdinalIgnoreCase) ||
+               designerName.Contains("molotov", StringComparison.OrdinalIgnoreCase) ||
+               designerName.Contains("incendiary", StringComparison.OrdinalIgnoreCase) ||
+               designerName.Contains("flashbang", StringComparison.OrdinalIgnoreCase) ||
+               designerName.Contains("decoy", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool LooksLikePlayerPingEntity(string designerName)
+    {
+        return designerName.Contains("player_ping", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool LooksLikePhysBoxEntity(string designerName)
+    {
+        return designerName.Contains("physbox", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool LooksLikePlantedC4Entity(string designerName)
+    {
+        return designerName.Contains("planted_c4", StringComparison.OrdinalIgnoreCase) ||
+               designerName.Contains("plantedc4", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool LooksLikeBreakableEntity(string designerName)
+    {
+        return designerName.Contains("func_breakable", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool LooksLikeInstructorEntity(string designerName)
+    {
+        return designerName.Contains("instructor", StringComparison.OrdinalIgnoreCase);
+    }
+
+    [SuppressMessage(
+        "Performance",
+        "CA1822:Mark members as static",
+        Justification = "Kept as instance method to keep designer-specific closure probes on a uniform helper surface.")]
+    private void AppendBeamEntityRelations(CEntityInstance entityInstance, OwnedEntityBucket ownerHandles, ref bool bucketOverflowed)
+    {
+        var beam = new CBeam(entityInstance.Handle);
+        CollectRelatedEntityHandle(beam.EndEntity, ownerHandles, ref bucketOverflowed);
+        if (bucketOverflowed)
+        {
+            return;
+        }
+
+        Span<CHandle<CBaseEntity>> attachEntities = beam.AttachEntity;
+        for (int i = 0; i < attachEntities.Length; i++)
+        {
+            CollectRelatedEntityHandle(attachEntities[i], ownerHandles, ref bucketOverflowed);
+            if (bucketOverflowed)
+            {
+                return;
+            }
+        }
+    }
+
+    [SuppressMessage(
+        "Performance",
+        "CA1822:Mark members as static",
+        Justification = "Kept as instance method to keep designer-specific closure probes on a uniform helper surface.")]
+    private void AppendParticleEntityRelations(CEntityInstance entityInstance, OwnedEntityBucket ownerHandles, ref bool bucketOverflowed)
+    {
+        var particleSystem = new CParticleSystem(entityInstance.Handle);
+        Span<CHandle<CBaseEntity>> controlPointEntities = particleSystem.ControlPointEnts;
+        for (int i = 0; i < controlPointEntities.Length; i++)
+        {
+            CollectRelatedEntityHandle(controlPointEntities[i], ownerHandles, ref bucketOverflowed);
+            if (bucketOverflowed)
+            {
+                return;
+            }
+        }
+    }
+
+    [SuppressMessage(
+        "Performance",
+        "CA1822:Mark members as static",
+        Justification = "Kept as instance method to keep designer-specific closure probes on a uniform helper surface.")]
+    private void AppendGrenadeEntityRelations(CEntityInstance entityInstance, OwnedEntityBucket ownerHandles, ref bool bucketOverflowed)
+    {
+        var grenade = new CBaseGrenade(entityInstance.Handle);
+        CollectRelatedEntityHandle(grenade.Thrower, ownerHandles, ref bucketOverflowed);
+        if (!bucketOverflowed)
+        {
+            CollectRelatedEntityHandle(grenade.OriginalThrower, ownerHandles, ref bucketOverflowed);
+        }
+    }
+
+    [SuppressMessage(
+        "Performance",
+        "CA1822:Mark members as static",
+        Justification = "Kept as instance method to keep designer-specific closure probes on a uniform helper surface.")]
+    private void AppendWeaponEntityRelations(CEntityInstance entityInstance, OwnedEntityBucket ownerHandles, ref bool bucketOverflowed)
+    {
+        var weapon = new CCSWeaponBase(entityInstance.Handle);
+        CollectRelatedEntityHandle(weapon.PrevOwner, ownerHandles, ref bucketOverflowed);
+    }
+
+    [SuppressMessage(
+        "Performance",
+        "CA1822:Mark members as static",
+        Justification = "Kept as instance method to keep designer-specific closure probes on a uniform helper surface.")]
+    private void AppendRopeEntityRelations(CEntityInstance entityInstance, OwnedEntityBucket ownerHandles, ref bool bucketOverflowed)
+    {
+        var rope = new CRopeKeyframe(entityInstance.Handle);
+        if (rope.StartPointValid)
+        {
+            CollectRelatedEntityHandle(rope.StartPoint, ownerHandles, ref bucketOverflowed);
+        }
+
+        if (!bucketOverflowed && rope.EndPointValid)
+        {
+            CollectRelatedEntityHandle(rope.EndPoint, ownerHandles, ref bucketOverflowed);
+        }
+    }
+
+    [SuppressMessage(
+        "Performance",
+        "CA1822:Mark members as static",
+        Justification = "Kept as instance method to keep designer-specific closure probes on a uniform helper surface.")]
+    private void AppendSpriteEntityRelations(CEntityInstance entityInstance, OwnedEntityBucket ownerHandles, ref bool bucketOverflowed)
+    {
+        var sprite = new CSprite(entityInstance.Handle);
+        CollectRelatedEntityHandle(sprite.AttachedToEntity, ownerHandles, ref bucketOverflowed);
+    }
+
+    [SuppressMessage(
+        "Performance",
+        "CA1822:Mark members as static",
+        Justification = "Kept as instance method to keep designer-specific closure probes on a uniform helper surface.")]
+    private void AppendFlameEntityRelations(CEntityInstance entityInstance, OwnedEntityBucket ownerHandles, ref bool bucketOverflowed)
+    {
+        var entityFlame = new CEntityFlame(entityInstance.Handle);
+        CollectRelatedEntityHandle(entityFlame.EntAttached, ownerHandles, ref bucketOverflowed);
+        if (!bucketOverflowed)
+        {
+            CollectRelatedEntityHandle(entityFlame.Attacker, ownerHandles, ref bucketOverflowed);
+        }
+    }
+
+    private static void AppendTriggerEntityRelations(CEntityInstance entityInstance, OwnedEntityBucket ownerHandles, ref bool bucketOverflowed)
+    {
+        var trigger = new CBaseTrigger(entityInstance.Handle);
+        CollectRelatedEntityHandles(trigger.TouchingEntities, ownerHandles, ref bucketOverflowed);
+
+        if (!bucketOverflowed && entityInstance.DesignerName.Contains("soundscape", StringComparison.OrdinalIgnoreCase))
+        {
+            var soundscapeTrigger = new CTriggerSoundscape(entityInstance.Handle);
+            CollectRelatedEntityHandles(soundscapeTrigger.Spectators, ownerHandles, ref bucketOverflowed);
+        }
+
+        if (!bucketOverflowed && entityInstance.DesignerName.Contains("sos", StringComparison.OrdinalIgnoreCase))
+        {
+            var sndSosTrigger = new CTriggerSndSosOpvar(entityInstance.Handle);
+            CollectRelatedEntityHandles(sndSosTrigger.TouchingPlayers, ownerHandles, ref bucketOverflowed);
+        }
+    }
+
+    [SuppressMessage(
+        "Performance",
+        "CA1822:Mark members as static",
+        Justification = "Kept as instance method to keep designer-specific closure probes on a uniform helper surface.")]
+    private void AppendAmbientEntityRelations(CEntityInstance entityInstance, OwnedEntityBucket ownerHandles, ref bool bucketOverflowed)
+    {
+        var ambientGeneric = new CAmbientGeneric(entityInstance.Handle);
+        CollectRelatedEntityHandle(ambientGeneric.SoundSource, ownerHandles, ref bucketOverflowed);
+    }
+
+    [SuppressMessage(
+        "Performance",
+        "CA1822:Mark members as static",
+        Justification = "Kept as instance method to keep designer-specific closure probes on a uniform helper surface.")]
+    private void AppendChickenEntityRelations(CEntityInstance entityInstance, OwnedEntityBucket ownerHandles, ref bool bucketOverflowed)
+    {
+        var chicken = new CChicken(entityInstance.Handle);
+        CollectRelatedEntityHandle(chicken.Leader, ownerHandles, ref bucketOverflowed);
+        if (!bucketOverflowed)
+        {
+            CollectRelatedEntityHandle(chicken.FleeFrom, ownerHandles, ref bucketOverflowed);
+        }
+    }
+
+    [SuppressMessage(
+        "Performance",
+        "CA1822:Mark members as static",
+        Justification = "Kept as instance method to keep designer-specific closure probes on a uniform helper surface.")]
+    private void AppendPlayerPingEntityRelations(CEntityInstance entityInstance, OwnedEntityBucket ownerHandles, ref bool bucketOverflowed)
+    {
+        var playerPing = new CPlayerPing(entityInstance.Handle);
+        CollectRelatedEntityHandle(playerPing.Player, ownerHandles, ref bucketOverflowed);
+        if (!bucketOverflowed)
+        {
+            CollectRelatedEntityHandle(playerPing.PingedEntity, ownerHandles, ref bucketOverflowed);
+        }
+    }
+
+    [SuppressMessage(
+        "Performance",
+        "CA1822:Mark members as static",
+        Justification = "Kept as instance method to keep designer-specific closure probes on a uniform helper surface.")]
+    private void AppendPhysBoxEntityRelations(CEntityInstance entityInstance, OwnedEntityBucket ownerHandles, ref bool bucketOverflowed)
+    {
+        var physBox = new CPhysBox(entityInstance.Handle);
+        CollectRelatedEntityHandle(physBox.CarryingPlayer, ownerHandles, ref bucketOverflowed);
+        if (!bucketOverflowed)
+        {
+            CollectRelatedEntityHandle(physBox.PhysicsAttacker, ownerHandles, ref bucketOverflowed);
+        }
+    }
+
+    [SuppressMessage(
+        "Performance",
+        "CA1822:Mark members as static",
+        Justification = "Kept as instance method to keep designer-specific closure probes on a uniform helper surface.")]
+    private void AppendDogtagsEntityRelations(CEntityInstance entityInstance, OwnedEntityBucket ownerHandles, ref bool bucketOverflowed)
+    {
+        var dogtags = new CItemDogtags(entityInstance.Handle);
+        CollectRelatedEntityHandle(dogtags.OwningPlayer, ownerHandles, ref bucketOverflowed);
+        if (!bucketOverflowed)
+        {
+            CollectRelatedEntityHandle(dogtags.KillingPlayer, ownerHandles, ref bucketOverflowed);
+        }
+    }
+
+    [SuppressMessage(
+        "Performance",
+        "CA1822:Mark members as static",
+        Justification = "Kept as instance method to keep designer-specific closure probes on a uniform helper surface.")]
+    private void AppendPlantedC4EntityRelations(CEntityInstance entityInstance, OwnedEntityBucket ownerHandles, ref bool bucketOverflowed)
+    {
+        var plantedC4 = new CPlantedC4(entityInstance.Handle);
+        CollectRelatedEntityHandle(plantedC4.BombDefuser, ownerHandles, ref bucketOverflowed);
+    }
+
+    [SuppressMessage(
+        "Performance",
+        "CA1822:Mark members as static",
+        Justification = "Kept as instance method to keep designer-specific closure probes on a uniform helper surface.")]
+    private void AppendHostageEntityRelations(CEntityInstance entityInstance, OwnedEntityBucket ownerHandles, ref bool bucketOverflowed)
+    {
+        var hostage = new CHostage(entityInstance.Handle);
+        CollectRelatedEntityHandle(hostage.Leader, ownerHandles, ref bucketOverflowed);
+        if (!bucketOverflowed)
+        {
+            CollectRelatedEntityHandle(hostage.LastLeader, ownerHandles, ref bucketOverflowed);
+        }
+
+        if (!bucketOverflowed)
+        {
+            CollectRelatedEntityHandle(hostage.HostageGrabber, ownerHandles, ref bucketOverflowed);
+        }
+    }
+
+    [SuppressMessage(
+        "Performance",
+        "CA1822:Mark members as static",
+        Justification = "Kept as instance method to keep designer-specific closure probes on a uniform helper surface.")]
+    private void AppendBreakableEntityRelations(CEntityInstance entityInstance, OwnedEntityBucket ownerHandles, ref bool bucketOverflowed)
+    {
+        var breakable = new CBreakable(entityInstance.Handle);
+        CollectRelatedEntityHandle(breakable.Breaker, ownerHandles, ref bucketOverflowed);
+        if (!bucketOverflowed)
+        {
+            CollectRelatedEntityHandle(breakable.PhysicsAttacker, ownerHandles, ref bucketOverflowed);
+        }
+    }
+
+    [SuppressMessage(
+        "Performance",
+        "CA1822:Mark members as static",
+        Justification = "Kept as instance method to keep designer-specific closure probes on a uniform helper surface.")]
+    private void AppendInstructorEntityRelations(CEntityInstance entityInstance, OwnedEntityBucket ownerHandles, ref bool bucketOverflowed)
+    {
+        var instructorEvent = new CInstructorEventEntity(entityInstance.Handle);
+        CollectRelatedEntityHandle(instructorEvent.TargetPlayer, ownerHandles, ref bucketOverflowed);
+    }
+
+    private static void CollectRelatedEntityHandle<T>(CHandle<T> relatedHandle, OwnedEntityBucket ownerHandles, ref bool bucketOverflowed)
+        where T : NativeEntity
+    {
+        if (!relatedHandle.IsValid)
+        {
+            return;
+        }
+
+        if (!TryResolveLiveEntityHandleRaw(relatedHandle.Raw, out uint liveRelatedHandleRaw))
+        {
+            return;
+        }
+
+        AddUniqueBucketHandle(ownerHandles, liveRelatedHandleRaw, ref bucketOverflowed);
+    }
+
+    private static void CollectRelatedEntityHandles<T>(NetworkedVector<CHandle<T>> relatedHandles, OwnedEntityBucket ownerHandles, ref bool bucketOverflowed)
+        where T : NativeEntity
+    {
+        int relatedCount = relatedHandles.Count;
+        for (int i = 0; i < relatedCount; i++)
+        {
+            if (bucketOverflowed)
+            {
+                return;
+            }
+
+            if (!TryResolveLiveEntityHandleRaw(relatedHandles[i].Raw, out uint liveRelatedHandleRaw))
+            {
+                continue;
+            }
+
+            AddUniqueBucketHandle(ownerHandles, liveRelatedHandleRaw, ref bucketOverflowed);
+        }
+    }
+
+    private void TryAddOwnedEntityRelation(uint ownerHandleRaw, uint entityHandleRaw, ref bool bucketOverflowed)
+    {
+        if (ownerHandleRaw == 0 || ownerHandleRaw == uint.MaxValue || ownerHandleRaw == entityHandleRaw)
+        {
+            return;
+        }
+
+        if (!_ownedEntityBuckets.TryGetValue(ownerHandleRaw, out OwnedEntityBucket? bucket))
+        {
+            bucket = new OwnedEntityBucket();
+            _ownedEntityBuckets[ownerHandleRaw] = bucket;
+        }
+
+        AddOwnedEntityBucketHandle(bucket, ownerHandleRaw, entityHandleRaw, ref bucketOverflowed);
+    }
+
+    private void AddOwnedEntityBucketHandle(OwnedEntityBucket bucket, uint ownerHandleRaw, uint entityHandleRaw, ref bool bucketOverflowed)
     {
         int count = bucket.Count;
         for (int i = 0; i < count; i++)
@@ -807,6 +1957,9 @@ public partial class S2AWH
         {
             if (bucket.RawHandles.Length >= MaxTrackedTransmitEntitiesPerTarget)
             {
+                _lastOwnedEntityBucketOverflowOwnerHandleRaw = ownerHandleRaw;
+                _lastOwnedEntityBucketOverflowEntityHandleRaw = entityHandleRaw;
+                bucketOverflowed = true;
                 return;
             }
 
@@ -816,6 +1969,111 @@ public partial class S2AWH
 
         bucket.RawHandles[count] = entityHandleRaw;
         bucket.Count = count + 1;
+    }
+
+    private static string DescribeTargetEntitySample(TargetTransmitEntities targetEntities, int sampleLimit)
+    {
+        int count = Math.Min(Math.Max(sampleLimit, 0), targetEntities.Count);
+        if (count <= 0)
+        {
+            return "none";
+        }
+
+        string[] sample = new string[count];
+        for (int i = 0; i < count; i++)
+        {
+            sample[i] = DescribeEntityHandle(targetEntities.RawHandles[i]);
+        }
+
+        return string.Join(", ", sample);
+    }
+
+    private static string DescribeOwnedRelationSample(uint ownerHandleRaw, uint entityHandleRaw)
+    {
+        if (ownerHandleRaw == 0 || entityHandleRaw == 0)
+        {
+            return "unavailable";
+        }
+
+        return $"{DescribeEntityHandle(ownerHandleRaw)} -> {DescribeEntityHandle(entityHandleRaw)}";
+    }
+
+    private static string DescribeEntityHandle(uint entityHandleRaw)
+    {
+        int entityIndex = (int)(entityHandleRaw & (Utilities.MaxEdicts - 1));
+        if (entityIndex <= 0 || entityIndex >= Utilities.MaxEdicts)
+        {
+            return $"invalid[0x{entityHandleRaw:X8}]";
+        }
+
+        IntPtr? entityPointer = EntitySystem.GetEntityByHandle(entityHandleRaw);
+        if (!entityPointer.HasValue || entityPointer.Value == IntPtr.Zero)
+        {
+            return $"missing[{entityIndex}|0x{entityHandleRaw:X8}]";
+        }
+
+        var entity = new CEntityInstance(entityPointer.Value);
+        string designerName = entity.DesignerName;
+        if (string.IsNullOrWhiteSpace(designerName))
+        {
+            designerName = "unknown";
+        }
+
+        return $"{designerName}[{entityIndex}|0x{entityHandleRaw:X8}]";
+    }
+
+    private void RecordTargetClosureOffenderSample(TargetTransmitEntities targetEntities, int sampleLimit)
+    {
+        int count = Math.Min(Math.Max(sampleLimit, 0), targetEntities.Count);
+        for (int i = 0; i < count; i++)
+        {
+            RecordClosureOffenderHandle(targetEntities.RawHandles[i]);
+        }
+    }
+
+    private void RecordClosureOffenderHandle(uint entityHandleRaw)
+    {
+        string offenderKey = GetClosureOffenderKey(entityHandleRaw);
+        if (_closureOffenderCounts.TryGetValue(offenderKey, out int currentCount))
+        {
+            _closureOffenderCounts[offenderKey] = currentCount + 1;
+            return;
+        }
+
+        _closureOffenderCounts[offenderKey] = 1;
+    }
+
+    private static string GetClosureOffenderKey(uint entityHandleRaw)
+    {
+        int entityIndex = (int)(entityHandleRaw & (Utilities.MaxEdicts - 1));
+        if (entityIndex <= 0 || entityIndex >= Utilities.MaxEdicts)
+        {
+            return "invalid";
+        }
+
+        IntPtr? entityPointer = EntitySystem.GetEntityByHandle(entityHandleRaw);
+        if (!entityPointer.HasValue || entityPointer.Value == IntPtr.Zero)
+        {
+            return "missing";
+        }
+
+        var entity = new CEntityInstance(entityPointer.Value);
+        return string.IsNullOrWhiteSpace(entity.DesignerName) ? "unknown" : entity.DesignerName;
+    }
+
+    private string GetClosureOffenderSummary(int maxEntries)
+    {
+        if (_closureOffenderCounts.Count <= 0 || maxEntries <= 0)
+        {
+            return "none";
+        }
+
+        var orderedOffenders = _closureOffenderCounts
+            .OrderByDescending(static pair => pair.Value)
+            .ThenBy(static pair => pair.Key, StringComparer.OrdinalIgnoreCase)
+            .Take(maxEntries);
+
+        return string.Join(", ", orderedOffenders.Select(static pair => $"{pair.Key} x{pair.Value}"));
     }
 
     private bool TryResolveEntityHandleIndexForTransmit(uint entityHandleRaw, out int entityIndex)

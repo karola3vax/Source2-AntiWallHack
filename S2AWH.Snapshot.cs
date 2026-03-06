@@ -34,6 +34,10 @@ public partial class S2AWH
         _cachedLivePlayers.Clear();
         _eligibleTargetsWithEntities.Clear();
         _ownedEntityBuckets.Clear();
+        _ownedEntityRelationsByChild.Clear();
+        _dirtyOwnedEntityHandles.Clear();
+        _pendingOwnedEntityRescanUntilTick.Clear();
+        _sceneClosureVisitedNodes.Clear();
         Array.Clear(_viewerRayCountsWorking, 0, _viewerRayCountsWorking.Length);
         Array.Clear(_viewerRayCountsDisplay, 0, _viewerRayCountsDisplay.Length);
         for (int slot = 0; slot < VisibilitySlotCapacity; slot++)
@@ -51,6 +55,8 @@ public partial class S2AWH
         _hasLoggedFilterEvaluationError = false;
         _hasLoggedWeaponSyncError = false;
         _hasLoggedOwnedEntityScanError = false;
+        _hasLoggedEntityClosureCapError = false;
+        _hasLoggedReverseReferenceAuditError = false;
         _lastDebugCachePlayerCount = 0;
         ResetDebugWindowCounters();
     }
@@ -250,6 +256,8 @@ public partial class S2AWH
         _entityHandleIndexCacheTick = -1;
         _entityHandleIndexCache.Clear();
         _ownedEntityBucketsTick = -1;
+        _ownedEntityLastFullResyncTick = -1;
+        _ownedEntityBucketsInitialized = false;
         _eligibleTargetsWithEntitiesTick = -1;
     }
 
@@ -260,6 +268,13 @@ public partial class S2AWH
         _transmitHiddenEntitiesInWindow = 0;
         _transmitFallbackChecksInWindow = 0;
         _transmitRemovalNoEffectInWindow = 0;
+        _transmitFailOpenOwnedClosureInWindow = 0;
+        _transmitFailOpenEntityClosureCapInWindow = 0;
+        _transmitFailOpenQuarantineInWindow = 0;
+        _transmitFailOpenReverseAuditInWindow = 0;
+        _ownedEntityFullResyncsInWindow = 0;
+        _ownedEntityDirtyEntityUpdatesInWindow = 0;
+        _ownedEntityPostSpawnRescanMarksInWindow = 0;
         _holdRefreshInWindow = 0;
         _holdHitKeepAliveInWindow = 0;
         _holdExpiredInWindow = 0;
@@ -268,6 +283,7 @@ public partial class S2AWH
         _unknownHoldHitInWindow = 0;
         _unknownFailOpenInWindow = 0;
         _unknownFromExceptionInWindow = 0;
+        _closureOffenderCounts.Clear();
     }
 
     private bool RebuildVisibilityCacheSnapshot()
@@ -626,6 +642,7 @@ public partial class S2AWH
                  viewerSnapshot.VelocityY * viewerSnapshot.VelocityY +
                  viewerSnapshot.VelocityZ * viewerSnapshot.VelocityZ) < StationarySpeedSqThreshold;
             int viewerTeam = viewer.TeamNum;
+            _viewerTargetCounts[viewerSlot] = 0;
 
             for (int targetIndex = 0; targetIndex < playerCount; targetIndex++)
             {
@@ -687,6 +704,7 @@ public partial class S2AWH
                         config,
                         nowTick,
                         "cache rebuild");
+                    _viewerTargetCounts[viewerSlot]++;
                     visibilityByTargetSlot.Decisions[targetSlot] = ResolveTransmitWithMemory(viewerSlot, targetSlot, visibilityDecision, nowTick);
                     visibilityByTargetSlot.Known[targetSlot] = true;
                     visibilityByTargetSlot.PawnHandles[targetSlot] = currentPawnHandle;

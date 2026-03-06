@@ -69,27 +69,24 @@ public partial class S2AWH
             if (_visibilityCache[i] != null) activeViewers++;
         }
 
-        int losSurfaceRows = Math.Clamp(config.Aabb.LosSurfaceProbeRows, 1, 3);
-        int baseLosSurfaceRaysPerPair = losSurfaceRows * 6;
+        const int baseLosSurfaceRaysPerPair = 16; // one 4x4 face
+        const int maxLosSurfaceRaysPerPair = 32;  // dual-face path
         int estimatedBaseLosRaysPerSnapshot = livePlayerCount > 1
             ? livePlayerCount * (livePlayerCount - 1) * baseLosSurfaceRaysPerPair
             : 0;
         int currentLosRayCountTotal = 0;
-        int currentMicroRayCountTotal = 0;
         int currentAimRayCountTotal = 0;
         int currentPreloadRayCountTotal = 0;
         int currentJumpRayCountTotal = 0;
         for (int i = 0; i < VisibilitySlotCapacity; i++)
         {
             currentLosRayCountTotal += _viewerRayCountsWorking[i, (int)ViewerRayTraceStage.Los];
-            currentMicroRayCountTotal += _viewerRayCountsWorking[i, (int)ViewerRayTraceStage.Micro];
             currentAimRayCountTotal += _viewerRayCountsWorking[i, (int)ViewerRayTraceStage.Aim];
             currentPreloadRayCountTotal += _viewerRayCountsWorking[i, (int)ViewerRayTraceStage.Preload];
             currentJumpRayCountTotal += _viewerRayCountsWorking[i, (int)ViewerRayTraceStage.Jump];
         }
         int currentViewerRayCountTotal =
             currentLosRayCountTotal +
-            currentMicroRayCountTotal +
             currentAimRayCountTotal +
             currentPreloadRayCountTotal +
             currentJumpRayCountTotal;
@@ -116,10 +113,12 @@ public partial class S2AWH
                 : "Waiting for players to join.",
             $"Tracking: {activeViewers} viewers, {visibilityPairCount} visibility decisions.",
             $"Anti pop-in: {revealHoldPairCount} reveal holds, {stableDecisionPairCount} saved decisions.",
-            $"Rays: base LOS surface probes {baseLosSurfaceRaysPerPair} per pair, ~{estimatedBaseLosRaysPerSnapshot} per scan (plus aim/micro/preload).",
-            $"Current viewer ray count this tick: {currentViewerRayCountTotal} (LOS {currentLosRayCountTotal}, MICRO {currentMicroRayCountTotal}, AIM {currentAimRayCountTotal}, PRELOAD {currentPreloadRayCountTotal}, JUMP {currentJumpRayCountTotal}).",
+            $"Rays: LOS probes {baseLosSurfaceRaysPerPair}-{maxLosSurfaceRaysPerPair} per pair, ~{estimatedBaseLosRaysPerSnapshot}+ per scan (plus aim/preload/jump).",
+            $"Current viewer ray count this tick: {currentViewerRayCountTotal} (LOS {currentLosRayCountTotal}, AIM {currentAimRayCountTotal}, PRELOAD {currentPreloadRayCountTotal}, JUMP {currentJumpRayCountTotal}).",
             $"Hidden {_transmitHiddenEntitiesInWindow} entities from wallhacks this window.",
-            $"Safety checks: {_transmitFallbackChecksInWindow} extra, {_transmitRemovalNoEffectInWindow} redundant.",
+            $"Safety checks: {_transmitFallbackChecksInWindow} extra, {_transmitRemovalNoEffectInWindow} redundant, {_transmitFailOpenOwnedClosureInWindow} fail-open (closure unavailable), {_transmitFailOpenEntityClosureCapInWindow} fail-open (closure cap), {_transmitFailOpenQuarantineInWindow} quarantined, {_transmitFailOpenReverseAuditInWindow} fail-open (reverse audit).",
+            $"Owned cache: {_ownedEntityFullResyncsInWindow} full resyncs, {_ownedEntityDirtyEntityUpdatesInWindow} dirty updates, {_ownedEntityPostSpawnRescanMarksInWindow} post-spawn rescan marks, {_pendingOwnedEntityRescanUntilTick.Count} pending rescans.",
+            $"Closure offenders: {GetClosureOffenderSummary(3)}.",
             $"Reveal hold: {_holdRefreshInWindow} refreshed, {_holdHitKeepAliveInWindow} kept alive, {_holdExpiredInWindow} expired.",
             $"Uncertain checks: {_unknownEvalInWindow} total, {_unknownStickyHitInWindow} reused, {_unknownHoldHitInWindow} held, {_unknownFailOpenInWindow} fail-open, {_unknownFromExceptionInWindow} errors.",
             "If you see counts going up, S2AWH is working."

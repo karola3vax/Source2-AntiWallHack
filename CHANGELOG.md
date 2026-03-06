@@ -1,5 +1,20 @@
 # Changelog
 
+## 3.0.4 - 2026-03-06
+
+- Reworked the runtime around a safer visibility pipeline: current FOV gating, 4x4 LOS face probes, aim-ray proximity fallback, jump-assist prediction, and predictive preload.
+- Removed stale legacy code paths from LOS/preload internals and aligned comments/config/docs with the code that actually runs.
+- Hardened transmit closure against `Missing Client Entity` crashes:
+  - `EffectEntity` and scene-parent/scene-descendant capture
+  - raw `CGameSceneNode::m_hParent` fallback using Source2 layout
+  - direct wearables capture
+  - final reverse-reference transmit audit before hide
+  - fail-open quarantine and richer closure telemetry
+- Expanded linked-entity coverage beyond pawn+weapon ownership to include additional dependency-backed player/world links such as beams, particles, ropes, grenades/projectiles, sprites, flames, triggers, ambient sound sources, chickens, pings, physboxes, dogtags, planted C4, hostages, breakables, and instructor entities.
+- Reworked owned-entity bucket maintenance into an incremental/event-driven cache using entity lifecycle listeners, bounded post-spawn rescans, periodic safety full resyncs, and owned-cache debug telemetry (`full resyncs`, `dirty updates`, `post-spawn rescan marks`, `pending rescans`).
+- Optimized hot paths by replacing repeated linear reverse-audit membership checks with a reusable scratch `HashSet<uint>` and caching viewer HUD ray-counter colors.
+- Synchronized runtime/package/assembly metadata and refreshed GitHub release packaging so the release zip now includes `S2AWH.dll`, `S2AWH.deps.json`, optional `S2AWH.pdb`, docs, release notes, and SHA256 checksum output.
+
 ## 3.0.3 - 2026-03-05
 
 - Removed redundant cache clears in `ClearVisibilityCache` that duplicated work already done by `InvalidateLivePlayersCache`.

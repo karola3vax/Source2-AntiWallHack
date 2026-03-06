@@ -12,11 +12,10 @@ namespace S2AWH;
 internal enum ViewerRayTraceStage : byte
 {
     Los = 0,
-    Micro = 1,
-    Aim = 2,
-    Preload = 3,
-    Jump = 4,
-    Count = 5
+    Aim = 1,
+    Preload = 2,
+    Jump = 3,
+    Count = 4
 }
 
 [MinimumApiVersion(362)]
@@ -39,7 +38,14 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
     private const int ViewerRayCountHudRefreshIntervalTicks = 8;
     private const int HiddenEntityTransitionGraceTicks = 32;
     private const int MaxTrackedTransmitEntitiesPerTarget = 192;
+    private const int MaxSceneNodeClosureNodesPerTarget = 256;
+    private const int MaxSceneNodeClosureDepth = 10;
     private const int VisibleReacquireConfirmTicks = 4;
+    private const int FailOpenVisibleQuarantineTicks = 3;
+    private const int OwnedEntityFullResyncIntervalTicks = 128;
+    private const int OwnedEntityPostSpawnRescanTicks = 8;
+    private const int MaxDirtyOwnedEntityHandlesBeforeFullResync = 128;
+    private const int MaxOwnedEntityDirtySyncPassesPerTick = 4;
 
     /// <summary>
     /// Holds the set of entity handles (pawn + weapons) belonging to a single target player,
@@ -50,9 +56,14 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
         public int LastFullRefreshTick = -1;
         public int SanitizeTick = -1;
         public int OwnedClosureTick = -1;
+        public int BaseCount;
+        public int ForceVisibleUntilTick = -1;
         public int RetainUntilTick = -1;
         public int LastKnownTeam;
         public bool LastKnownIsBot;
+        public bool BaseHitEntityCap;
+        public bool HitEntityCap;
+        public bool HitSceneClosureBudget;
         public uint PawnHandleRaw = uint.MaxValue;
         public uint ControllerHandleRaw = uint.MaxValue;
         public uint[] RawHandles = new uint[64];
@@ -116,7 +127,7 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
     }
 
     public override string ModuleName => "S2AWH (Source2 AntiWallhack)";
-    public override string ModuleVersion => "3.0.3";
+    public override string ModuleVersion => "3.0.4";
     public override string ModuleAuthor => "karola3vax";
     public override string ModuleDescription => "Prevents wallhacks from working using Ray-Trace by hiding players from out of line of sight.";
 
@@ -187,12 +198,23 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
     private bool _hasLoggedFilterEvaluationError;
     private bool _hasLoggedWeaponSyncError;
     private bool _hasLoggedOwnedEntityScanError;
+    private bool _hasLoggedEntityClosureCapError;
+    private bool _hasLoggedReverseReferenceAuditError;
+    private uint _lastOwnedEntityBucketOverflowOwnerHandleRaw;
+    private uint _lastOwnedEntityBucketOverflowEntityHandleRaw;
     private int _lastDebugCachePlayerCount;
     private int _ticksSinceLastTransmitReport;
     private int _transmitCallbacksInWindow;
     private int _transmitHiddenEntitiesInWindow;
     private int _transmitFallbackChecksInWindow;
     private int _transmitRemovalNoEffectInWindow;
+    private int _transmitFailOpenOwnedClosureInWindow;
+    private int _transmitFailOpenEntityClosureCapInWindow;
+    private int _transmitFailOpenQuarantineInWindow;
+    private int _transmitFailOpenReverseAuditInWindow;
+    private int _ownedEntityFullResyncsInWindow;
+    private int _ownedEntityDirtyEntityUpdatesInWindow;
+    private int _ownedEntityPostSpawnRescanMarksInWindow;
     private int _holdRefreshInWindow;
     private int _holdHitKeepAliveInWindow;
     private int _holdExpiredInWindow;
@@ -213,10 +235,21 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
     private readonly List<(TargetTransmitEntities Entities, int TargetSlot, int TargetTeam, bool UseCachedDecisionOnly)> _eligibleTargetsWithEntities = new(VisibilitySlotCapacity - 1);
     private readonly Dictionary<uint, int> _entityHandleIndexCache = new(256);
     private readonly Dictionary<uint, OwnedEntityBucket> _ownedEntityBuckets = new(128);
+    private readonly Dictionary<uint, OwnedEntityBucket> _ownedEntityRelationsByChild = new(128);
+    private readonly Dictionary<string, int> _closureOffenderCounts = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<uint> _targetTransmitHandleMembership = new(256);
+    private readonly HashSet<uint> _dirtyOwnedEntityHandles = new(256);
+    private readonly Dictionary<uint, int> _pendingOwnedEntityRescanUntilTick = new(128);
+    private readonly HashSet<nint> _sceneClosureVisitedNodes = new(256);
+    private readonly OwnedEntityBucket _ownedEntityScratchHandles = new();
+    private readonly List<uint> _ownedEntityDirtyHandleScratch = new(256);
+    private readonly List<uint> _ownedEntityPendingRescanRemovalScratch = new(64);
     private int _entityHandleIndexCacheTick = -1;
     private int _ownedEntityBucketsTick = -1;
+    private int _ownedEntityLastFullResyncTick = -1;
     private int _eligibleTargetsWithEntitiesTick = -1;
     private int _roundStartGraceUntilTick;
+    private bool _ownedEntityBucketsInitialized;
     private readonly int[] _snapshotTargetSlots = new int[VisibilitySlotCapacity];
     private readonly uint[] _snapshotTargetPawnHandles = new uint[VisibilitySlotCapacity];
     private readonly bool[] _snapshotTargetStationary = new bool[VisibilitySlotCapacity];
@@ -225,12 +258,17 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
     private readonly int[] _snapshotStabilizeUntilTickBySlot = new int[VisibilitySlotCapacity];
     private readonly int[,] _viewerRayCountsWorking = new int[VisibilitySlotCapacity, ViewerRayTraceStageCount];
     private readonly int[,] _viewerRayCountsDisplay = new int[VisibilitySlotCapacity, ViewerRayTraceStageCount];
+    private readonly int[] _viewerTargetCounts = new int[VisibilitySlotCapacity];
     private readonly int[] _viewerRayCountLastRenderedHashBySlot = new int[VisibilitySlotCapacity];
     private readonly int[] _viewerRayCountLastHudRefreshTickBySlot = new int[VisibilitySlotCapacity];
     private int _viewerRayCounterTick = -1;
     private bool _viewerRayCountsDisplayDirty;
     internal readonly PlayerTransformSnapshot[] SnapshotTransforms = new PlayerTransformSnapshot[VisibilitySlotCapacity];
     internal readonly CBasePlayerPawn?[] SnapshotPawns = new CBasePlayerPawn?[VisibilitySlotCapacity];
+    private static readonly string ViewerRayHudLosColor = ToHtmlColorHex(VisibilityGeometry.GetViewerRayCounterColor(ViewerRayTraceStage.Los));
+    private static readonly string ViewerRayHudAimColor = ToHtmlColorHex(VisibilityGeometry.GetViewerRayCounterColor(ViewerRayTraceStage.Aim));
+    private static readonly string ViewerRayHudPreloadColor = ToHtmlColorHex(VisibilityGeometry.GetViewerRayCounterColor(ViewerRayTraceStage.Preload));
+    private static readonly string ViewerRayHudJumpColor = ToHtmlColorHex(VisibilityGeometry.GetViewerRayCounterColor(ViewerRayTraceStage.Jump));
 
     /// <summary>
     /// Registers hooks and initializes dependencies needed by the plugin.
@@ -253,6 +291,10 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
         RegisterListener<Listeners.OnMapStart>(OnMapStart);
         RegisterListener<Listeners.OnMapEnd>(OnMapEnd);
         RegisterListener<Listeners.OnClientDisconnect>(OnClientDisconnect);
+        RegisterListener<Listeners.OnEntityCreated>(OnEntityCreated);
+        RegisterListener<Listeners.OnEntitySpawned>(OnEntitySpawned);
+        RegisterListener<Listeners.OnEntityDeleted>(OnEntityDeleted);
+        RegisterListener<Listeners.OnEntityParentChanged>(OnEntityParentChanged);
         RegisterEventHandler<EventRoundStart>(OnRoundStart);
         RegisterEventHandler<EventPlayerSpawn>(OnPlayerSpawn);
 
@@ -273,6 +315,10 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
     /// </summary>
     public override void Unload(bool hotReload)
     {
+        RemoveListener<Listeners.OnEntityParentChanged>(OnEntityParentChanged);
+        RemoveListener<Listeners.OnEntityDeleted>(OnEntityDeleted);
+        RemoveListener<Listeners.OnEntitySpawned>(OnEntitySpawned);
+        RemoveListener<Listeners.OnEntityCreated>(OnEntityCreated);
         ClearViewerRayCountOverlays();
         ClearVisibilityCache();
         _losEvaluator = null;
@@ -447,6 +493,35 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
         );
     }
 
+    private void OnEntityCreated(CEntityInstance entity)
+    {
+        MarkOwnedEntityDirty(entity, scheduleRescan: true);
+    }
+
+    private void OnEntitySpawned(CEntityInstance entity)
+    {
+        MarkOwnedEntityDirty(entity, scheduleRescan: true);
+    }
+
+    private void OnEntityDeleted(CEntityInstance entity)
+    {
+        uint entityHandleRaw = entity.EntityHandle.Raw;
+        if (entityHandleRaw == 0 || entityHandleRaw == uint.MaxValue)
+        {
+            return;
+        }
+
+        RemoveOwnedEntityRelationsForHandle(entityHandleRaw);
+        _dirtyOwnedEntityHandles.Remove(entityHandleRaw);
+        _pendingOwnedEntityRescanUntilTick.Remove(entityHandleRaw);
+        _ownedEntityBucketsTick = -1;
+    }
+
+    private void OnEntityParentChanged(CEntityInstance entity, CEntityInstance newParent)
+    {
+        MarkOwnedEntityDirty(entity, scheduleRescan: true);
+    }
+
     private bool TryInitializeModules(string source)
     {
         if (_transmitFilter != null)
@@ -489,6 +564,8 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
         _hasLoggedFilterEvaluationError = false;
         _hasLoggedWeaponSyncError = false;
         _hasLoggedOwnedEntityScanError = false;
+        _hasLoggedEntityClosureCapError = false;
+        _hasLoggedReverseReferenceAuditError = false;
 
         InfoLog(
             "RayTrace is connected.",
@@ -561,6 +638,10 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
         if (!config.Core.Enabled)
         {
             ClearViewerRayCountOverlays();
+            if (_collectDebugCounters)
+            {
+                ResetDebugWindowCounters();
+            }
             return;
         }
 
@@ -592,6 +673,13 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
             _transmitHiddenEntitiesInWindow > 0 ||
             _transmitFallbackChecksInWindow > 0 ||
             _transmitRemovalNoEffectInWindow > 0 ||
+            _transmitFailOpenOwnedClosureInWindow > 0 ||
+            _transmitFailOpenEntityClosureCapInWindow > 0 ||
+            _transmitFailOpenQuarantineInWindow > 0 ||
+            _transmitFailOpenReverseAuditInWindow > 0 ||
+            _ownedEntityFullResyncsInWindow > 0 ||
+            _ownedEntityDirtyEntityUpdatesInWindow > 0 ||
+            _ownedEntityPostSpawnRescanMarksInWindow > 0 ||
             _holdRefreshInWindow > 0 ||
             _holdHitKeepAliveInWindow > 0 ||
             _holdExpiredInWindow > 0 ||
@@ -718,54 +806,30 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
 
     private string BuildViewerRayCountHudHtml(int slot)
     {
+        int targets = GetViewerTargetCount(slot);
         int los = GetViewerRayStageCount(slot, ViewerRayTraceStage.Los);
-        int micro = GetViewerRayStageCount(slot, ViewerRayTraceStage.Micro);
         int aim = GetViewerRayStageCount(slot, ViewerRayTraceStage.Aim);
         int preload = GetViewerRayStageCount(slot, ViewerRayTraceStage.Preload);
         int jump = GetViewerRayStageCount(slot, ViewerRayTraceStage.Jump);
-        int total = los + micro + aim + preload + jump;
+        int total = los + aim + preload + jump;
         return string.Concat(
-            BuildViewerRayStageHtml(ViewerRayTraceStage.Los, los),
-            "&nbsp;",
-            BuildViewerRayStageHtml(ViewerRayTraceStage.Micro, micro),
-            "&nbsp;",
-            BuildViewerRayStageHtml(ViewerRayTraceStage.Aim, aim),
-            "&nbsp;",
-            BuildViewerRayStageHtml(ViewerRayTraceStage.Preload, preload),
-            "&nbsp;",
-            BuildViewerRayStageHtml(ViewerRayTraceStage.Jump, jump),
-            "&nbsp;",
-            BuildViewerRayTotalHtml(total));
-    }
-
-    private static string BuildViewerRayStageHtml(ViewerRayTraceStage stage, int count)
-    {
-        string stageLabel = GetViewerRayTraceStageCompactLabel(stage);
-        string color = ToHtmlColorHex(VisibilityGeometry.GetViewerRayCounterColor(stage));
-        return $"<b><font color='{color}'>{stageLabel}:{count}</font></b>";
-    }
-
-    private static string BuildViewerRayTotalHtml(int total)
-    {
-        return $"<b><font color='#FFF078'>T:{total}</font></b>";
-    }
-
-    private static string GetViewerRayTraceStageCompactLabel(ViewerRayTraceStage stage)
-    {
-        return stage switch
-        {
-            ViewerRayTraceStage.Los => "L",
-            ViewerRayTraceStage.Micro => "M",
-            ViewerRayTraceStage.Aim => "A",
-            ViewerRayTraceStage.Preload => "P",
-            ViewerRayTraceStage.Jump => "J",
-            _ => "R"
-        };
+            "<b><font color='#80DFFF'>RAYS</font></b><br>",
+            $"<b><font color='{ViewerRayHudLosColor}'>LOS: {los}</font></b><br>",
+            $"<b><font color='{ViewerRayHudAimColor}'>AIM: {aim}</font></b><br>",
+            $"<b><font color='{ViewerRayHudPreloadColor}'>PRELOAD: {preload}</font></b><br>",
+            $"<b><font color='{ViewerRayHudJumpColor}'>JUMP: {jump}</font></b><br>",
+            $"<b><font color='#FFF078'>TOTAL: {total}</font></b><br>",
+            $"<b><font color='#FFB347'>TARGETS: {targets}</font></b>");
     }
 
     private static string ToHtmlColorHex(Color color)
     {
         return $"#{color.R:X2}{color.G:X2}{color.B:X2}";
+    }
+
+    private int GetViewerTargetCount(int slot)
+    {
+        return _viewerTargetCounts[slot];
     }
 
     private int GetViewerRayStageCount(int slot, ViewerRayTraceStage stage)
@@ -814,6 +878,7 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
             _viewerRayCountsDisplay[slot, stageIndex] = 0;
         }
 
+        _viewerTargetCounts[slot] = 0;
         _viewerRayCountLastRenderedHashBySlot[slot] = int.MinValue;
         _viewerRayCountLastHudRefreshTickBySlot[slot] = int.MinValue;
     }

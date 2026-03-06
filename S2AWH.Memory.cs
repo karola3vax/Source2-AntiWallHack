@@ -183,8 +183,15 @@ public partial class S2AWH
 
             case VisibilityEval.Hidden:
                 ClearVisibleConfirmEntry(viewerSlot, targetSlot);
+                if (TryResolveRevealHold(viewerSlot, targetSlot, nowTick, countAsGenericHoldHit: true))
+                {
+                    // While reveal-hold keeps the target visible, do not poison the stable decision with Hidden.
+                    // This avoids a one-tick false negative forcing a hide/reacquire flicker on the next frame.
+                    return true;
+                }
+
                 StoreStableDecision(viewerSlot, targetSlot, false, nowTick);
-                return TryResolveRevealHold(viewerSlot, targetSlot, nowTick, countAsGenericHoldHit: true);
+                return false;
 
             case VisibilityEval.UnknownTransient:
                 if (_collectDebugCounters)
