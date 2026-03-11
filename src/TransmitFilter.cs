@@ -4,7 +4,6 @@ namespace S2AWH;
 
 internal sealed class TransmitFilter
 {
-    private const int SlotCount = 65;
     // Very close targets should never be culled by FOV; 75 units is roughly two player widths.
     private const float NearbyAlwaysVisibleDistanceSq = 75.0f * 75.0f;
     private const float ViewerGroundProbeHeight = 16.0f;
@@ -12,7 +11,6 @@ internal sealed class TransmitFilter
     private readonly PreloadPredictor _predictor;
     private int _cachedFovViewerSlot = -1;
     private int _cachedFovTick = -1;
-    private bool _cachedFovStateReady;
     private float _cachedFovStartX;
     private float _cachedFovStartY;
     private float _cachedFovStartZ;
@@ -38,7 +36,7 @@ internal sealed class TransmitFilter
         PlayerTransformSnapshot[] transforms,
         CBasePlayerPawn?[] pawnsBySlot)
     {
-        if ((uint)viewerSlot >= SlotCount || (uint)targetSlot >= SlotCount || viewerSlot == targetSlot)
+        if ((uint)viewerSlot >= S2AWHConstants.VisibilitySlotCapacity || (uint)targetSlot >= S2AWHConstants.VisibilitySlotCapacity || viewerSlot == targetSlot)
         {
             return new VisibilityDecision(VisibilityEval.Visible);
         }
@@ -102,7 +100,6 @@ internal sealed class TransmitFilter
             return true;
         }
 
-        if ((uint)viewerSlot >= SlotCount) return true;
         ref var viewerSnapshot = ref transforms[viewerSlot];
         if (!viewerSnapshot.IsValid) return true;
 
@@ -110,7 +107,6 @@ internal sealed class TransmitFilter
         {
             _cachedFovViewerSlot = viewerSlot;
             _cachedFovTick = nowTick;
-            _cachedFovStateReady = false;
 
             _cachedFovStartX = viewerSnapshot.EyeX;
             _cachedFovStartY = viewerSnapshot.EyeY;
@@ -118,15 +114,8 @@ internal sealed class TransmitFilter
             _cachedFovNormalX = viewerSnapshot.FovNormalX;
             _cachedFovNormalY = viewerSnapshot.FovNormalY;
             _cachedFovNormalZ = viewerSnapshot.FovNormalZ;
-            _cachedFovStateReady = true;
         }
 
-        if (!_cachedFovStateReady)
-        {
-            return true;
-        }
-
-        if ((uint)targetSlot >= SlotCount) return true;
         ref var t = ref transforms[targetSlot];
         if (!t.IsValid) return true;
 
@@ -153,12 +142,14 @@ internal sealed class TransmitFilter
         float maxX = centerX + halfX;
         float maxY = centerY + halfY;
         float maxZ = centerZ + halfZ;
+        float radiusSq = (halfX * halfX) + (halfY * halfY) + (halfZ * halfZ);
+        float radius = radiusSq > 0.0001f ? MathF.Sqrt(radiusSq) : 0.0f;
 
         // Conservative sphere-vs-cone check: if the AABB's bounding sphere overlaps the FOV cone,
         // do not cull here. False positives only cost extra LOS work; false negatives hide players.
         float halfFovRadians = config.HalfFovRadians;
-        if (IsBoundsSphereInFov(_cachedFovStartX, _cachedFovStartY, _cachedFovStartZ, centerX, centerY, centerZ, halfX, halfY, halfZ, halfFovRadians, fovDotThreshold) ||
-            IsBoundsSphereInFov(groundStartX, groundStartY, groundStartZ, centerX, centerY, centerZ, halfX, halfY, halfZ, halfFovRadians, fovDotThreshold))
+        if (IsBoundsSphereInFov(_cachedFovStartX, _cachedFovStartY, _cachedFovStartZ, centerX, centerY, centerZ, radiusSq, radius, halfFovRadians, fovDotThreshold) ||
+            IsBoundsSphereInFov(groundStartX, groundStartY, groundStartZ, centerX, centerY, centerZ, radiusSq, radius, halfFovRadians, fovDotThreshold))
         {
             return true;
         }
@@ -259,9 +250,8 @@ internal sealed class TransmitFilter
         float centerX,
         float centerY,
         float centerZ,
-        float halfX,
-        float halfY,
-        float halfZ,
+        float radiusSq,
+        float radius,
         float halfFovRadians,
         float fovDotThreshold)
     {
@@ -274,7 +264,6 @@ internal sealed class TransmitFilter
             return true;
         }
 
-        float radiusSq = (halfX * halfX) + (halfY * halfY) + (halfZ * halfZ);
         if (radiusSq <= 0.0001f)
         {
             return IsPointInFov(startX, startY, startZ, centerX, centerY, centerZ, fovDotThreshold);
@@ -285,12 +274,16 @@ internal sealed class TransmitFilter
             return true;
         }
 
+        float dot = (planeX * _cachedFovNormalX) + (planeY * _cachedFovNormalY) + (planeZ * _cachedFovNormalZ);
+        if (fovDotThreshold < 0.0f && dot >= 0.0f)
+        {
+            return true;
+        }
+
         float distance = MathF.Sqrt(distanceSq);
-        float radius = MathF.Sqrt(radiusSq);
         float radiusAngle = MathF.Asin(Math.Min(1.0f, radius / distance));
         float expandedHalfFov = MathF.Min(MathF.PI - 0.0001f, halfFovRadians + radiusAngle);
         float expandedDotThreshold = MathF.Cos(expandedHalfFov);
-        float dot = (planeX * _cachedFovNormalX) + (planeY * _cachedFovNormalY) + (planeZ * _cachedFovNormalZ);
         float thresholdSq = expandedDotThreshold * expandedDotThreshold * distanceSq;
 
         if (expandedDotThreshold >= 0.0f)
@@ -300,7 +293,7 @@ internal sealed class TransmitFilter
                 return false;
             }
 
-            return (dot * dot) >= thresholdSq;
+            return (dot * dot) > thresholdSq;
         }
 
         if (dot >= 0.0f)
@@ -308,6 +301,6 @@ internal sealed class TransmitFilter
             return true;
         }
 
-        return (dot * dot) <= thresholdSq;
+        return (dot * dot) < thresholdSq;
     }
 }

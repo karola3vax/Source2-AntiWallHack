@@ -4,10 +4,12 @@
     <RootNamespace>S2AWH</RootNamespace>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <Version>3.0.4</Version>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <Version>3.0.5</Version>
     <AssemblyName>S2AWH</AssemblyName>
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
     <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
     <CssApiPath Condition="'$(CssApiPath)' == '' and Exists('..\Dependencies\CounterStrikeSharp-main\managed\CounterStrikeSharp.API\bin\Release\net8.0\CounterStrikeSharp.API.dll')">..\Dependencies\CounterStrikeSharp-main\managed\CounterStrikeSharp.API\bin\Release\net8.0\CounterStrikeSharp.API.dll</CssApiPath>
     <CssApiPath Condition="'$(CssApiPath)' == '' and Exists('..\CounterStrikeSharp-main\managed\CounterStrikeSharp.API\bin\Release\net8.0\CounterStrikeSharp.API.dll')">..\CounterStrikeSharp-main\managed\CounterStrikeSharp.API\bin\Release\net8.0\CounterStrikeSharp.API.dll</CssApiPath>

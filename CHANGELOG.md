@@ -1,5 +1,18 @@
 # Changelog
 
+## 3.0.5 - 2026-03-11
+
+- Fixed release packaging so `scripts/package-release.ps1` always generates temporary `RELEASE_NOTES` content when a version-specific notes file and matching changelog section are missing.
+- Improved changelog section matching in the release script to handle headings like `## x.y.z - yyyy-mm-dd` reliably.
+- Updated README version badge to `3.0.5` to align docs with assembly/runtime metadata.
+- Expanded linked-entity coverage beyond pawn+weapon ownership to include additional dependency-backed player/world links such as beams, particles, ropes, grenades/projectiles, sprites, flames, triggers, ambient sound sources, chickens, pings, physboxes, dogtags, planted C4, hostages, breakables, and instructor entities.
+- Added explicit coverage for `logic_choreographed_scene` style `CSceneEntity` targets and `point_proximitysensor` target handles so more non-player world entities are pulled into the closure graph when they point at hidden actors.
+- Reworked owned-entity bucket maintenance into an incremental/event-driven cache using entity lifecycle listeners, bounded post-spawn rescans, periodic safety full resyncs, and owned-cache debug telemetry (`full resyncs`, `dirty updates`, `post-spawn rescan marks`, `pending rescans`).
+- Optimized hot paths by replacing repeated linear reverse-audit membership checks with a reusable scratch `HashSet<uint>` and caching viewer HUD ray-counter colors.
+- Raised the documented and supported Ray-Trace floor to `v1.0.6+` because the runtime now consumes the expanded `TraceResult` fields added on that line.
+- Integrated Ray-Trace's richer `trace_t` surface into the LOS/preload pipeline by preferring exact hit points (`HasExactHit` / `HitPoint`) for proximity checks and routing `AllSolid` traces through fail-open / uncertain visibility handling instead of hard-blocking players.
+- Synchronized runtime/package/assembly metadata and refreshed GitHub release packaging so the release zip now includes `S2AWH.dll`, `S2AWH.deps.json`, optional `S2AWH.pdb`, docs, release notes, and SHA256 checksum output.
+
 ## 3.0.4 - 2026-03-06
 
 - Moved all C# source files under `src/` and simplified project compile includes to `src\**\*.cs` for a cleaner project layout.
@@ -11,11 +24,6 @@
   - direct wearables capture
   - final reverse-reference transmit audit before hide
   - fail-open quarantine and richer closure telemetry
-- Expanded linked-entity coverage beyond pawn+weapon ownership to include additional dependency-backed player/world links such as beams, particles, ropes, grenades/projectiles, sprites, flames, triggers, ambient sound sources, chickens, pings, physboxes, dogtags, planted C4, hostages, breakables, and instructor entities.
-- Added explicit coverage for `logic_choreographed_scene` style `CSceneEntity` targets and `point_proximitysensor` target handles so more non-player world entities are pulled into the closure graph when they point at hidden actors.
-- Reworked owned-entity bucket maintenance into an incremental/event-driven cache using entity lifecycle listeners, bounded post-spawn rescans, periodic safety full resyncs, and owned-cache debug telemetry (`full resyncs`, `dirty updates`, `post-spawn rescan marks`, `pending rescans`).
-- Optimized hot paths by replacing repeated linear reverse-audit membership checks with a reusable scratch `HashSet<uint>` and caching viewer HUD ray-counter colors.
-- Synchronized runtime/package/assembly metadata and refreshed GitHub release packaging so the release zip now includes `S2AWH.dll`, `S2AWH.deps.json`, optional `S2AWH.pdb`, docs, release notes, and SHA256 checksum output.
 
 ## 3.0.3 - 2026-03-05
 

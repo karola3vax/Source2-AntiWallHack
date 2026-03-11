@@ -6,7 +6,6 @@ namespace S2AWH;
 
 internal sealed class LosEvaluator
 {
-    private const int SlotCount = 65;
     private const int MaxAimRayCount = 5;
     private const int MaxAabbSurfaceProbeRays = 64; // hard LOS cap per target evaluation
     private const int DebugLosProbeDrawIntervalTicks = 4;
@@ -50,6 +49,7 @@ internal sealed class LosEvaluator
         public int HitCount;
         public int AttemptedCount;
         public int SuccessfulCount;
+        public int TransientCount;
         public Vector[] HitPoints = CreatePointBuffer(MaxAimRayCount);
     }
 
@@ -57,18 +57,18 @@ internal sealed class LosEvaluator
     {
         TraceFailed = 0,
         Visible = 1,
-        Blocked = 2
+        Blocked = 2,
+        UnknownTransient = 3
     }
 
     private readonly CRayTraceInterface _rayTrace;
     private readonly Action<int, ViewerRayTraceStage>? _recordViewerTraceAttempt;
     private readonly TraceOptions _cachedTraceOptions = VisibilityGeometry.GetVisibilityTraceOptions();
-    private readonly ViewerAimRayCacheEntry?[] _viewerAimCacheBySlot = new ViewerAimRayCacheEntry?[SlotCount];
+    private readonly ViewerAimRayCacheEntry?[] _viewerAimCacheBySlot = new ViewerAimRayCacheEntry?[S2AWHConstants.VisibilitySlotCapacity];
     private readonly Vector[] _losProbePoints = CreatePointBuffer(MaxAabbSurfaceProbeRays);
     private readonly Vector _traceStart = new(0.0f, 0.0f, 0.0f);
     private readonly Vector _traceEnd = new(0.0f, 0.0f, 0.0f);
-    private readonly int[] _losDebugProbeDrawTicks = new int[SlotCount * SlotCount];
-    private int _activeViewerSlot = -1;
+    private readonly int[] _losDebugProbeDrawTicks = new int[S2AWHConstants.VisibilitySlotCapacity * S2AWHConstants.VisibilitySlotCapacity];
 
     public LosEvaluator(CRayTraceInterface rayTrace, Action<int, ViewerRayTraceStage>? recordViewerTraceAttempt = null)
     {
@@ -88,7 +88,9 @@ internal sealed class LosEvaluator
         PlayerTransformSnapshot[] transforms,
         CBasePlayerPawn?[] pawnsBySlot)
     {
-        if ((uint)viewerSlot >= SlotCount || (uint)targetSlot >= SlotCount || viewerSlot == targetSlot)
+        if ((uint)viewerSlot >= S2AWHConstants.VisibilitySlotCapacity ||
+            (uint)targetSlot >= S2AWHConstants.VisibilitySlotCapacity ||
+            viewerSlot == targetSlot)
         {
             return VisibilityEval.Visible;
         }
@@ -109,15 +111,20 @@ internal sealed class LosEvaluator
 
         bool hasAnyTraceAttempt = false;
         bool hasSuccessfulTraceCall = false;
+        bool hasTransientTraceIssue = false;
         bool drawDebugBeams = VisibilityGeometry.ShouldDrawDebugTraceBeam(viewerIsBot);
         bool drawLosDebugAabb = VisibilityGeometry.ShouldDrawDebugAabbBox(DebugAabbKind.Los);
         nint targetHandle = targetPawn.Handle;
-        _activeViewerSlot = viewerSlot;
 
-        SetVector(_traceStart, viewerSnapshot.EyeX, viewerSnapshot.EyeY, viewerSnapshot.EyeZ);
+        // Compute expanded world bounds once and share across all downstream calls.
+        GetExpandedWorldBounds(ref targetSnapshot, config,
+            out float minX, out float minY, out float minZ,
+            out float maxX, out float maxY, out float maxZ);
+
+        VisibilityGeometry.SetVector(_traceStart, viewerSnapshot.EyeX, viewerSnapshot.EyeY, viewerSnapshot.EyeZ);
         if (drawLosDebugAabb)
         {
-            DrawLosDebugAabb(ref targetSnapshot, config);
+            DrawLosDebugAabb(minX, minY, minZ, maxX, maxY, maxZ);
         }
 
         if (TryAabbSurfaceProbeLos(
@@ -128,49 +135,39 @@ internal sealed class LosEvaluator
             nowTick,
             ref viewerSnapshot,
             ref targetSnapshot,
+            minX, minY, minZ, maxX, maxY, maxZ,
             config,
             drawDebugBeams,
             drawLosDebugAabb,
             out _,
             ref hasAnyTraceAttempt,
-            ref hasSuccessfulTraceCall))
+            ref hasSuccessfulTraceCall,
+            ref hasTransientTraceIssue))
         {
             return VisibilityEval.Visible;
         }
 
-        int remainingRayBudget = MaxAimRayCount;
-
-        bool triedAimRayEarly = ShouldTryAimRayEarly(ref viewerSnapshot, ref targetSnapshot, config);
-        if (triedAimRayEarly &&
+        if (ShouldTryAimRayEarly(ref viewerSnapshot, ref targetSnapshot, config) &&
             TryAimRayProximityFallback(
                 viewerPawn,
                 viewerSlot,
                 nowTick,
                 ref viewerSnapshot,
                 ref targetSnapshot,
+                minX, minY, minZ, maxX, maxY, maxZ,
                 config,
-                remainingRayBudget,
+                MaxAimRayCount,
                 drawDebugBeams,
                 ref hasAnyTraceAttempt,
-                ref hasSuccessfulTraceCall))
+                ref hasSuccessfulTraceCall,
+                ref hasTransientTraceIssue))
         {
             return VisibilityEval.Visible;
         }
 
-        if (!triedAimRayEarly &&
-            TryAimRayProximityFallback(
-                viewerPawn,
-                viewerSlot,
-                nowTick,
-                ref viewerSnapshot,
-                ref targetSnapshot,
-                config,
-                remainingRayBudget,
-                drawDebugBeams,
-                ref hasAnyTraceAttempt,
-                ref hasSuccessfulTraceCall))
+        if (hasTransientTraceIssue)
         {
-            return VisibilityEval.Visible;
+            return VisibilityEval.UnknownTransient;
         }
 
         if (hasAnyTraceAttempt && !hasSuccessfulTraceCall)
@@ -228,14 +225,6 @@ internal sealed class LosEvaluator
         return alignment >= dotThreshold;
     }
 
-    private void RecordActiveViewerTraceAttempt(ViewerRayTraceStage stage)
-    {
-        if (_activeViewerSlot >= 0)
-        {
-            _recordViewerTraceAttempt?.Invoke(_activeViewerSlot, stage);
-        }
-    }
-
     private bool TryAabbSurfaceProbeLos(
         CBasePlayerPawn viewerPawn,
         nint targetHandle,
@@ -244,15 +233,21 @@ internal sealed class LosEvaluator
         int nowTick,
         ref PlayerTransformSnapshot viewerSnapshot,
         ref PlayerTransformSnapshot targetSnapshot,
+        float minX, float minY, float minZ,
+        float maxX, float maxY, float maxZ,
         S2AWHConfig config,
         bool drawDebugBeams,
         bool drawDebugLosProbePoints,
         out int attemptedLosRays,
         ref bool hasAnyTraceAttempt,
-        ref bool hasSuccessfulTraceCall)
+        ref bool hasSuccessfulTraceCall,
+        ref bool hasTransientTraceIssue)
     {
         attemptedLosRays = 0;
-        int pointCount = FillDirectedLosProbePoints(ref viewerSnapshot, ref targetSnapshot, config, _losProbePoints);
+        int pointCount = FillDirectedLosProbePoints(
+            ref viewerSnapshot, ref targetSnapshot,
+            minX, minY, minZ, maxX, maxY, maxZ,
+            _losProbePoints);
         if (pointCount <= 0)
         {
             return false;
@@ -278,6 +273,7 @@ internal sealed class LosEvaluator
             SurfaceProbeTraceOutcome probeOutcome = TraceSurfaceProbePoint(
                 viewerPawn,
                 targetHandle,
+                viewerSlot,
                 ref viewerSnapshot,
                 point,
                 hitRadiusSq,
@@ -288,6 +284,11 @@ internal sealed class LosEvaluator
             {
                 return true;
             }
+
+            if (probeOutcome == SurfaceProbeTraceOutcome.UnknownTransient)
+            {
+                hasTransientTraceIssue = true;
+            }
         }
 
         return false;
@@ -295,12 +296,13 @@ internal sealed class LosEvaluator
 
     private bool ShouldDrawLosDebugProbePoints(int viewerSlot, int targetSlot, int nowTick)
     {
-        if ((uint)viewerSlot >= SlotCount || (uint)targetSlot >= SlotCount)
+        if ((uint)viewerSlot >= S2AWHConstants.VisibilitySlotCapacity ||
+            (uint)targetSlot >= S2AWHConstants.VisibilitySlotCapacity)
         {
             return false;
         }
 
-        int pairIndex = (viewerSlot * SlotCount) + targetSlot;
+        int pairIndex = (viewerSlot * S2AWHConstants.VisibilitySlotCapacity) + targetSlot;
         int lastDrawTick = _losDebugProbeDrawTicks[pairIndex];
         if (lastDrawTick > 0)
         {
@@ -318,7 +320,8 @@ internal sealed class LosEvaluator
     private static int FillDirectedLosProbePoints(
         ref PlayerTransformSnapshot viewerSnapshot,
         ref PlayerTransformSnapshot targetSnapshot,
-        S2AWHConfig config,
+        float minX, float minY, float minZ,
+        float maxX, float maxY, float maxZ,
         Vector[] pointBuffer)
     {
         if (pointBuffer.Length < MaxAabbSurfaceProbeRays)
@@ -326,7 +329,6 @@ internal sealed class LosEvaluator
             return 0;
         }
 
-        GetExpandedWorldBounds(ref targetSnapshot, config, out float minX, out float minY, out float minZ, out float maxX, out float maxY, out float maxZ);
         float centerX = (minX + maxX) * 0.5f;
         float centerY = (minY + maxY) * 0.5f;
         float centerZ = (minZ + maxZ) * 0.5f;
@@ -387,7 +389,7 @@ internal sealed class LosEvaluator
                 }
 
                 float columnY = centerY + (halfY * columnFactors[col]);
-                SetVector(pointBuffer[pointIndex++], faceX, columnY, rowZ);
+                VisibilityGeometry.SetVector(pointBuffer[pointIndex++], faceX, columnY, rowZ);
             }
         }
 
@@ -415,7 +417,7 @@ internal sealed class LosEvaluator
                 }
 
                 float columnX = centerX + (halfX * columnFactors[col]);
-                SetVector(pointBuffer[pointIndex++], columnX, faceY, rowZ);
+                VisibilityGeometry.SetVector(pointBuffer[pointIndex++], columnX, faceY, rowZ);
             }
         }
 
@@ -425,6 +427,7 @@ internal sealed class LosEvaluator
     private SurfaceProbeTraceOutcome TraceSurfaceProbePoint(
         CBasePlayerPawn viewerPawn,
         nint targetHandle,
+        int viewerSlot,
         ref PlayerTransformSnapshot viewerSnapshot,
         Vector point,
         float hitRadiusSq,
@@ -432,9 +435,9 @@ internal sealed class LosEvaluator
         ref bool hasAnyTraceAttempt,
         ref bool hasSuccessfulTraceCall)
     {
-        SetVector(_traceStart, viewerSnapshot.EyeX, viewerSnapshot.EyeY, viewerSnapshot.EyeZ);
+        VisibilityGeometry.SetVector(_traceStart, viewerSnapshot.EyeX, viewerSnapshot.EyeY, viewerSnapshot.EyeZ);
         hasAnyTraceAttempt = true;
-        RecordActiveViewerTraceAttempt(ViewerRayTraceStage.Los);
+        _recordViewerTraceAttempt?.Invoke(viewerSlot, ViewerRayTraceStage.Los);
         if (!_rayTrace.TraceEndShape(_traceStart, point, viewerPawn, _cachedTraceOptions, out var result))
         {
             return SurfaceProbeTraceOutcome.TraceFailed;
@@ -446,9 +449,14 @@ internal sealed class LosEvaluator
             VisibilityGeometry.DrawDebugTraceBeam(_traceStart, point, result, DebugTraceKind.LosSurface);
         }
 
-        if (!result.DidHit || result.HitEntity == targetHandle)
+        if (!result.DidHit || result.HitEntityHandle == targetHandle)
         {
             return SurfaceProbeTraceOutcome.Visible;
+        }
+
+        if (result.IsAllSolid)
+        {
+            return SurfaceProbeTraceOutcome.UnknownTransient;
         }
 
         if (hitRadiusSq <= 0.0f)
@@ -456,9 +464,10 @@ internal sealed class LosEvaluator
             return SurfaceProbeTraceOutcome.Blocked;
         }
 
-        float dx = point.X - result.EndPosX;
-        float dy = point.Y - result.EndPosY;
-        float dz = point.Z - result.EndPosZ;
+        VisibilityGeometry.GetImpactPoint(in result, out float impactX, out float impactY, out float impactZ);
+        float dx = point.X - impactX;
+        float dy = point.Y - impactY;
+        float dz = point.Z - impactZ;
         return (dx * dx) + (dy * dy) + (dz * dz) <= hitRadiusSq
             ? SurfaceProbeTraceOutcome.Visible
             : SurfaceProbeTraceOutcome.Blocked;
@@ -470,33 +479,28 @@ internal sealed class LosEvaluator
         int nowTick,
         ref PlayerTransformSnapshot viewerSnapshot,
         ref PlayerTransformSnapshot targetSnapshot,
+        float minX, float minY, float minZ,
+        float maxX, float maxY, float maxZ,
         S2AWHConfig config,
         int maxAimRaysBudget,
         bool drawDebugBeams,
         ref bool hasAnyTraceAttempt,
-        ref bool hasSuccessfulTraceCall)
+        ref bool hasSuccessfulTraceCall,
+        ref bool hasTransientTraceIssue)
     {
         if (maxAimRaysBudget <= 0)
         {
             return false;
         }
 
-        float maxDistance = config.Trace.AimRayMaxDistance;
-        if (maxDistance > 0.0f)
+        float hitRadius = config.Trace.AimRayHitRadius;
+        if (hitRadius <= 0.0f)
         {
-            float targetCenterX = targetSnapshot.OriginX + targetSnapshot.CenterX;
-            float targetCenterY = targetSnapshot.OriginY + targetSnapshot.CenterY;
-            float targetCenterZ = targetSnapshot.OriginZ + targetSnapshot.CenterZ;
-            float dx = targetCenterX - viewerSnapshot.EyeX;
-            float dy = targetCenterY - viewerSnapshot.EyeY;
-            float dz = targetCenterZ - viewerSnapshot.EyeZ;
-            float distanceSq = (dx * dx) + (dy * dy) + (dz * dz);
-            float maxDistanceSq = maxDistance * maxDistance;
-            if (distanceSq > maxDistanceSq)
-            {
-                return false;
-            }
+            return false;
         }
+
+        // Distance-to-target and maxDistance range checks were already performed by ShouldTryAimRayEarly
+        // before this method was called, so no redundant check needed here.
 
         EnsureAimRayCache(
             viewerSlot,
@@ -518,19 +522,17 @@ internal sealed class LosEvaluator
             hasSuccessfulTraceCall = true;
         }
 
+        if (aimCache.TransientCount > 0)
+        {
+            hasTransientTraceIssue = true;
+        }
+
         if (aimCache.HitCount <= 0)
         {
             return false;
         }
 
-        float hitRadius = config.Trace.AimRayHitRadius;
-        if (hitRadius <= 0.0f)
-        {
-            return false;
-        }
-
         float hitRadiusSq = hitRadius * hitRadius;
-        GetExpandedWorldBounds(ref targetSnapshot, config, out float minX, out float minY, out float minZ, out float maxX, out float maxY, out float maxZ);
 
         for (int i = 0; i < aimCache.HitCount; i++)
         {
@@ -647,6 +649,7 @@ internal sealed class LosEvaluator
         cache.HitCount = 0;
         cache.AttemptedCount = 0;
         cache.SuccessfulCount = 0;
+        cache.TransientCount = 0;
 
         int rayCount = Math.Clamp(config.Trace.AimRayCount, 1, Math.Min(MaxAimRayCount, maxRayBudget));
         float spreadDegrees = Math.Max(0.0f, config.Trace.AimRaySpreadDegrees);
@@ -656,7 +659,7 @@ internal sealed class LosEvaluator
         float basePitch = viewerSnapshot.EyeAnglesPitch;
         float baseYaw = viewerSnapshot.EyeAnglesYaw;
 
-        SetVector(_traceStart, viewerSnapshot.EyeX, viewerSnapshot.EyeY, viewerSnapshot.EyeZ);
+        VisibilityGeometry.SetVector(_traceStart, viewerSnapshot.EyeX, viewerSnapshot.EyeY, viewerSnapshot.EyeZ);
 
         for (int i = 0; i < rayCount; i++)
         {
@@ -671,14 +674,14 @@ internal sealed class LosEvaluator
             float dirY = cosPitch * sinYaw;
             float dirZ = -sinPitch;
 
-            SetVector(
+            VisibilityGeometry.SetVector(
                 _traceEnd,
                 _traceStart.X + (dirX * rayDistance),
                 _traceStart.Y + (dirY * rayDistance),
                 _traceStart.Z + (dirZ * rayDistance));
 
             cache.AttemptedCount++;
-            RecordActiveViewerTraceAttempt(ViewerRayTraceStage.Aim);
+            _recordViewerTraceAttempt?.Invoke(viewerSlot, ViewerRayTraceStage.Aim);
             if (!_rayTrace.TraceEndShape(_traceStart, _traceEnd, viewerPawn, _cachedTraceOptions, out var result))
             {
                 continue;
@@ -690,12 +693,19 @@ internal sealed class LosEvaluator
                 VisibilityGeometry.DrawDebugTraceBeam(_traceStart, _traceEnd, result, DebugTraceKind.AimRay);
             }
 
+            if (result.IsAllSolid)
+            {
+                cache.TransientCount++;
+                continue;
+            }
+
             Vector hitPoint = cache.HitPoints[cache.HitCount++];
             if (result.DidHit)
             {
-                hitPoint.X = result.EndPosX;
-                hitPoint.Y = result.EndPosY;
-                hitPoint.Z = result.EndPosZ;
+                VisibilityGeometry.GetImpactPoint(in result, out float impactX, out float impactY, out float impactZ);
+                hitPoint.X = impactX;
+                hitPoint.Y = impactY;
+                hitPoint.Z = impactZ;
             }
             else
             {
@@ -706,17 +716,11 @@ internal sealed class LosEvaluator
         }
     }
 
-    private static void DrawLosDebugAabb(ref PlayerTransformSnapshot targetSnapshot, S2AWHConfig config)
+    private static void DrawLosDebugAabb(
+        float minX, float minY, float minZ,
+        float maxX, float maxY, float maxZ)
     {
-        GetExpandedWorldBounds(ref targetSnapshot, config, out float minX, out float minY, out float minZ, out float maxX, out float maxY, out float maxZ);
-        VisibilityGeometry.DrawDebugAabbBox(
-            minX,
-            minY,
-            minZ,
-            maxX,
-            maxY,
-            maxZ,
-            DebugAabbKind.Los);
+        VisibilityGeometry.DrawDebugAabbBox(minX, minY, minZ, maxX, maxY, maxZ, DebugAabbKind.Los);
     }
 
     private static void GetExpandedWorldBounds(
@@ -744,13 +748,6 @@ internal sealed class LosEvaluator
         maxZ = centerZ + halfZ;
     }
 
-    private static void SetVector(Vector vector, float x, float y, float z)
-    {
-        vector.X = x;
-        vector.Y = y;
-        vector.Z = z;
-    }
-
     private static Vector[] CreatePointBuffer(int count)
     {
         Vector[] points = new Vector[count];
@@ -760,17 +757,6 @@ internal sealed class LosEvaluator
         }
 
         return points;
-    }
-
-    /// <summary>
-    /// Clears cached target surface data for one slot.
-    /// </summary>
-    internal void InvalidateTargetSlot(int targetSlot)
-    {
-        if ((uint)targetSlot < SlotCount)
-        {
-            _viewerAimCacheBySlot[targetSlot] = null;
-        }
     }
 
     /// <summary>

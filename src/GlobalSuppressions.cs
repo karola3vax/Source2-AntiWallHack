@@ -26,18 +26,6 @@ using System.Diagnostics.CodeAnalysis;
     Scope = "member",
     Target = "~M:S2AWH.S2AWH.TryGetLivePlayers(System.Int32,System.Collections.Generic.List{CounterStrikeSharp.API.Core.CCSPlayerController}@)")]
 
-[assembly: SuppressMessage(
-    "Performance",
-    "CA1814:Prefer jagged arrays over multidimensional",
-    Justification = "The ray counter is a fixed slot x stage grid; rectangular arrays keep the hot-path indexing simpler and predictable.",
-    Scope = "member",
-    Target = "~F:S2AWH.S2AWH._viewerRayCountsWorking")]
-[assembly: SuppressMessage(
-    "Performance",
-    "CA1814:Prefer jagged arrays over multidimensional",
-    Justification = "The ray counter is a fixed slot x stage grid; rectangular arrays keep the hot-path indexing simpler and predictable.",
-    Scope = "member",
-    Target = "~F:S2AWH.S2AWH._viewerRayCountsDisplay")]
 
 [assembly: SuppressMessage(
     "Performance",

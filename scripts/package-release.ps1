@@ -1,6 +1,7 @@
 param(
     [string]$Configuration = "Release",
-    [string]$Version = ""
+    [string]$Version = "",
+    [switch]$KeepPackageDir
 )
 
 $ErrorActionPreference = "Stop"
@@ -49,6 +50,7 @@ $readme = Join-Path $projectDir "README.md"
 $license = Join-Path $projectDir "LICENSE"
 $changelog = Join-Path $projectDir "CHANGELOG.md"
 $releaseNotes = Join-Path $projectDir ("RELEASE_NOTES_{0}.md" -f $Version)
+$generatedReleaseNotesPath = $null
 if (-not (Test-Path $releaseNotes) -and $Version -match '^([0-9]+\.[0-9]+\.[0-9]+)')
 {
     $releaseNotes = Join-Path $projectDir ("RELEASE_NOTES_{0}.md" -f $Matches[1])
@@ -57,14 +59,23 @@ if (-not (Test-Path $releaseNotes) -and $Version -match '^([0-9]+\.[0-9]+\.[0-9]
 if (-not (Test-Path $releaseNotes))
 {
     $changelogLines = Get-Content $changelog
-    $header = "## $Version"
-    $startIndex = [Array]::IndexOf($changelogLines, ($changelogLines | Where-Object { $_ -like "$header*" } | Select-Object -First 1))
+    $startIndex = -1
+    $versionHeaderPattern = "^\s*##\s+$([Regex]::Escape($Version))(\s+-.*)?\s*$"
+    for ($i = 0; $i -lt $changelogLines.Length; $i++)
+    {
+        if ($changelogLines[$i] -match $versionHeaderPattern)
+        {
+            $startIndex = $i
+            break
+        }
+    }
+
     if ($startIndex -ge 0)
     {
         $endIndex = $changelogLines.Length
         for ($i = $startIndex + 1; $i -lt $changelogLines.Length; $i++)
         {
-            if ($changelogLines[$i] -like '## *')
+            if ($changelogLines[$i] -match '^\s*##\s+')
             {
                 $endIndex = $i
                 break
@@ -72,9 +83,22 @@ if (-not (Test-Path $releaseNotes))
         }
 
         $generatedNotes = @("# S2AWH $Version", "") + $changelogLines[$startIndex..($endIndex - 1)]
-        $releaseNotes = Join-Path $projectDir ("RELEASE_NOTES_{0}.generated.md" -f $Version)
-        Set-Content -Path $releaseNotes -Value $generatedNotes -Encoding UTF8
     }
+    else
+    {
+        $generatedNotes = @(
+            "# S2AWH $Version",
+            "",
+            "## $Version",
+            "",
+            "- Auto-generated release notes because no matching changelog heading was found.",
+            "- Review CHANGELOG.md for full history and add a dedicated section for this version."
+        )
+    }
+
+    $generatedReleaseNotesPath = Join-Path $projectDir ("RELEASE_NOTES_{0}.generated.md" -f $Version)
+    $releaseNotes = $generatedReleaseNotesPath
+    Set-Content -Path $releaseNotes -Value $generatedNotes -Encoding UTF8
 }
 
 $requiredFiles = @(
@@ -87,44 +111,66 @@ $requiredFiles = @(
     $releaseNotes
 )
 
-foreach ($path in $requiredFiles)
+try
 {
-    if (-not (Test-Path $path))
+    foreach ($path in $requiredFiles)
     {
-        throw "Required release file missing: $path"
+        if (-not (Test-Path $path))
+        {
+            throw "Required release file missing: $path"
+        }
+    }
+
+    if (Test-Path $packageDir)
+    {
+        Remove-Item $packageDir -Recurse -Force
+    }
+
+    if (Test-Path $zipPath)
+    {
+        Remove-Item $zipPath -Force
+    }
+
+    New-Item -ItemType Directory -Path (Join-Path $packageDir "addons\counterstrikesharp\plugins\S2AWH") -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $packageDir "addons\counterstrikesharp\configs\plugins\S2AWH") -Force | Out-Null
+
+    Copy-Item $pluginDll (Join-Path $packageDir "addons\counterstrikesharp\plugins\S2AWH\S2AWH.dll")
+    Copy-Item $pluginDeps (Join-Path $packageDir "addons\counterstrikesharp\plugins\S2AWH\S2AWH.deps.json")
+    if (Test-Path $pluginPdb)
+    {
+        Copy-Item $pluginPdb (Join-Path $packageDir "addons\counterstrikesharp\plugins\S2AWH\S2AWH.pdb")
+    }
+    Copy-Item $exampleConfig (Join-Path $packageDir "addons\counterstrikesharp\configs\plugins\S2AWH\S2AWH.example.json")
+    Copy-Item $readme (Join-Path $packageDir "README.md")
+    Copy-Item $license (Join-Path $packageDir "LICENSE")
+    Copy-Item $changelog (Join-Path $packageDir "CHANGELOG.md")
+    Copy-Item $releaseNotes (Join-Path $packageDir "RELEASE_NOTES.md")
+
+    Compress-Archive -Path (Join-Path $packageDir "*") -DestinationPath $zipPath -CompressionLevel Optimal
+    $sha256 = (Get-FileHash $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    Set-Content -Path $sha256Path -Value "$sha256 *$packageName.zip" -Encoding ASCII
+
+    Write-Host "Release package created:"
+    if ($KeepPackageDir)
+    {
+        Write-Host "  Folder: $packageDir"
+    }
+    else
+    {
+        Write-Host "  Folder: cleaned (use -KeepPackageDir to keep unpacked staging files)"
+    }
+    Write-Host "  Zip:    $zipPath"
+    Write-Host "  SHA256: $sha256Path"
+}
+finally
+{
+    if (-not $KeepPackageDir -and (Test-Path $packageDir))
+    {
+        Remove-Item $packageDir -Recurse -Force
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($generatedReleaseNotesPath) -and (Test-Path $generatedReleaseNotesPath))
+    {
+        Remove-Item $generatedReleaseNotesPath -Force
     }
 }
-
-if (Test-Path $packageDir)
-{
-    Remove-Item $packageDir -Recurse -Force
-}
-
-if (Test-Path $zipPath)
-{
-    Remove-Item $zipPath -Force
-}
-
-New-Item -ItemType Directory -Path (Join-Path $packageDir "addons\counterstrikesharp\plugins\S2AWH") -Force | Out-Null
-New-Item -ItemType Directory -Path (Join-Path $packageDir "addons\counterstrikesharp\configs\plugins\S2AWH") -Force | Out-Null
-
-Copy-Item $pluginDll (Join-Path $packageDir "addons\counterstrikesharp\plugins\S2AWH\S2AWH.dll")
-Copy-Item $pluginDeps (Join-Path $packageDir "addons\counterstrikesharp\plugins\S2AWH\S2AWH.deps.json")
-if (Test-Path $pluginPdb)
-{
-    Copy-Item $pluginPdb (Join-Path $packageDir "addons\counterstrikesharp\plugins\S2AWH\S2AWH.pdb")
-}
-Copy-Item $exampleConfig (Join-Path $packageDir "addons\counterstrikesharp\configs\plugins\S2AWH\S2AWH.example.json")
-Copy-Item $readme (Join-Path $packageDir "README.md")
-Copy-Item $license (Join-Path $packageDir "LICENSE")
-Copy-Item $changelog (Join-Path $packageDir "CHANGELOG.md")
-Copy-Item $releaseNotes (Join-Path $packageDir "RELEASE_NOTES.md")
-
-Compress-Archive -Path (Join-Path $packageDir "*") -DestinationPath $zipPath -CompressionLevel Optimal
-$sha256 = (Get-FileHash $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
-Set-Content -Path $sha256Path -Value "$sha256 *$packageName.zip" -Encoding ASCII
-
-Write-Host "Release package created:"
-Write-Host "  Folder: $packageDir"
-Write-Host "  Zip:    $zipPath"
-Write-Host "  SHA256: $sha256Path"

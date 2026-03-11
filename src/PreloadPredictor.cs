@@ -7,7 +7,6 @@ namespace S2AWH;
 
 internal sealed class PreloadPredictor
 {
-    private const int SlotCount = 65;
     private const int DirectedPreloadProbePointCount = 32; // 4x4 per face, up to 2 horizontal faces
     private const float DirectedPreloadDualFaceRatioThreshold = 1.35f;
     private const float StandingViewOffsetZ = 64.0f;
@@ -57,7 +56,7 @@ internal sealed class PreloadPredictor
     private readonly Vector[] _directedPreloadProbePoints = CreateDirectedPreloadProbeBuffer();
 
     private readonly TraceOptions _cachedTraceOptions = VisibilityGeometry.GetVisibilityTraceOptions();
-    private readonly PredictorTargetCacheEntry?[] _targetCacheBySlot = new PredictorTargetCacheEntry?[SlotCount];
+    private readonly PredictorTargetCacheEntry?[] _targetCacheBySlot = new PredictorTargetCacheEntry?[S2AWHConstants.VisibilitySlotCapacity];
 
     private int _cachedViewerSlot = -1;
     private int _cachedViewerTick = -1;
@@ -82,7 +81,7 @@ internal sealed class PreloadPredictor
         PlayerTransformSnapshot[] transforms,
         CBasePlayerPawn?[] pawnsBySlot)
     {
-        if ((uint)viewerSlot >= SlotCount || (uint)targetSlot >= SlotCount || viewerSlot == targetSlot)
+        if ((uint)viewerSlot >= S2AWHConstants.VisibilitySlotCapacity || (uint)targetSlot >= S2AWHConstants.VisibilitySlotCapacity || viewerSlot == targetSlot)
         {
             return false;
         }
@@ -210,7 +209,7 @@ internal sealed class PreloadPredictor
         PlayerTransformSnapshot[] transforms,
         CBasePlayerPawn?[] pawnsBySlot)
     {
-        if ((uint)viewerSlot >= SlotCount || (uint)targetSlot >= SlotCount || viewerSlot == targetSlot)
+        if ((uint)viewerSlot >= S2AWHConstants.VisibilitySlotCapacity || (uint)targetSlot >= S2AWHConstants.VisibilitySlotCapacity || viewerSlot == targetSlot)
         {
             return false;
         }
@@ -281,7 +280,12 @@ internal sealed class PreloadPredictor
 
         if (!result.DidHit)
         {
-            return; // No wall between current and predicted — all clear.
+            return; // No wall between current and predicted path.
+        }
+
+        if (result.IsAllSolid)
+        {
+            return; // Fail-open: avoid clamping from ambiguous "started in solid" traces.
         }
 
         // Pull back 2 units toward the viewer so the origin is safely in open space.
@@ -293,9 +297,10 @@ internal sealed class PreloadPredictor
         if (distanceSq > 0.0001f)
         {
             float inverseDistance = 1.0f / MathF.Sqrt(distanceSq);
-            predictedEye.X = result.EndPosX + (dx * inverseDistance * pullbackUnits);
-            predictedEye.Y = result.EndPosY + (dy * inverseDistance * pullbackUnits);
-            predictedEye.Z = result.EndPosZ + (dz * inverseDistance * pullbackUnits);
+            VisibilityGeometry.GetImpactPoint(in result, out float impactX, out float impactY, out float impactZ);
+            predictedEye.X = impactX + (dx * inverseDistance * pullbackUnits);
+            predictedEye.Y = impactY + (dy * inverseDistance * pullbackUnits);
+            predictedEye.Z = impactZ + (dz * inverseDistance * pullbackUnits);
         }
         else
         {
@@ -404,7 +409,9 @@ internal sealed class PreloadPredictor
         float probeY = probe.Y;
         float probeZ = probe.Z;
 
-        AabbGeometry.SetViewerOrigin(_traceStart, eyePosition);
+        _traceStart.X = eyePosition.X;
+        _traceStart.Y = eyePosition.Y;
+        _traceStart.Z = eyePosition.Z;
         _surfaceTraceEnd.X = probeX;
         _surfaceTraceEnd.Y = probeY;
         _surfaceTraceEnd.Z = probeZ;
@@ -420,13 +427,19 @@ internal sealed class PreloadPredictor
             VisibilityGeometry.DrawDebugTraceBeam(_traceStart, _surfaceTraceEnd, result, traceKind);
         }
 
-        if (!result.DidHit || result.HitEntity == targetPawn.Handle)
+        if (!result.DidHit || result.HitEntityHandle == targetPawn.Handle)
         {
             return true;
         }
 
+        if (result.IsAllSolid)
+        {
+            return true; // Fail-open on ambiguous trace origin clipping.
+        }
+
+        VisibilityGeometry.GetImpactPoint(in result, out float impactX, out float impactY, out float impactZ);
         return hitRadiusSq > 0.0f &&
-               DistanceSquared(probeX, probeY, probeZ, result.EndPosX, result.EndPosY, result.EndPosZ) <= hitRadiusSq;
+               DistanceSquared(probeX, probeY, probeZ, impactX, impactY, impactZ) <= hitRadiusSq;
     }
 
     private static int FillDirectedPreloadProbePoints(
@@ -504,7 +517,7 @@ internal sealed class PreloadPredictor
                 }
 
                 float columnY = centerY + (halfY * columnFactors[col]);
-                SetPoint(pointBuffer, pointIndex++, faceX, columnY, rowZ);
+                VisibilityGeometry.SetPoint(pointBuffer, pointIndex++, faceX, columnY, rowZ);
             }
         }
 
@@ -532,7 +545,7 @@ internal sealed class PreloadPredictor
                 }
 
                 float columnX = centerX + (halfX * columnFactors[col]);
-                SetPoint(pointBuffer, pointIndex++, columnX, faceY, rowZ);
+                VisibilityGeometry.SetPoint(pointBuffer, pointIndex++, columnX, faceY, rowZ);
             }
         }
 
@@ -845,11 +858,6 @@ internal sealed class PreloadPredictor
         float remainingJumpRise = GetEstimatedRemainingJumpRise(ref viewerSnapshot);
 
         float jumpRise = Math.Clamp(remainingJumpRise + JumpAssistHeadroomUnits, MinJumpAssistLeadUnits, MaxJumpAssistLeadUnits);
-        if (jumpRise <= 0.0f)
-        {
-            return 0.0f;
-        }
-
         return viewerSnapshot.EyeZ + jumpRise;
     }
 
@@ -1023,7 +1031,9 @@ internal sealed class PreloadPredictor
         float probeY = probe.Y;
         float probeZ = probe.Z;
 
-        AabbGeometry.SetViewerOrigin(_traceStart, eyePosition);
+        _traceStart.X = eyePosition.X;
+        _traceStart.Y = eyePosition.Y;
+        _traceStart.Z = eyePosition.Z;
         _surfaceTraceEnd.X = probeX;
         _surfaceTraceEnd.Y = probeY;
         _surfaceTraceEnd.Z = probeZ;
@@ -1039,13 +1049,19 @@ internal sealed class PreloadPredictor
             VisibilityGeometry.DrawDebugTraceBeam(_traceStart, _surfaceTraceEnd, result, DebugTraceKind.JumpAssist);
         }
 
-        if (!result.DidHit || result.HitEntity == targetPawn.Handle)
+        if (!result.DidHit || result.HitEntityHandle == targetPawn.Handle)
         {
             return true;
         }
 
+        if (result.IsAllSolid)
+        {
+            return true; // Fail-open on ambiguous trace origin clipping.
+        }
+
+        VisibilityGeometry.GetImpactPoint(in result, out float impactX, out float impactY, out float impactZ);
         return hitRadiusSq > 0.0f &&
-               DistanceSquared(probeX, probeY, probeZ, result.EndPosX, result.EndPosY, result.EndPosZ) <= hitRadiusSq;
+               DistanceSquared(probeX, probeY, probeZ, impactX, impactY, impactZ) <= hitRadiusSq;
     }
 
     private static void GetJumpAssistWorldBounds(
@@ -1207,20 +1223,12 @@ internal sealed class PreloadPredictor
         return buffer;
     }
 
-    private static void SetPoint(Vector[] pointBuffer, int index, float x, float y, float z)
-    {
-        Vector point = pointBuffer[index];
-        point.X = x;
-        point.Y = y;
-        point.Z = z;
-    }
-
     /// <summary>
     /// Clears cached predictor data for the given target slot.
     /// </summary>
     internal void InvalidateTargetSlot(int targetSlot)
     {
-        if ((uint)targetSlot < SlotCount)
+        if ((uint)targetSlot < S2AWHConstants.VisibilitySlotCapacity)
         {
             _targetCacheBySlot[targetSlot] = null;
             if (_cachedViewerSlot == targetSlot)
@@ -1241,3 +1249,5 @@ internal sealed class PreloadPredictor
         _cachedViewerTick = -1;
     }
 }
+
+

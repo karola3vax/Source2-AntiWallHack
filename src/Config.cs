@@ -7,8 +7,11 @@ namespace S2AWH;
 #pragma warning disable CA1034 // Nested settings types intentionally mirror JSON sections.
 public sealed class S2AWHConfig : BasePluginConfig
 {
-    private float _fovDotThreshold = ComputeFovDotThreshold(240.0f);
-    private float _halfFovRadians = ComputeHalfFovRadians(240.0f);
+    internal const float DefaultFovDegrees = 240.0f;
+    private const int MaxUpdateFrequencyTicks = 512;
+
+    private float _fovDotThreshold = ComputeFovDotThreshold(DefaultFovDegrees);
+    private float _halfFovRadians = ComputeHalfFovRadians(DefaultFovDegrees);
 
     public sealed class CoreSettings
     {
@@ -25,7 +28,7 @@ public sealed class S2AWHConfig : BasePluginConfig
         public bool UseFovCulling { get; set; } = true;
 
         [JsonPropertyName("FovDegrees")]
-        public float FovDegrees { get; set; } = 240.0f;
+        public float FovDegrees { get; set; } = DefaultFovDegrees;
 
         [JsonPropertyName("AimRayHitRadius")]
         public float AimRayHitRadius { get; set; } = 100.0f;
@@ -309,7 +312,7 @@ public sealed class S2AWHConfig : BasePluginConfig
 
         // --- Core ---
         int updateFrequencyTicks = Core.UpdateFrequencyTicks;
-        ClampWithWarning(ref updateFrequencyTicks, 1, int.MaxValue, "Core.UpdateFrequencyTicks", warnings);
+        ClampWithWarning(ref updateFrequencyTicks, 1, MaxUpdateFrequencyTicks, "Core.UpdateFrequencyTicks", warnings);
         Core.UpdateFrequencyTicks = updateFrequencyTicks;
 
         // --- Preload ---
@@ -324,6 +327,10 @@ public sealed class S2AWHConfig : BasePluginConfig
         float predictorMinSpeed = Preload.PredictorMinSpeed;
         ClampWithWarning(ref predictorMinSpeed, 0.0f, 100.0f, "Preload.PredictorMinSpeed", warnings);
         Preload.PredictorMinSpeed = predictorMinSpeed;
+
+        float predictorFullSpeed = Preload.PredictorFullSpeed;
+        ClampWithWarning(ref predictorFullSpeed, 0.0f, float.MaxValue, "Preload.PredictorFullSpeed", warnings);
+        Preload.PredictorFullSpeed = predictorFullSpeed;
 
         float minPredictorFullSpeed = Preload.PredictorMinSpeed + 1.0f;
         if (Preload.PredictorFullSpeed < minPredictorFullSpeed)
@@ -383,6 +390,10 @@ public sealed class S2AWHConfig : BasePluginConfig
         ClampWithWarning(ref predictorScaleStartSpeed, 0.0f, float.MaxValue, "Aabb.PredictorScaleStartSpeed", warnings);
         Aabb.PredictorScaleStartSpeed = predictorScaleStartSpeed;
 
+        float predictorScaleFullSpeed = Aabb.PredictorScaleFullSpeed;
+        ClampWithWarning(ref predictorScaleFullSpeed, 0.0f, float.MaxValue, "Aabb.PredictorScaleFullSpeed", warnings);
+        Aabb.PredictorScaleFullSpeed = predictorScaleFullSpeed;
+
         float minPredictorScaleFullSpeed = Aabb.PredictorScaleStartSpeed + 1.0f;
         if (Aabb.PredictorScaleFullSpeed < minPredictorScaleFullSpeed)
         {
@@ -394,6 +405,10 @@ public sealed class S2AWHConfig : BasePluginConfig
         float profileSpeedStart = Aabb.ProfileSpeedStart;
         ClampWithWarning(ref profileSpeedStart, 0.0f, float.MaxValue, "Aabb.ProfileSpeedStart", warnings);
         Aabb.ProfileSpeedStart = profileSpeedStart;
+
+        float profileSpeedFull = Aabb.ProfileSpeedFull;
+        ClampWithWarning(ref profileSpeedFull, 0.0f, float.MaxValue, "Aabb.ProfileSpeedFull", warnings);
+        Aabb.ProfileSpeedFull = profileSpeedFull;
 
         float minProfileSpeedFull = Aabb.ProfileSpeedStart + 1.0f;
         if (Aabb.ProfileSpeedFull < minProfileSpeedFull)

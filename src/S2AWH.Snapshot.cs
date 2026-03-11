@@ -37,9 +37,17 @@ public partial class S2AWH
         _ownedEntityRelationsByChild.Clear();
         _dirtyOwnedEntityHandles.Clear();
         _pendingOwnedEntityRescanUntilTick.Clear();
+        _ownedEntityPeriodicResyncHandleSnapshot.Clear();
+        _knownEntityHandles.Clear();
+        _knownEntityHandleIndices.Clear();
+        _staleKnownEntityHandleScratch.Clear();
+        _knownEntityHandlesInitialized = false;
+        _knownEntityBootstrapRetryUntilTick = -1;
+        _ownedEntityPeriodicResyncCursor = 0;
+        _ownedEntityPeriodicResyncInProgress = false;
         _sceneClosureVisitedNodes.Clear();
-        Array.Clear(_viewerRayCountsWorking, 0, _viewerRayCountsWorking.Length);
-        Array.Clear(_viewerRayCountsDisplay, 0, _viewerRayCountsDisplay.Length);
+        _transmitMembershipByHandleScratch.Clear();
+        ResetSceneParentSchemaCache();
         for (int slot = 0; slot < VisibilitySlotCapacity; slot++)
         {
             ClearViewerRayCountSlotState(slot);
@@ -57,6 +65,8 @@ public partial class S2AWH
         _hasLoggedOwnedEntityScanError = false;
         _hasLoggedEntityClosureCapError = false;
         _hasLoggedReverseReferenceAuditError = false;
+        _hasLoggedCheckTransmitError = false;
+        _hasLoggedOnTickError = false;
         _lastDebugCachePlayerCount = 0;
         ResetDebugWindowCounters();
     }
@@ -240,7 +250,14 @@ public partial class S2AWH
             return 0;
         }
 
-        return Math.Max(1, (int)Math.Ceiling(seconds / Server.TickInterval));
+        float tickInterval = Server.TickInterval;
+        if (!float.IsFinite(tickInterval) || tickInterval <= 0.0f)
+        {
+            // Startup-safe fallback when server globals are not initialized yet.
+            tickInterval = 1.0f / 64.0f;
+        }
+
+        return Math.Max(1, (int)Math.Ceiling(seconds / tickInterval));
     }
 
     private bool IsRoundStartGraceActive(int nowTick)
@@ -258,6 +275,9 @@ public partial class S2AWH
         _ownedEntityBucketsTick = -1;
         _ownedEntityLastFullResyncTick = -1;
         _ownedEntityBucketsInitialized = false;
+        _ownedEntityPeriodicResyncHandleSnapshot.Clear();
+        _ownedEntityPeriodicResyncCursor = 0;
+        _ownedEntityPeriodicResyncInProgress = false;
         _eligibleTargetsWithEntitiesTick = -1;
     }
 
@@ -275,6 +295,8 @@ public partial class S2AWH
         _ownedEntityFullResyncsInWindow = 0;
         _ownedEntityDirtyEntityUpdatesInWindow = 0;
         _ownedEntityPostSpawnRescanMarksInWindow = 0;
+        _ownedEntityPeriodicResyncBatchesInWindow = 0;
+        _ownedEntityPeriodicResyncMarksInWindow = 0;
         _holdRefreshInWindow = 0;
         _holdHitKeepAliveInWindow = 0;
         _holdExpiredInWindow = 0;
@@ -489,14 +511,10 @@ public partial class S2AWH
                     var viewOffset = targetPawnEntity.ViewOffset;
                     if (viewOffset != null)
                     {
-                        t.ViewOffsetX = viewOffset.X;
-                        t.ViewOffsetY = viewOffset.Y;
                         t.ViewOffsetZ = viewOffset.Z;
                     }
                     else
                     {
-                        t.ViewOffsetX = 0;
-                        t.ViewOffsetY = 0;
                         t.ViewOffsetZ = 64.0f;
                     }
 
@@ -564,8 +582,8 @@ public partial class S2AWH
                     }
 
                     // Fallback eye position: Origin + ViewOffset
-                    t.EyeX = t.OriginX + t.ViewOffsetX;
-                    t.EyeY = t.OriginY + t.ViewOffsetY;
+                    t.EyeX = t.OriginX;
+                    t.EyeY = t.OriginY;
                     t.EyeZ = t.OriginZ + t.ViewOffsetZ;
                     t.IsValid = true;
                 }
@@ -823,7 +841,7 @@ public partial class S2AWH
             livePlayers = _cachedLivePlayers;
             return _cachedLivePlayersValid;
         }
-        catch (NativeException ex) when (ex.Message.Contains("Global Variables not initialized yet.", StringComparison.OrdinalIgnoreCase))
+        catch (NativeException ex) when (ex.Message?.Contains("Global Variables not initialized yet.", StringComparison.OrdinalIgnoreCase) == true)
         {
             if (!_hasLoggedGlobalsNotReady)
             {

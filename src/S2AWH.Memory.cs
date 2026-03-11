@@ -269,8 +269,7 @@ public partial class S2AWH
 
     private bool TryResolveVisibleReacquire(int viewerSlot, int targetSlot, int nowTick)
     {
-        if (VisibleReacquireConfirmTicks <= 0 ||
-            (uint)viewerSlot >= VisibilitySlotCapacity ||
+        if ((uint)viewerSlot >= VisibilitySlotCapacity ||
             (uint)targetSlot >= VisibilitySlotCapacity)
         {
             return true;

@@ -4,9 +4,9 @@
 
 ### Server-Side Anti-Wallhack for Counter-Strike 2
 
-[![Version](https://img.shields.io/badge/Version-3.0.4-ec4899?style=for-the-badge&logoColor=white)](https://github.com/karola3vax/Source2-AntiWallHack/releases)
+[![Version](https://img.shields.io/badge/Version-3.0.5-ec4899?style=for-the-badge&logoColor=white)](https://github.com/karola3vax/Source2-AntiWallHack/releases)
 [![CounterStrikeSharp](https://img.shields.io/badge/CounterStrikeSharp-v1.0.362%2B-db2777?style=for-the-badge&logoColor=white)](https://github.com/roflmuffin/CounterStrikeSharp/releases)
-[![Ray-Trace](https://img.shields.io/badge/Ray--Trace-v1.0.4-b0126f?style=for-the-badge&logoColor=white)](https://github.com/FUNPLAY-pro-CS2/Ray-Trace/releases)
+[![Ray-Trace](https://img.shields.io/badge/Ray--Trace-v1.0.6%2B-b0126f?style=for-the-badge&logoColor=white)](https://github.com/FUNPLAY-pro-CS2/Ray-Trace/releases)
 [![License](https://img.shields.io/badge/License-MIT-10b981?style=for-the-badge&logoColor=white)](./LICENSE)
 
 *Wallhacks need data to work. S2AWH takes the data away.*
@@ -55,16 +55,23 @@ No client-side install. No player downloads. Just drop it on your server.
 | :-- | :-- |
 | [CounterStrikeSharp](https://github.com/roflmuffin/CounterStrikeSharp/releases) | `v1.0.362+` |
 | [MetaMod:Source](https://www.sourcemm.net/downloads.php?branch=dev) | `1387+` |
-| [Ray-Trace](https://github.com/FUNPLAY-pro-CS2/Ray-Trace/releases) | `v1.0.4` |
+| [Ray-Trace](https://github.com/FUNPLAY-pro-CS2/Ray-Trace/releases) | `v1.0.6+` |
 
 ### Install
 
 1. Install CounterStrikeSharp, MetaMod, and Ray-Trace on your server.
-2. Download the latest `S2AWH-x.x.x.zip` from [Releases](https://github.com/karola3vax/Source2-AntiWallHack/releases).
-3. Extract it into your server's root directory.
-4. Start the server and look for `[S2AWH]` in console.
+2. Keep the Ray-Trace module and `RayTraceApi.dll` on the same `v1.0.6+` release line.
+3. Download the latest `S2AWH-x.x.x.zip` from [Releases](https://github.com/karola3vax/Source2-AntiWallHack/releases).
+4. Extract it into your server's root directory.
+5. Start the server and look for `[S2AWH]` in console.
 
 That's it. S2AWH is active.
+
+### Operational Scope
+
+- S2AWH blocks line of sight against world geometry.
+- Smoke and other gameplay occluders are intentionally outside the trace mask.
+- This keeps the server-side visibility decision stable and fail-open under native trace faults.
 
 ### File Locations
 
@@ -112,6 +119,7 @@ Lower `UpdateFrequencyTicks` = more precision, more CPU. Start conservative, the
 | `Trace.UseFovCulling` | `true` | Skip targets outside the viewer cone |
 | `Trace.FovDegrees` | `240.0` | How wide the cone is |
 | `Trace.AimRayHitRadius` | `100.0` | Tolerance for aim proximity checks |
+| `Trace.AimRaySpreadDegrees` | `1.0` | Angular spread between aim rays |
 | `Trace.AimRayCount` | `1` | Number of aim rays per viewer |
 | `Trace.AimRayMaxDistance` | `3000.0` | Max range for aim rays |
 
@@ -183,7 +191,7 @@ No. It is visibility-driven transmit filtering at the server level. Hidden enemy
 Its purpose is to cut off hidden enemy information. It does not address aimbots, trigger bots, or other exploits.
 
 **Can it affect performance?**
-Yes — this is real-time ray tracing on every tick. Tune `UpdateFrequencyTicks` to match your server's capacity.
+Yes — this is real-time ray tracing spread across ticks. Tune `UpdateFrequencyTicks` to balance precision and CPU load.
 
 **Why does the plugin sometimes show players it shouldn't?**
 Because sending more data is safer than sending a broken partial set that could crash clients. This is the **fail-open** design — stability always wins.

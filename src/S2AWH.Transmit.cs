@@ -4,222 +4,250 @@ using CounterStrikeSharp.API.Modules.Entities;
 using CounterStrikeSharp.API.Modules.Memory;
 using CounterStrikeSharp.API.Modules.Utils;
 using System.Diagnostics.CodeAnalysis;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Reflection;
 
 namespace S2AWH;
 
 public partial class S2AWH
 {
+    private static short _sceneNodeParentHandleOffsetCache = short.MinValue;
+    private static int _sceneNodeClassSizeCache = -1;
+    private static bool _sceneNodeSchemaCacheInitialized;
+    private static readonly bool CanUseDirectTransmitBitVecAccess = DetectDirectTransmitBitVecAccess();
+    private static readonly bool CanUseSceneParentNetworkFallback = DetectSceneParentNetworkFallbackSupport();
+
     private void OnCheckTransmit(CCheckTransmitInfoList infoList)
     {
-        var config = S2AWHState.Current;
-        if (!config.Core.Enabled || _transmitFilter == null) return;
+        try
+        {
+            var config = S2AWHState.Current;
+            if (!config.Core.Enabled || _transmitFilter == null) return;
 
-        int nowTick = Server.TickCount;
-        BeginViewerRayCountTick(nowTick);
-        if (IsRoundStartGraceActive(nowTick))
-        {
-            return;
-        }
-
-        if (_entityHandleIndexCacheTick != nowTick)
-        {
-            _entityHandleIndexCacheTick = nowTick;
-            _entityHandleIndexCache.Clear();
-        }
-        if (!TryGetLivePlayers(nowTick, out var eligibleTargets))
-        {
-            return;
-        }
-
-        if (_collectDebugCounters)
-        {
-            _transmitCallbacksInWindow++;
-        }
-
-        if (_eligibleTargetsWithEntitiesTick != nowTick)
-        {
-            _eligibleTargetsWithEntities.Clear();
-            int eligibleTargetCount = eligibleTargets.Count;
-            for (int i = 0; i < eligibleTargetCount; i++)
+            int nowTick = Server.TickCount;
+            BeginViewerRayCountTick(nowTick);
+            if (IsRoundStartGraceActive(nowTick))
             {
-                var target = eligibleTargets[i];
-                if (!config.Visibility.IncludeBots && target.IsBot)
-                {
-                    continue;
-                }
-
-                if (TryGetTargetTransmitEntities(target, nowTick, out var targetEntities))
-                {
-                    _eligibleTargetsWithEntities.Add((targetEntities, target.Slot, target.TeamNum, false));
-                }
+                return;
             }
 
-            for (int slot = 0; slot < VisibilitySlotCapacity; slot++)
+            if (_entityHandleIndexCacheTick != nowTick)
             {
-                if (_liveSlotFlags[slot])
-                {
-                    continue;
-                }
-
-                TargetTransmitEntities? cachedTargetEntities = _targetTransmitEntitiesCache[slot];
-                if (cachedTargetEntities == null ||
-                    cachedTargetEntities.Count <= 0 ||
-                    cachedTargetEntities.RetainUntilTick < nowTick ||
-                    (!config.Visibility.IncludeBots && cachedTargetEntities.LastKnownIsBot))
-                {
-                    continue;
-                }
-
-                _eligibleTargetsWithEntities.Add((cachedTargetEntities, slot, cachedTargetEntities.LastKnownTeam, true));
+                _entityHandleIndexCacheTick = nowTick;
+                _entityHandleIndexCache.Clear();
+            }
+            if (!TryGetLivePlayers(nowTick, out var eligibleTargets))
+            {
+                return;
             }
 
-            _eligibleTargetsWithEntitiesTick = nowTick;
-        }
-
-        bool skipTeammates = !config.Visibility.IncludeTeammates;
-
-        int infoCount = infoList.Count;
-        for (int infoIndex = 0; infoIndex < infoCount; infoIndex++)
-        {
-            (CCheckTransmitInfo info, CCSPlayerController? viewer) = infoList[infoIndex];
-            if (viewer == null)
+            if (_collectDebugCounters)
             {
-                continue;
+                _transmitCallbacksInWindow++;
             }
 
-            int viewerSlot = viewer.Slot;
-            if ((uint)viewerSlot >= _liveSlotFlags.Length || !_liveSlotFlags[viewerSlot])
+            if (_eligibleTargetsWithEntitiesTick != nowTick)
             {
-                continue; // Dead/invalid viewers see everything
-            }
-
-            // If it's a bot and we don't calculate LOS for bots, don't block anything
-            bool viewerIsBot = viewer.IsBot;
-            if (viewerIsBot && !config.Visibility.BotsDoLOS) continue;
-
-            int viewerTeam = viewer.TeamNum;
-            ViewerVisibilityRow? targetVisibilityBySlot = _visibilityCache[viewerSlot];
-            bool hasViewerCache = targetVisibilityBySlot != null;
-
-            int targetEntryCount = _eligibleTargetsWithEntities.Count;
-            for (int targetEntryIndex = 0; targetEntryIndex < targetEntryCount; targetEntryIndex++)
-            {
-                var targetEntry = _eligibleTargetsWithEntities[targetEntryIndex];
-                int targetSlot = targetEntry.TargetSlot;
-                if (targetSlot == viewerSlot)
+                _eligibleTargetsWithEntities.Clear();
+                int eligibleTargetCount = eligibleTargets.Count;
+                for (int i = 0; i < eligibleTargetCount; i++)
                 {
-                    continue;
-                }
-                TargetTransmitEntities targetEntities = targetEntry.Entities;
-                if (targetEntities.ForceVisibleUntilTick >= nowTick)
-                {
-                    continue;
-                }
-
-                // Always-transmit fast paths.
-                if (skipTeammates && targetEntry.TargetTeam == viewerTeam)
-                {
-                    continue;
-                }
-
-                bool shouldTransmit;
-                bool hasMatchingCachedDecision =
-                    hasViewerCache &&
-                    targetVisibilityBySlot != null &&
-                    (uint)targetSlot < (uint)targetVisibilityBySlot.Known.Length &&
-                    targetVisibilityBySlot.Known[targetSlot] &&
-                    targetVisibilityBySlot.PawnHandles[targetSlot] == targetEntities.PawnHandleRaw;
-
-                if (hasMatchingCachedDecision)
-                {
-                    ViewerVisibilityRow cachedVisibilityRow = targetVisibilityBySlot!;
-                    shouldTransmit = cachedVisibilityRow.Decisions[targetSlot];
-
-                    // Staggered snapshot rebuild can leave a hidden decision one or more ticks old.
-                    // Recheck only stale hidden pairs so newly exposed targets do not remain popped-out
-                    // until the viewer's next scheduled cache batch.
-                    if (!targetEntry.UseCachedDecisionOnly &&
-                        !shouldTransmit &&
-                        cachedVisibilityRow.EvalTicks[targetSlot] != nowTick)
+                    var target = eligibleTargets[i];
+                    if (!config.Visibility.IncludeBots && target.IsBot)
                     {
+                        continue;
+                    }
+
+                    if (TryGetTargetTransmitEntities(target, nowTick, out var targetEntities))
+                    {
+                        _eligibleTargetsWithEntities.Add((targetEntities, target.Slot, target.TeamNum, false));
+                    }
+                }
+
+                for (int slot = 0; slot < VisibilitySlotCapacity; slot++)
+                {
+                    if (_liveSlotFlags[slot])
+                    {
+                        continue;
+                    }
+
+                    TargetTransmitEntities? cachedTargetEntities = _targetTransmitEntitiesCache[slot];
+                    if (cachedTargetEntities == null ||
+                        cachedTargetEntities.Count <= 0 ||
+                        cachedTargetEntities.RetainUntilTick < nowTick ||
+                        (!config.Visibility.IncludeBots && cachedTargetEntities.LastKnownIsBot))
+                    {
+                        continue;
+                    }
+
+                    _eligibleTargetsWithEntities.Add((cachedTargetEntities, slot, cachedTargetEntities.LastKnownTeam, true));
+                }
+
+                _eligibleTargetsWithEntitiesTick = nowTick;
+            }
+
+            bool skipTeammates = !config.Visibility.IncludeTeammates;
+
+            int infoCount = infoList.Count;
+            for (int infoIndex = 0; infoIndex < infoCount; infoIndex++)
+            {
+                (CCheckTransmitInfo info, CCSPlayerController? viewer) = infoList[infoIndex];
+                if (viewer == null)
+                {
+                    continue;
+                }
+
+                int viewerSlot = viewer.Slot;
+                if ((uint)viewerSlot >= _liveSlotFlags.Length || !_liveSlotFlags[viewerSlot])
+                {
+                    continue; // Dead/invalid viewers see everything
+                }
+
+                // If it's a bot and we don't calculate LOS for bots, don't block anything
+                bool viewerIsBot = viewer.IsBot;
+                if (viewerIsBot && !config.Visibility.BotsDoLOS) continue;
+
+                int viewerTeam = viewer.TeamNum;
+                ViewerVisibilityRow? targetVisibilityBySlot = _visibilityCache[viewerSlot];
+                bool hasViewerCache = targetVisibilityBySlot != null;
+
+                int targetEntryCount = _eligibleTargetsWithEntities.Count;
+                for (int targetEntryIndex = 0; targetEntryIndex < targetEntryCount; targetEntryIndex++)
+                {
+                    var targetEntry = _eligibleTargetsWithEntities[targetEntryIndex];
+                    int targetSlot = targetEntry.TargetSlot;
+                    if (targetSlot == viewerSlot)
+                    {
+                        continue;
+                    }
+                    TargetTransmitEntities targetEntities = targetEntry.Entities;
+                    if (targetEntities.ForceVisibleUntilTick >= nowTick)
+                    {
+                        continue;
+                    }
+
+                    // Always-transmit fast paths.
+                    if (skipTeammates && targetEntry.TargetTeam == viewerTeam)
+                    {
+                        continue;
+                    }
+
+                    bool shouldTransmit;
+                    bool hasMatchingCachedDecision =
+                        hasViewerCache &&
+                        targetVisibilityBySlot != null &&
+                        (uint)targetSlot < (uint)targetVisibilityBySlot.Known.Length &&
+                        targetVisibilityBySlot.Known[targetSlot] &&
+                        targetVisibilityBySlot.PawnHandles[targetSlot] == targetEntities.PawnHandleRaw;
+
+                    if (hasMatchingCachedDecision)
+                    {
+                        ViewerVisibilityRow cachedVisibilityRow = targetVisibilityBySlot!;
+                        shouldTransmit = cachedVisibilityRow.Decisions[targetSlot];
+
+                        // Staggered snapshot rebuild can leave a hidden decision one or more ticks old.
+                        // Recheck only stale hidden pairs so newly exposed targets do not remain popped-out
+                        // until the viewer's next scheduled cache batch.
+                        if (!targetEntry.UseCachedDecisionOnly &&
+                            !shouldTransmit &&
+                            cachedVisibilityRow.EvalTicks[targetSlot] != nowTick)
+                        {
+                            if (_collectDebugCounters)
+                            {
+                                _transmitFallbackChecksInWindow++;
+                            }
+
+                            VisibilityDecision visibilityDecision = EvaluateVisibilitySafe(
+                                viewerSlot,
+                                targetSlot,
+                                viewerIsBot,
+                                config,
+                                nowTick,
+                                "stale hidden recheck");
+                            shouldTransmit = ResolveTransmitWithMemory(viewerSlot, targetSlot, visibilityDecision, nowTick);
+                            cachedVisibilityRow.Decisions[targetSlot] = shouldTransmit;
+                            cachedVisibilityRow.EvalTicks[targetSlot] = nowTick;
+                        }
+                    }
+                    else
+                    {
+                        if (targetEntry.UseCachedDecisionOnly)
+                        {
+                            continue;
+                        }
+
                         if (_collectDebugCounters)
                         {
                             _transmitFallbackChecksInWindow++;
                         }
-
                         VisibilityDecision visibilityDecision = EvaluateVisibilitySafe(
                             viewerSlot,
                             targetSlot,
                             viewerIsBot,
                             config,
                             nowTick,
-                            "stale hidden recheck");
+                            "transmit fallback");
                         shouldTransmit = ResolveTransmitWithMemory(viewerSlot, targetSlot, visibilityDecision, nowTick);
-                        cachedVisibilityRow.Decisions[targetSlot] = shouldTransmit;
-                        cachedVisibilityRow.EvalTicks[targetSlot] = nowTick;
+
+                        // Keep fallback decisions in the snapshot to avoid repeating work in the same tick window.
+                        if ((uint)targetSlot < VisibilitySlotCapacity)
+                        {
+                            if (!hasViewerCache || targetVisibilityBySlot == null)
+                            {
+                                targetVisibilityBySlot = new ViewerVisibilityRow();
+                                _visibilityCache[viewerSlot] = targetVisibilityBySlot;
+                                hasViewerCache = true;
+                            }
+
+                            targetVisibilityBySlot.Decisions[targetSlot] = shouldTransmit;
+                            targetVisibilityBySlot.Known[targetSlot] = true;
+                            targetVisibilityBySlot.PawnHandles[targetSlot] = targetEntities.PawnHandleRaw;
+                            targetVisibilityBySlot.EvalTicks[targetSlot] = nowTick;
+                        }
                     }
-                }
-                else
-                {
-                    if (targetEntry.UseCachedDecisionOnly)
+
+                    if (shouldTransmit)
                     {
+                        // Visible decisions are fail-open: do not force-add entities.
+                        // This avoids overriding removals made by other plugins in the same callback.
                         continue;
                     }
 
+                    bool removedAny = RemoveTargetTransmitEntities(info, targetEntities);
                     if (_collectDebugCounters)
                     {
-                        _transmitFallbackChecksInWindow++;
-                    }
-                    VisibilityDecision visibilityDecision = EvaluateVisibilitySafe(
-                        viewerSlot,
-                        targetSlot,
-                        viewerIsBot,
-                        config,
-                        nowTick,
-                        "transmit fallback");
-                    shouldTransmit = ResolveTransmitWithMemory(viewerSlot, targetSlot, visibilityDecision, nowTick);
-
-                    // Keep fallback decisions in the snapshot to avoid repeating work in the same tick window.
-                    if ((uint)targetSlot < VisibilitySlotCapacity)
-                    {
-                        if (!hasViewerCache || targetVisibilityBySlot == null)
+                        if (removedAny)
                         {
-                            targetVisibilityBySlot = new ViewerVisibilityRow();
-                            _visibilityCache[viewerSlot] = targetVisibilityBySlot;
-                            hasViewerCache = true;
+                            _transmitHiddenEntitiesInWindow++;
                         }
-
-                        targetVisibilityBySlot.Decisions[targetSlot] = shouldTransmit;
-                        targetVisibilityBySlot.Known[targetSlot] = true;
-                        targetVisibilityBySlot.PawnHandles[targetSlot] = targetEntities.PawnHandleRaw;
-                        targetVisibilityBySlot.EvalTicks[targetSlot] = nowTick;
-                    }
-                }
-
-                if (shouldTransmit)
-                {
-                    // Visible decisions are fail-open: do not force-add entities.
-                    // This avoids overriding removals made by other plugins in the same callback.
-                    continue;
-                }
-
-                bool removedAny = RemoveTargetTransmitEntities(info, targetEntities);
-                if (_collectDebugCounters)
-                {
-                    if (removedAny)
-                    {
-                        _transmitHiddenEntitiesInWindow++;
-                    }
-                    else
-                    {
-                        _transmitRemovalNoEffectInWindow++;
+                        else
+                        {
+                            _transmitRemovalNoEffectInWindow++;
+                        }
                     }
                 }
             }
-        }
 
-        UpdateViewerRayCountOverlays();
+            _hasLoggedCheckTransmitError = false;
+        }
+        catch (Exception ex)
+        {
+            if (!_hasLoggedCheckTransmitError)
+            {
+                WarnLog(
+                    "CheckTransmit callback had an unexpected error.",
+                    "A transient native or entity-state issue interrupted one transmit pass.",
+                    "S2AWH failed open for safety and will retry next tick."
+                );
+                DebugLog(
+                    "CheckTransmit error detail.",
+                    $"Error: {ex.Message}",
+                    "This message only shows once."
+                );
+                _hasLoggedCheckTransmitError = true;
+            }
+        }
     }
 
     private bool RemoveTargetTransmitEntities(CCheckTransmitInfo info, TargetTransmitEntities targetEntities)
@@ -281,8 +309,10 @@ public partial class S2AWH
                     continue;
                 }
 
-                info.TransmitEntities.Remove(entityIndex);
-                removed = true;
+                if (TryRemoveTransmitEntityBit(info, entityIndex))
+                {
+                    removed = true;
+                }
             }
             return removed;
         }
@@ -296,15 +326,112 @@ public partial class S2AWH
                 continue;
             }
 
-            if (info.TransmitEntities.Contains(entityIndex))
+            if (TryRemoveTransmitEntityBit(info, entityIndex))
             {
-                info.TransmitEntities.Remove(entityIndex);
                 removedAny = true;
             }
-
         }
 
         return removedAny;
+    }
+
+    private static unsafe bool TryRemoveTransmitEntityBit(CCheckTransmitInfo info, int entityIndex)
+    {
+        if ((uint)entityIndex >= Utilities.MaxEdicts)
+        {
+            return false;
+        }
+
+        if (!CanUseDirectTransmitBitVecAccess)
+        {
+            bool wasSet = info.TransmitEntities.Contains(entityIndex);
+            if (wasSet)
+            {
+                info.TransmitEntities.Remove(entityIndex);
+            }
+
+            return wasSet;
+        }
+
+        const int log2BitsPerInt = 5;
+        const int bitsPerInt = 32;
+
+        ref CFixedBitVecBase transmitEntities = ref info.TransmitEntities;
+        uint* ints = *(uint**)Unsafe.AsPointer(ref transmitEntities);
+        if (ints == null)
+        {
+            return false;
+        }
+
+        int wordIndex = entityIndex >> log2BitsPerInt;
+        uint mask = 1u << (entityIndex & (bitsPerInt - 1));
+        uint* word = ints + wordIndex;
+        uint previousValue = *word;
+        if ((previousValue & mask) == 0)
+        {
+            return false;
+        }
+
+        *word = previousValue & ~mask;
+        return true;
+    }
+
+    private static unsafe bool TryContainsTransmitEntityBit(CCheckTransmitInfo info, int entityIndex)
+    {
+        if ((uint)entityIndex >= Utilities.MaxEdicts)
+        {
+            return false;
+        }
+
+        if (!CanUseDirectTransmitBitVecAccess)
+        {
+            return info.TransmitEntities.Contains(entityIndex);
+        }
+
+        const int log2BitsPerInt = 5;
+        const int bitsPerInt = 32;
+
+        ref CFixedBitVecBase transmitEntities = ref info.TransmitEntities;
+        uint* ints = *(uint**)Unsafe.AsPointer(ref transmitEntities);
+        if (ints == null)
+        {
+            return false;
+        }
+
+        int wordIndex = entityIndex >> log2BitsPerInt;
+        uint mask = 1u << (entityIndex & (bitsPerInt - 1));
+        return (ints[wordIndex] & mask) != 0;
+    }
+
+    private static bool DetectDirectTransmitBitVecAccess()
+    {
+        // Native bitset layout can drift between API/runtime builds.
+        // Keep unsafe pointer writes disabled unless the operator explicitly opts in.
+        string? unsafeOptIn = Environment.GetEnvironmentVariable("S2AWH_ENABLE_UNSAFE_BITVEC");
+        if (!string.Equals(unsafeOptIn, "1", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        try
+        {
+            FieldInfo[] fields = typeof(CFixedBitVecBase).GetFields(BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+            return fields.Length == 1 &&
+                   fields[0].FieldType == typeof(uint).MakePointerType() &&
+                   Unsafe.SizeOf<CFixedBitVecBase>() == IntPtr.Size;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool DetectSceneParentNetworkFallbackSupport()
+    {
+        // Raw network-handle fallback depends on fragile native offsets.
+        // Require explicit opt-in so default builds stay on the stable pointer path only.
+        string? fallbackOptIn = Environment.GetEnvironmentVariable("S2AWH_ENABLE_SCENEPARENT_NET_FALLBACK");
+        return string.Equals(fallbackOptIn, "1", StringComparison.Ordinal);
     }
 
     private bool HasUnsafeReverseTransmitReferences(CCheckTransmitInfo info, TargetTransmitEntities targetEntities, int nowTick)
@@ -315,11 +442,7 @@ public partial class S2AWH
         }
 
         int targetEntityCount = targetEntities.Count;
-        _targetTransmitHandleMembership.Clear();
-        for (int i = 0; i < targetEntityCount; i++)
-        {
-            _targetTransmitHandleMembership.Add(targetEntities.RawHandles[i]);
-        }
+        _transmitMembershipByHandleScratch.Clear();
 
         for (int i = 0; i < targetEntityCount; i++)
         {
@@ -332,17 +455,12 @@ public partial class S2AWH
             for (int bucketIndex = 0; bucketIndex < bucket.Count; bucketIndex++)
             {
                 uint referencingHandleRaw = bucket.RawHandles[bucketIndex];
-                if (_targetTransmitHandleMembership.Contains(referencingHandleRaw))
+                if (targetEntities.HandleMembership.Contains(referencingHandleRaw))
                 {
                     continue;
                 }
 
-                if (!TryResolveEntityHandleIndexForTransmit(referencingHandleRaw, out int referencingEntityIndex))
-                {
-                    continue;
-                }
-
-                if (!info.TransmitEntities.Contains(referencingEntityIndex))
+                if (!IsHandleCurrentlyTransmittedForInfo(info, referencingHandleRaw))
                 {
                     continue;
                 }
@@ -365,6 +483,20 @@ public partial class S2AWH
         }
 
         return false;
+    }
+
+    private bool IsHandleCurrentlyTransmittedForInfo(CCheckTransmitInfo info, uint entityHandleRaw)
+    {
+        if (_transmitMembershipByHandleScratch.TryGetValue(entityHandleRaw, out bool isTransmitted))
+        {
+            return isTransmitted;
+        }
+
+        isTransmitted =
+            TryResolveEntityHandleIndexForTransmit(entityHandleRaw, out int entityIndex) &&
+            TryContainsTransmitEntityBit(info, entityIndex);
+        _transmitMembershipByHandleScratch[entityHandleRaw] = isTransmitted;
+        return isTransmitted;
     }
 
     [SuppressMessage(
@@ -421,6 +553,7 @@ public partial class S2AWH
             targetEntities.PawnHandleRaw = pawnHandleRaw;
             targetEntities.Count = 0;
             targetEntities.BaseCount = 0;
+            targetEntities.HandleMembership.Clear();
             targetEntities.OwnedClosureTick = -1;
             targetEntities.BaseHitEntityCap = false;
             targetEntities.HitEntityCap = false;
@@ -514,29 +647,30 @@ public partial class S2AWH
             return;
         }
 
-        int count = targetEntities.Count;
-        for (int i = 0; i < count; i++)
+        if (!targetEntities.HandleMembership.Add(entityHandleRaw))
         {
-            if (targetEntities.RawHandles[i] == entityHandleRaw)
-            {
-                return;
-            }
+            return;
         }
 
-        if (count >= targetEntities.RawHandles.Length)
+        int count = targetEntities.Count;
+        if (count >= MaxTrackedTransmitEntitiesPerTarget)
         {
-            if (targetEntities.RawHandles.Length >= MaxTrackedTransmitEntitiesPerTarget)
-            {
-                targetEntities.HitEntityCap = true;
-                return;
-            }
-
-            int newLength = Math.Min(MaxTrackedTransmitEntitiesPerTarget, targetEntities.RawHandles.Length * 2);
-            Array.Resize(ref targetEntities.RawHandles, newLength);
+            targetEntities.HandleMembership.Remove(entityHandleRaw);
+            targetEntities.HitEntityCap = true;
+            return;
         }
 
         targetEntities.RawHandles[count] = entityHandleRaw;
         targetEntities.Count = count + 1;
+    }
+
+    private static void RebuildTargetEntityHandleMembership(TargetTransmitEntities targetEntities)
+    {
+        targetEntities.HandleMembership.Clear();
+        for (int i = 0; i < targetEntities.Count; i++)
+        {
+            targetEntities.HandleMembership.Add(targetEntities.RawHandles[i]);
+        }
     }
 
     [SuppressMessage(
@@ -654,6 +788,7 @@ public partial class S2AWH
 
         targetEntities.Count = writeIndex;
         targetEntities.BaseCount = Math.Min(writeBaseCount, writeIndex);
+        RebuildTargetEntityHandleMembership(targetEntities);
     }
 
     private bool PrepareTargetTransmitEntitiesForRemoval(TargetTransmitEntities targetEntities, int nowTick)
@@ -664,6 +799,7 @@ public partial class S2AWH
             // Rebuild transient closure from the stable per-target base set every tick.
             // Carrying previous tick's attachments forward can compound stale handles and hit caps early.
             targetEntities.Count = Math.Min(targetEntities.BaseCount, targetEntities.Count);
+            RebuildTargetEntityHandleMembership(targetEntities);
             targetEntities.HitEntityCap = false;
             targetEntities.HitSceneClosureBudget = false;
             if (!AppendOwnedEntityHandleClosure(targetEntities, targetEntities.ControllerHandleRaw, nowTick))
@@ -711,37 +847,45 @@ public partial class S2AWH
         uint currentHandleRaw = entityHandleRaw;
         for (int depth = 0; depth < 8; depth++)
         {
-            IntPtr? entityPointer = EntitySystem.GetEntityByHandle(currentHandleRaw);
-            if (!entityPointer.HasValue || entityPointer.Value == IntPtr.Zero)
+            try
             {
+                IntPtr? entityPointer = EntitySystem.GetEntityByHandle(currentHandleRaw);
+                if (!entityPointer.HasValue || entityPointer.Value == IntPtr.Zero)
+                {
+                    return false;
+                }
+
+                var entity = new CBaseEntity(entityPointer.Value);
+                if (!entity.IsValid)
+                {
+                    return false;
+                }
+
+                var ownerHandle = entity.OwnerEntity;
+                if (!ownerHandle.IsValid)
+                {
+                    return false;
+                }
+
+                uint ownerHandleRaw = ownerHandle.Raw;
+                if (ownerHandleRaw == targetEntities.PawnHandleRaw ||
+                    ownerHandleRaw == targetEntities.ControllerHandleRaw)
+                {
+                    return true;
+                }
+
+                if (ownerHandleRaw == 0 || ownerHandleRaw == currentHandleRaw)
+                {
+                    return false;
+                }
+
+                currentHandleRaw = ownerHandleRaw;
+            }
+            catch
+            {
+                // Fail-open safety: transient native read faults should stop pruning this chain.
                 return false;
             }
-
-            var entity = new CBaseEntity(entityPointer.Value);
-            if (!entity.IsValid)
-            {
-                return false;
-            }
-
-            var ownerHandle = entity.OwnerEntity;
-            if (!ownerHandle.IsValid)
-            {
-                return false;
-            }
-
-            uint ownerHandleRaw = ownerHandle.Raw;
-            if (ownerHandleRaw == targetEntities.PawnHandleRaw ||
-                ownerHandleRaw == targetEntities.ControllerHandleRaw)
-            {
-                return true;
-            }
-
-            if (ownerHandleRaw == 0 || ownerHandleRaw == currentHandleRaw)
-            {
-                return false;
-            }
-
-            currentHandleRaw = ownerHandleRaw;
         }
 
         return false;
@@ -779,37 +923,45 @@ public partial class S2AWH
         uint currentHandleRaw = entityHandleRaw;
         for (int depth = 0; depth < 8; depth++)
         {
-            IntPtr? entityPointer = EntitySystem.GetEntityByHandle(currentHandleRaw);
-            if (!entityPointer.HasValue || entityPointer.Value == IntPtr.Zero)
+            try
             {
+                IntPtr? entityPointer = EntitySystem.GetEntityByHandle(currentHandleRaw);
+                if (!entityPointer.HasValue || entityPointer.Value == IntPtr.Zero)
+                {
+                    return false;
+                }
+
+                var entity = new CBaseEntity(entityPointer.Value);
+                if (!entity.IsValid)
+                {
+                    return false;
+                }
+
+                var effectHandle = entity.EffectEntity;
+                if (!effectHandle.IsValid)
+                {
+                    return false;
+                }
+
+                uint effectHandleRaw = effectHandle.Raw;
+                if (effectHandleRaw == targetEntities.PawnHandleRaw ||
+                    effectHandleRaw == targetEntities.ControllerHandleRaw)
+                {
+                    return true;
+                }
+
+                if (effectHandleRaw == 0 || effectHandleRaw == currentHandleRaw)
+                {
+                    return false;
+                }
+
+                currentHandleRaw = effectHandleRaw;
+            }
+            catch
+            {
+                // Fail-open safety: transient native read faults should stop pruning this chain.
                 return false;
             }
-
-            var entity = new CBaseEntity(entityPointer.Value);
-            if (!entity.IsValid)
-            {
-                return false;
-            }
-
-            var effectHandle = entity.EffectEntity;
-            if (!effectHandle.IsValid)
-            {
-                return false;
-            }
-
-            uint effectHandleRaw = effectHandle.Raw;
-            if (effectHandleRaw == targetEntities.PawnHandleRaw ||
-                effectHandleRaw == targetEntities.ControllerHandleRaw)
-            {
-                return true;
-            }
-
-            if (effectHandleRaw == 0 || effectHandleRaw == currentHandleRaw)
-            {
-                return false;
-            }
-
-            currentHandleRaw = effectHandleRaw;
         }
 
         return false;
@@ -855,6 +1007,11 @@ public partial class S2AWH
                 return true;
             }
 
+            if (!CanUseSceneParentNetworkFallback)
+            {
+                return false;
+            }
+
             return TryResolveSceneParentEntityHandleFromNetwork(sceneNode, out parentEntityHandleRaw);
         }
         catch
@@ -886,15 +1043,77 @@ public partial class S2AWH
     {
         parentEntityHandleRaw = 0;
 
+        if (!CanUseSceneParentNetworkFallback)
+        {
+            return false;
+        }
+
         if (sceneNode.Handle == IntPtr.Zero)
         {
             return false;
         }
 
-        short parentHandleOffset = Schema.GetSchemaOffset("CGameSceneNode", "m_hParent");
-        IntPtr parentOwnerHandlePointer = sceneNode.Handle + parentHandleOffset + 0x8;
+        if (!TryGetSceneParentNetworkReadOffset(out int readOffset))
+        {
+            return false;
+        }
+
+        IntPtr parentOwnerHandlePointer = sceneNode.Handle + readOffset;
+        if (parentOwnerHandlePointer == IntPtr.Zero)
+        {
+            return false;
+        }
+
         uint parentHandleRaw = unchecked((uint)Marshal.ReadInt32(parentOwnerHandlePointer));
+        if (parentHandleRaw == 0 || parentHandleRaw == uint.MaxValue)
+        {
+            return false;
+        }
+
         return TryResolveLiveEntityHandleRaw(parentHandleRaw, out parentEntityHandleRaw);
+    }
+
+    private static bool TryGetSceneParentNetworkReadOffset(out int readOffset)
+    {
+        readOffset = 0;
+
+        if (!_sceneNodeSchemaCacheInitialized)
+        {
+            try
+            {
+                _sceneNodeParentHandleOffsetCache = Schema.GetSchemaOffset("CGameSceneNode", "m_hParent");
+                _sceneNodeClassSizeCache = Schema.GetClassSize("CGameSceneNode");
+            }
+            catch
+            {
+                _sceneNodeParentHandleOffsetCache = short.MinValue;
+                _sceneNodeClassSizeCache = -1;
+            }
+
+            _sceneNodeSchemaCacheInitialized = true;
+        }
+
+        if (_sceneNodeParentHandleOffsetCache <= 0)
+        {
+            return false;
+        }
+
+        const int embeddedHandleOffsetDelta = 0x8;
+        readOffset = _sceneNodeParentHandleOffsetCache + embeddedHandleOffsetDelta;
+        if (_sceneNodeClassSizeCache > 0 &&
+            (readOffset < 0 || (readOffset + sizeof(int)) > _sceneNodeClassSizeCache))
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    private static void ResetSceneParentSchemaCache()
+    {
+        _sceneNodeParentHandleOffsetCache = short.MinValue;
+        _sceneNodeClassSizeCache = -1;
+        _sceneNodeSchemaCacheInitialized = false;
     }
 
     private static bool TryResolveLiveEntityHandleRaw(uint entityHandleRaw, out uint liveEntityHandleRaw)
@@ -954,9 +1173,11 @@ public partial class S2AWH
             }
         }
 
+        _sceneClosureVisitedNodes.Clear();
         AppendSceneDescendantHandles(targetEntities, targetEntities.PawnHandleRaw);
         if (extraOwnerHandleRaw != 0 && extraOwnerHandleRaw != uint.MaxValue)
         {
+            // Reuse visited set so the second traversal does not revisit nodes from the first.
             AppendSceneDescendantHandles(targetEntities, extraOwnerHandleRaw);
         }
 
@@ -1016,7 +1237,6 @@ public partial class S2AWH
                 return;
             }
 
-            _sceneClosureVisitedNodes.Clear();
             int visitedNodeCount = 0;
             AppendSceneNodeBranch(targetEntities, firstChild, 0, ref visitedNodeCount);
         }
@@ -1115,38 +1335,44 @@ public partial class S2AWH
             _lastOwnedEntityBucketOverflowOwnerHandleRaw = 0;
             _lastOwnedEntityBucketOverflowEntityHandleRaw = 0;
             bool bucketOverflowed = false;
-            int syncPass = 0;
+            PrimePendingOwnedEntityRescans(nowTick);
 
-            do
+            bool shouldForceFullResync =
+                !_ownedEntityBucketsInitialized ||
+                _dirtyOwnedEntityHandles.Count >= MaxDirtyOwnedEntityHandlesBeforeFullResync;
+
+            if (shouldForceFullResync)
             {
-                PrimePendingOwnedEntityRescans(nowTick);
-
-                bool shouldFullResync =
-                    !_ownedEntityBucketsInitialized ||
-                    _dirtyOwnedEntityHandles.Count >= MaxDirtyOwnedEntityHandlesBeforeFullResync ||
-                    _ownedEntityLastFullResyncTick < 0 ||
-                    (nowTick - _ownedEntityLastFullResyncTick) >= OwnedEntityFullResyncIntervalTicks;
-
-                if (shouldFullResync)
+                if (!FullRebuildOwnedEntityBuckets(nowTick, ref bucketOverflowed))
                 {
-                    FullRebuildOwnedEntityBuckets(ref bucketOverflowed);
-                    _ownedEntityLastFullResyncTick = nowTick;
-                    _ownedEntityBucketsInitialized = true;
-                    if (_collectDebugCounters)
-                    {
-                        _ownedEntityFullResyncsInWindow++;
-                    }
+                    InvalidateOwnedEntityBucketsForFullResync();
+                    return false;
                 }
-                else if (_dirtyOwnedEntityHandles.Count > 0)
+                _ownedEntityLastFullResyncTick = nowTick;
+                _ownedEntityBucketsInitialized = true;
+                StopOwnedEntityPeriodicResyncSweep();
+                if (_collectDebugCounters)
                 {
-                    ProcessDirtyOwnedEntities(ref bucketOverflowed);
+                    _ownedEntityFullResyncsInWindow++;
                 }
-
-                syncPass++;
             }
+            else
+            {
+                if (!BeginOrAdvanceOwnedEntityPeriodicResyncSweep(nowTick))
+                {
+                    InvalidateOwnedEntityBucketsForFullResync();
+                    return false;
+                }
+            }
+
+            int syncPass = 0;
             while (!bucketOverflowed &&
                    _dirtyOwnedEntityHandles.Count > 0 &&
-                   syncPass < MaxOwnedEntityDirtySyncPassesPerTick);
+                   syncPass < MaxOwnedEntityDirtySyncPassesPerTick)
+            {
+                ProcessDirtyOwnedEntities(ref bucketOverflowed);
+                syncPass++;
+            }
 
             if (!bucketOverflowed && _dirtyOwnedEntityHandles.Count > 0)
             {
@@ -1207,8 +1433,125 @@ public partial class S2AWH
         _ownedEntityBucketsTick = -1;
         _ownedEntityLastFullResyncTick = -1;
         _ownedEntityBucketsInitialized = false;
+        StopOwnedEntityPeriodicResyncSweep();
         _ownedEntityBuckets.Clear();
         _ownedEntityRelationsByChild.Clear();
+    }
+
+    private bool BeginOrAdvanceOwnedEntityPeriodicResyncSweep(int nowTick)
+    {
+        if (_ownedEntityPeriodicResyncInProgress)
+        {
+            MarkOwnedEntityPeriodicResyncBatchDirty(nowTick);
+            return true;
+        }
+
+        if (_ownedEntityLastFullResyncTick >= 0 &&
+            (nowTick - _ownedEntityLastFullResyncTick) < OwnedEntityFullResyncIntervalTicks)
+        {
+            return true;
+        }
+
+        if (!BuildOwnedEntityPeriodicResyncSnapshot(nowTick))
+        {
+            return false;
+        }
+
+        if (_ownedEntityPeriodicResyncHandleSnapshot.Count <= 0)
+        {
+            _ownedEntityLastFullResyncTick = nowTick;
+            StopOwnedEntityPeriodicResyncSweep();
+            return true;
+        }
+
+        _ownedEntityPeriodicResyncInProgress = true;
+        _ownedEntityPeriodicResyncCursor = 0;
+        MarkOwnedEntityPeriodicResyncBatchDirty(nowTick);
+        return true;
+    }
+
+    private bool BuildOwnedEntityPeriodicResyncSnapshot(int nowTick)
+    {
+        if (!TryEnsureKnownEntityHandlesInitialized(nowTick))
+        {
+            _ownedEntityPeriodicResyncHandleSnapshot.Clear();
+            _staleKnownEntityHandleScratch.Clear();
+            return false;
+        }
+
+        _ownedEntityPeriodicResyncHandleSnapshot.Clear();
+        _staleKnownEntityHandleScratch.Clear();
+
+        int handleCount = _knownEntityHandles.Count;
+        for (int i = 0; i < handleCount; i++)
+        {
+            uint entityHandleRaw = _knownEntityHandles[i];
+            if (!TryResolveLiveEntityHandleRaw(entityHandleRaw, out _))
+            {
+                _staleKnownEntityHandleScratch.Add(entityHandleRaw);
+                continue;
+            }
+
+            _ownedEntityPeriodicResyncHandleSnapshot.Add(entityHandleRaw);
+        }
+
+        PruneKnownEntityHandles(_staleKnownEntityHandleScratch);
+        return true;
+    }
+
+    private void MarkOwnedEntityPeriodicResyncBatchDirty(int nowTick)
+    {
+        if (!_ownedEntityPeriodicResyncInProgress)
+        {
+            return;
+        }
+
+        int markBudget = GetOwnedEntityPeriodicResyncMarksPerTick(nowTick);
+        int totalCount = _ownedEntityPeriodicResyncHandleSnapshot.Count;
+        int markedCount = 0;
+        while (_ownedEntityPeriodicResyncCursor < totalCount &&
+               markedCount < markBudget)
+        {
+            _dirtyOwnedEntityHandles.Add(_ownedEntityPeriodicResyncHandleSnapshot[_ownedEntityPeriodicResyncCursor++]);
+            markedCount++;
+        }
+
+        if (_collectDebugCounters)
+        {
+            _ownedEntityPeriodicResyncBatchesInWindow++;
+            _ownedEntityPeriodicResyncMarksInWindow += markedCount;
+        }
+
+        if (_ownedEntityPeriodicResyncCursor >= totalCount)
+        {
+            _ownedEntityLastFullResyncTick = nowTick;
+            StopOwnedEntityPeriodicResyncSweep();
+        }
+    }
+
+    private int GetOwnedEntityPeriodicResyncMarksPerTick(int nowTick)
+    {
+        int budget = MinOwnedEntityPeriodicResyncMarksPerTick;
+        if (TryGetLivePlayers(nowTick, out var livePlayers))
+        {
+            budget += livePlayers.Count * OwnedEntityPeriodicResyncMarksPerLivePlayer;
+        }
+
+        if (_dirtyOwnedEntityHandles.Count > (MaxDirtyOwnedEntityHandlesBeforeFullResync / 2))
+        {
+            budget += 32;
+        }
+
+        int snapshotSizeBonus = (_ownedEntityPeriodicResyncHandleSnapshot.Count / 1024) * 16;
+        budget += Math.Clamp(snapshotSizeBonus, 0, 128);
+        return Math.Clamp(budget, MinOwnedEntityPeriodicResyncMarksPerTick, MaxOwnedEntityPeriodicResyncMarksPerTick);
+    }
+
+    private void StopOwnedEntityPeriodicResyncSweep()
+    {
+        _ownedEntityPeriodicResyncInProgress = false;
+        _ownedEntityPeriodicResyncCursor = 0;
+        _ownedEntityPeriodicResyncHandleSnapshot.Clear();
     }
 
     private void PrimePendingOwnedEntityRescans(int nowTick)
@@ -1237,20 +1580,56 @@ public partial class S2AWH
         }
     }
 
-    private void FullRebuildOwnedEntityBuckets(ref bool bucketOverflowed)
+    private bool FullRebuildOwnedEntityBuckets(int nowTick, ref bool bucketOverflowed)
     {
+        if (!TryEnsureKnownEntityHandlesInitialized(nowTick))
+        {
+            return false;
+        }
+
         _ownedEntityBuckets.Clear();
         _ownedEntityRelationsByChild.Clear();
         _dirtyOwnedEntityHandles.Clear();
+        _staleKnownEntityHandleScratch.Clear();
 
-        foreach (CEntityInstance entityInstance in Utilities.GetAllEntities())
+        int handleCount = _knownEntityHandles.Count;
+        for (int i = 0; i < handleCount; i++)
         {
+            uint entityHandleRaw = _knownEntityHandles[i];
+            IntPtr? entityPointer = EntitySystem.GetEntityByHandle(entityHandleRaw);
+            if (!entityPointer.HasValue || entityPointer.Value == IntPtr.Zero)
+            {
+                _staleKnownEntityHandleScratch.Add(entityHandleRaw);
+                continue;
+            }
+
+            CEntityInstance entityInstance;
+            try
+            {
+                entityInstance = new CEntityInstance(entityPointer.Value);
+            }
+            catch
+            {
+                _staleKnownEntityHandleScratch.Add(entityHandleRaw);
+                continue;
+            }
+
+            if (!entityInstance.IsValid)
+            {
+                _staleKnownEntityHandleScratch.Add(entityHandleRaw);
+                continue;
+            }
+
             UpsertOwnedEntityRelations(entityInstance, ref bucketOverflowed);
             if (bucketOverflowed)
             {
-                return;
+                PruneKnownEntityHandles(_staleKnownEntityHandleScratch);
+                return true;
             }
         }
+
+        PruneKnownEntityHandles(_staleKnownEntityHandleScratch);
+        return true;
     }
 
     private void ProcessDirtyOwnedEntities(ref bool bucketOverflowed)
@@ -1268,12 +1647,23 @@ public partial class S2AWH
             IntPtr? entityPointer = EntitySystem.GetEntityByHandle(entityHandleRaw);
             if (!entityPointer.HasValue || entityPointer.Value == IntPtr.Zero)
             {
+                UntrackKnownEntityHandle(entityHandleRaw);
                 continue;
             }
 
-            var entityInstance = new CEntityInstance(entityPointer.Value);
+            CEntityInstance entityInstance;
+            try
+            {
+                entityInstance = new CEntityInstance(entityPointer.Value);
+            }
+            catch
+            {
+                UntrackKnownEntityHandle(entityHandleRaw);
+                continue;
+            }
             if (!entityInstance.IsValid)
             {
+                UntrackKnownEntityHandle(entityHandleRaw);
                 continue;
             }
 
@@ -1472,18 +1862,18 @@ public partial class S2AWH
 
     private void MarkOwnedEntityDirty(CEntityInstance entity, bool scheduleRescan)
     {
-        if (entity == null || !entity.IsValid)
+        if (!TryGetTrackedEntityHandleRaw(entity, out uint entityHandleRaw))
         {
             return;
         }
 
-        uint entityHandleRaw = entity.EntityHandle.Raw;
         int entityIndex = (int)(entityHandleRaw & (Utilities.MaxEdicts - 1));
         if (entityIndex <= 0 || entityIndex >= Utilities.MaxEdicts)
         {
             return;
         }
 
+        TrackKnownEntityHandle(entityHandleRaw);
         _dirtyOwnedEntityHandles.Add(entityHandleRaw);
         if (scheduleRescan)
         {
@@ -1518,14 +1908,14 @@ public partial class S2AWH
             return;
         }
 
-        string? designerName = entityInstance.DesignerName;
-        if (string.IsNullOrWhiteSpace(designerName))
-        {
-            return;
-        }
-
         try
         {
+            string? designerName = entityInstance.DesignerName;
+            if (string.IsNullOrWhiteSpace(designerName))
+            {
+                return;
+            }
+
             if (designerName.Contains("beam", StringComparison.OrdinalIgnoreCase) ||
                 designerName.Contains("laser", StringComparison.OrdinalIgnoreCase))
             {
@@ -2070,8 +2460,17 @@ public partial class S2AWH
             return $"missing[{entityIndex}|0x{entityHandleRaw:X8}]";
         }
 
-        var entity = new CEntityInstance(entityPointer.Value);
-        string designerName = entity.DesignerName;
+        string designerName;
+        try
+        {
+            var entity = new CEntityInstance(entityPointer.Value);
+            designerName = entity.DesignerName;
+        }
+        catch
+        {
+            return $"fault[{entityIndex}|0x{entityHandleRaw:X8}]";
+        }
+
         if (string.IsNullOrWhiteSpace(designerName))
         {
             designerName = "unknown";
@@ -2115,8 +2514,15 @@ public partial class S2AWH
             return "missing";
         }
 
-        var entity = new CEntityInstance(entityPointer.Value);
-        return string.IsNullOrWhiteSpace(entity.DesignerName) ? "unknown" : entity.DesignerName;
+        try
+        {
+            var entity = new CEntityInstance(entityPointer.Value);
+            return string.IsNullOrWhiteSpace(entity.DesignerName) ? "unknown" : entity.DesignerName;
+        }
+        catch
+        {
+            return "fault";
+        }
     }
 
     private string GetClosureOffenderSummary(int maxEntries)

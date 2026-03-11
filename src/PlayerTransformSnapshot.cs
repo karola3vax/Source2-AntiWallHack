@@ -27,8 +27,6 @@ internal struct PlayerTransformSnapshot
     public float CenterZ;
 
     // ViewOffset (Eye Position relative to Origin)
-    public float ViewOffsetX;
-    public float ViewOffsetY;
     public float ViewOffsetZ;
 
     // Duck / crouch transition state

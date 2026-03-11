@@ -80,10 +80,10 @@ public partial class S2AWH
         int currentJumpRayCountTotal = 0;
         for (int i = 0; i < VisibilitySlotCapacity; i++)
         {
-            currentLosRayCountTotal += _viewerRayCountsWorking[i, (int)ViewerRayTraceStage.Los];
-            currentAimRayCountTotal += _viewerRayCountsWorking[i, (int)ViewerRayTraceStage.Aim];
-            currentPreloadRayCountTotal += _viewerRayCountsWorking[i, (int)ViewerRayTraceStage.Preload];
-            currentJumpRayCountTotal += _viewerRayCountsWorking[i, (int)ViewerRayTraceStage.Jump];
+            currentLosRayCountTotal += _viewerRayCountsWorking[i][(int)ViewerRayTraceStage.Los];
+            currentAimRayCountTotal += _viewerRayCountsWorking[i][(int)ViewerRayTraceStage.Aim];
+            currentPreloadRayCountTotal += _viewerRayCountsWorking[i][(int)ViewerRayTraceStage.Preload];
+            currentJumpRayCountTotal += _viewerRayCountsWorking[i][(int)ViewerRayTraceStage.Jump];
         }
         int currentViewerRayCountTotal =
             currentLosRayCountTotal +
@@ -115,9 +115,9 @@ public partial class S2AWH
             $"Anti pop-in: {revealHoldPairCount} reveal holds, {stableDecisionPairCount} saved decisions.",
             $"Rays: LOS probes {baseLosSurfaceRaysPerPair}-{maxLosSurfaceRaysPerPair} per pair, ~{estimatedBaseLosRaysPerSnapshot}+ per scan (plus aim/preload/jump).",
             $"Current viewer ray count this tick: {currentViewerRayCountTotal} (LOS {currentLosRayCountTotal}, AIM {currentAimRayCountTotal}, PRELOAD {currentPreloadRayCountTotal}, JUMP {currentJumpRayCountTotal}).",
-            $"Hidden {_transmitHiddenEntitiesInWindow} entities from wallhacks this window.",
+            $"Transmit: {_transmitCallbacksInWindow} callbacks, {_transmitHiddenEntitiesInWindow} entities hidden from wallhacks this window.",
             $"Safety checks: {_transmitFallbackChecksInWindow} extra, {_transmitRemovalNoEffectInWindow} redundant, {_transmitFailOpenOwnedClosureInWindow} fail-open (closure unavailable), {_transmitFailOpenEntityClosureCapInWindow} fail-open (closure cap), {_transmitFailOpenQuarantineInWindow} quarantined, {_transmitFailOpenReverseAuditInWindow} fail-open (reverse audit).",
-            $"Owned cache: {_ownedEntityFullResyncsInWindow} full resyncs, {_ownedEntityDirtyEntityUpdatesInWindow} dirty updates, {_ownedEntityPostSpawnRescanMarksInWindow} post-spawn rescan marks, {_pendingOwnedEntityRescanUntilTick.Count} pending rescans.",
+            $"Owned cache: {_ownedEntityFullResyncsInWindow} full resyncs, {_ownedEntityDirtyEntityUpdatesInWindow} dirty updates, {_ownedEntityPostSpawnRescanMarksInWindow} post-spawn rescan marks, {_ownedEntityPeriodicResyncBatchesInWindow} periodic batches, {_ownedEntityPeriodicResyncMarksInWindow} periodic marks, {_pendingOwnedEntityRescanUntilTick.Count} pending rescans.",
             $"Closure offenders: {GetClosureOffenderSummary(3)}.",
             $"Reveal hold: {_holdRefreshInWindow} refreshed, {_holdHitKeepAliveInWindow} kept alive, {_holdExpiredInWindow} expired.",
             $"Uncertain checks: {_unknownEvalInWindow} total, {_unknownStickyHitInWindow} reused, {_unknownHoldHitInWindow} held, {_unknownFailOpenInWindow} fail-open, {_unknownFromExceptionInWindow} errors.",
@@ -322,21 +322,8 @@ public partial class S2AWH
             normalized = sb.ToString();
         }
 
-        normalized = TrimPrefix(normalized, "So ");
-        normalized = TrimPrefix(normalized, "So, ");
-        normalized = TrimPrefix(normalized, "Therefore ");
-        normalized = TrimPrefix(normalized, "Therefore, ");
-        normalized = TrimPrefix(normalized, "As a result ");
-        normalized = TrimPrefix(normalized, "As a result, ");
         normalized = normalized.TrimEnd('.', ';', ':', ' ');
         return normalized;
-    }
-
-    private static string TrimPrefix(string value, string prefix)
-    {
-        return value.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
-            ? value[prefix.Length..].TrimStart()
-            : value;
     }
 
     private static string LowercaseFirst(string value)

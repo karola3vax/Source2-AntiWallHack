@@ -21,7 +21,7 @@ internal enum ViewerRayTraceStage : byte
 [MinimumApiVersion(362)]
 public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
 {
-    private const int VisibilitySlotCapacity = 65;
+    private const int VisibilitySlotCapacity = S2AWHConstants.VisibilitySlotCapacity;
     private const int ViewerRayTraceStageCount = (int)ViewerRayTraceStage.Count;
     private const float StationarySpeedSqThreshold = 4.0f;
     private const int DebugSummaryIntervalTicks = 4096;
@@ -46,6 +46,11 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
     private const int OwnedEntityPostSpawnRescanTicks = 8;
     private const int MaxDirtyOwnedEntityHandlesBeforeFullResync = 128;
     private const int MaxOwnedEntityDirtySyncPassesPerTick = 4;
+    private const int MinOwnedEntityPeriodicResyncMarksPerTick = 64;
+    private const int MaxOwnedEntityPeriodicResyncMarksPerTick = 512;
+    private const int OwnedEntityPeriodicResyncMarksPerLivePlayer = 12;
+    private const int KnownEntityBootstrapRetryDelayTicks = 8;
+    private const int RuntimeSelfValidationIntervalTicks = 2048;
 
     /// <summary>
     /// Holds the set of entity handles (pawn + weapons) belonging to a single target player,
@@ -66,7 +71,8 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
         public bool HitSceneClosureBudget;
         public uint PawnHandleRaw = uint.MaxValue;
         public uint ControllerHandleRaw = uint.MaxValue;
-        public uint[] RawHandles = new uint[64];
+        public uint[] RawHandles = new uint[MaxTrackedTransmitEntitiesPerTarget];
+        public HashSet<uint> HandleMembership = new(MaxTrackedTransmitEntitiesPerTarget);
         public int Count;
     }
 
@@ -127,7 +133,7 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
     }
 
     public override string ModuleName => "S2AWH (Source2 AntiWallhack)";
-    public override string ModuleVersion => "3.0.4";
+    public override string ModuleVersion => "3.0.5";
     public override string ModuleAuthor => "karola3vax";
     public override string ModuleDescription => "Prevents wallhacks from working using Ray-Trace by hiding players from out of line of sight.";
 
@@ -200,6 +206,8 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
     private bool _hasLoggedOwnedEntityScanError;
     private bool _hasLoggedEntityClosureCapError;
     private bool _hasLoggedReverseReferenceAuditError;
+    private bool _hasLoggedCheckTransmitError;
+    private bool _hasLoggedOnTickError;
     private uint _lastOwnedEntityBucketOverflowOwnerHandleRaw;
     private uint _lastOwnedEntityBucketOverflowEntityHandleRaw;
     private int _lastDebugCachePlayerCount;
@@ -215,6 +223,8 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
     private int _ownedEntityFullResyncsInWindow;
     private int _ownedEntityDirtyEntityUpdatesInWindow;
     private int _ownedEntityPostSpawnRescanMarksInWindow;
+    private int _ownedEntityPeriodicResyncBatchesInWindow;
+    private int _ownedEntityPeriodicResyncMarksInWindow;
     private int _holdRefreshInWindow;
     private int _holdHitKeepAliveInWindow;
     private int _holdExpiredInWindow;
@@ -237,27 +247,42 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
     private readonly Dictionary<uint, OwnedEntityBucket> _ownedEntityBuckets = new(128);
     private readonly Dictionary<uint, OwnedEntityBucket> _ownedEntityRelationsByChild = new(128);
     private readonly Dictionary<string, int> _closureOffenderCounts = new(StringComparer.OrdinalIgnoreCase);
-    private readonly HashSet<uint> _targetTransmitHandleMembership = new(256);
+    private readonly Dictionary<uint, bool> _transmitMembershipByHandleScratch = new(256);
     private readonly HashSet<uint> _dirtyOwnedEntityHandles = new(256);
     private readonly Dictionary<uint, int> _pendingOwnedEntityRescanUntilTick = new(128);
     private readonly HashSet<nint> _sceneClosureVisitedNodes = new(256);
     private readonly OwnedEntityBucket _ownedEntityScratchHandles = new();
     private readonly List<uint> _ownedEntityDirtyHandleScratch = new(256);
     private readonly List<uint> _ownedEntityPendingRescanRemovalScratch = new(64);
+    private readonly List<uint> _ownedEntityPeriodicResyncHandleSnapshot = new(1024);
+    private readonly List<uint> _knownEntityHandles = new(2048);
+    private readonly Dictionary<uint, int> _knownEntityHandleIndices = new(2048);
+    private readonly List<uint> _knownEntityHandleBootstrapScratch = new(2048);
+    private readonly Dictionary<uint, int> _knownEntityHandleBootstrapIndicesScratch = new(2048);
+    private readonly List<uint> _staleKnownEntityHandleScratch = new(128);
     private int _entityHandleIndexCacheTick = -1;
     private int _ownedEntityBucketsTick = -1;
     private int _ownedEntityLastFullResyncTick = -1;
+    private int _ownedEntityPeriodicResyncCursor;
     private int _eligibleTargetsWithEntitiesTick = -1;
     private int _roundStartGraceUntilTick;
     private bool _ownedEntityBucketsInitialized;
+    private bool _ownedEntityPeriodicResyncInProgress;
+    private bool _knownEntityHandlesInitialized;
+    private bool _entityLifecycleListenersRegistered;
+    private int _knownEntityBootstrapRetryUntilTick = -1;
+    private bool _hasLoggedRuntimeValidationSummary;
+    private bool _hasLoggedDependencySurfaceWarning;
+    private bool _hasLoggedVisibilityScopeNote;
+    private int _lastRuntimeSelfValidationTick = int.MinValue;
     private readonly int[] _snapshotTargetSlots = new int[VisibilitySlotCapacity];
     private readonly uint[] _snapshotTargetPawnHandles = new uint[VisibilitySlotCapacity];
     private readonly bool[] _snapshotTargetStationary = new bool[VisibilitySlotCapacity];
     private readonly bool[] _snapshotTargetIsBot = new bool[VisibilitySlotCapacity];
     private readonly int[] _snapshotTargetTeams = new int[VisibilitySlotCapacity];
     private readonly int[] _snapshotStabilizeUntilTickBySlot = new int[VisibilitySlotCapacity];
-    private readonly int[,] _viewerRayCountsWorking = new int[VisibilitySlotCapacity, ViewerRayTraceStageCount];
-    private readonly int[,] _viewerRayCountsDisplay = new int[VisibilitySlotCapacity, ViewerRayTraceStageCount];
+    private readonly int[][] _viewerRayCountsWorking = CreateRayCountArray();
+    private readonly int[][] _viewerRayCountsDisplay = CreateRayCountArray();
     private readonly int[] _viewerTargetCounts = new int[VisibilitySlotCapacity];
     private readonly int[] _viewerRayCountLastRenderedHashBySlot = new int[VisibilitySlotCapacity];
     private readonly int[] _viewerRayCountLastHudRefreshTickBySlot = new int[VisibilitySlotCapacity];
@@ -286,22 +311,16 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
             "Anti-wallhack protection will be ready shortly."
         );
 
-        RegisterListener<Listeners.OnServerPrecacheResources>((_) => TryInitializeModules("OnServerPrecacheResources"));
         RegisterListener<Listeners.OnMetamodAllPluginsLoaded>(OnMetamodAllPluginsLoaded);
         RegisterListener<Listeners.OnMapStart>(OnMapStart);
         RegisterListener<Listeners.OnMapEnd>(OnMapEnd);
         RegisterListener<Listeners.OnClientDisconnect>(OnClientDisconnect);
-        RegisterListener<Listeners.OnEntityCreated>(OnEntityCreated);
-        RegisterListener<Listeners.OnEntitySpawned>(OnEntitySpawned);
-        RegisterListener<Listeners.OnEntityDeleted>(OnEntityDeleted);
-        RegisterListener<Listeners.OnEntityParentChanged>(OnEntityParentChanged);
         RegisterEventHandler<EventRoundStart>(OnRoundStart);
         RegisterEventHandler<EventPlayerSpawn>(OnPlayerSpawn);
 
-        TryInitializeModules("Load");
-
         RegisterListener<Listeners.OnTick>(OnTick);
         RegisterListener<Listeners.CheckTransmit>(OnCheckTransmit);
+        Server.NextFrame(EnsureEntityLifecycleListenersRegistered);
 
         InfoLog(
             "S2AWH is ready.",
@@ -315,10 +334,19 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
     /// </summary>
     public override void Unload(bool hotReload)
     {
-        RemoveListener<Listeners.OnEntityParentChanged>(OnEntityParentChanged);
-        RemoveListener<Listeners.OnEntityDeleted>(OnEntityDeleted);
-        RemoveListener<Listeners.OnEntitySpawned>(OnEntitySpawned);
-        RemoveListener<Listeners.OnEntityCreated>(OnEntityCreated);
+        RemoveListener<Listeners.CheckTransmit>(OnCheckTransmit);
+        RemoveListener<Listeners.OnTick>(OnTick);
+        RemoveListener<Listeners.OnClientDisconnect>(OnClientDisconnect);
+        if (_entityLifecycleListenersRegistered)
+        {
+            RemoveListener<Listeners.OnEntityParentChanged>(OnEntityParentChanged);
+            RemoveListener<Listeners.OnEntityDeleted>(OnEntityDeleted);
+            RemoveListener<Listeners.OnEntitySpawned>(OnEntitySpawned);
+            RemoveListener<Listeners.OnEntityCreated>(OnEntityCreated);
+            _entityLifecycleListenersRegistered = false;
+        }
+        DeregisterEventHandler<EventRoundStart>(OnRoundStart);
+        DeregisterEventHandler<EventPlayerSpawn>(OnPlayerSpawn);
         ClearViewerRayCountOverlays();
         ClearVisibilityCache();
         _losEvaluator = null;
@@ -339,11 +367,11 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
             "This keeps S2AWH compatible with other plugins."
         );
 
-        TryInitializeModules("OnMetamodAllPluginsLoaded");
     }
 
     private void OnMapStart(string mapName)
     {
+        EnsureEntityLifecycleListenersRegistered();
         ClearVisibilityCache();
         DebugLog(
             "New map loaded.",
@@ -351,6 +379,7 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
             "Starting fresh for this map."
         );
         bool initialized = TryInitializeModules("OnMapStart");
+        PrimeKnownLivePlayerHandles();
 
         if (initialized && S2AWHState.Current.Core.Enabled)
         {
@@ -383,6 +412,20 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
         QueueStartupDigest(mapName);
     }
 
+    private void EnsureEntityLifecycleListenersRegistered()
+    {
+        if (_entityLifecycleListenersRegistered)
+        {
+            return;
+        }
+
+        RegisterListener<Listeners.OnEntityCreated>(OnEntityCreated);
+        RegisterListener<Listeners.OnEntitySpawned>(OnEntitySpawned);
+        RegisterListener<Listeners.OnEntityDeleted>(OnEntityDeleted);
+        RegisterListener<Listeners.OnEntityParentChanged>(OnEntityParentChanged);
+        _entityLifecycleListenersRegistered = true;
+    }
+
     private void OnMapEnd()
     {
         _startupDigestQueued = false;
@@ -403,123 +446,6 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
         int stabilizeUntilTick = nowTick + SnapshotStabilizeGraceTicks;
         Array.Fill(_snapshotStabilizeUntilTickBySlot, stabilizeUntilTick);
         return HookResult.Continue;
-    }
-
-    private HookResult OnPlayerSpawn(EventPlayerSpawn @event, GameEventInfo info)
-    {
-        var player = @event.Userid;
-        if (player != null)
-        {
-            int slot = player.Slot;
-            if ((uint)slot < VisibilitySlotCapacity)
-            {
-                int stabilizeUntilTick = Server.TickCount + SnapshotStabilizeGraceTicks;
-                if (_snapshotStabilizeUntilTickBySlot[slot] < stabilizeUntilTick)
-                {
-                    _snapshotStabilizeUntilTickBySlot[slot] = stabilizeUntilTick;
-                }
-            }
-        }
-
-        return HookResult.Continue;
-    }
-
-    private void OnClientDisconnect(int playerSlot)
-    {
-        if ((uint)playerSlot < VisibilitySlotCapacity)
-        {
-            _visibilityCache[playerSlot] = null;
-            _revealHoldRows[playerSlot] = null;
-            _stableDecisionRows[playerSlot] = null;
-            _visibleConfirmRows[playerSlot] = null;
-            _targetTransmitEntitiesCache[playerSlot] = null;
-            SnapshotTransforms[playerSlot] = default;
-            SnapshotPawns[playerSlot] = null;
-            _liveSlotFlags[playerSlot] = false;
-            _snapshotStabilizeUntilTickBySlot[playerSlot] = 0;
-            ClearViewerRayCountSlotState(playerSlot);
-            RemoveViewerRayCountOverlay(playerSlot);
-
-            for (int i = 0; i < VisibilitySlotCapacity; i++)
-            {
-                var viewerVisibility = _visibilityCache[i];
-                if (viewerVisibility != null && (uint)playerSlot < (uint)viewerVisibility.Known.Length)
-                {
-                    viewerVisibility.Known[playerSlot] = false;
-                    viewerVisibility.Decisions[playerSlot] = false;
-                    viewerVisibility.PawnHandles[playerSlot] = 0;
-                    viewerVisibility.EvalTicks[playerSlot] = 0;
-                }
-
-                var revealHold = _revealHoldRows[i];
-                if (revealHold != null && (uint)playerSlot < (uint)revealHold.Known.Length && revealHold.Known[playerSlot])
-                {
-                    revealHold.Known[playerSlot] = false;
-                    revealHold.HoldUntilTick[playerSlot] = 0;
-                    revealHold.ActiveCount--;
-                    if (revealHold.ActiveCount <= 0) _revealHoldRows[i] = null;
-                }
-
-                var stableDecision = _stableDecisionRows[i];
-                if (stableDecision != null && (uint)playerSlot < (uint)stableDecision.Known.Length && stableDecision.Known[playerSlot])
-                {
-                    stableDecision.Known[playerSlot] = false;
-                    stableDecision.Decisions[playerSlot] = false;
-                    stableDecision.Ticks[playerSlot] = 0;
-                    stableDecision.ActiveCount--;
-                    if (stableDecision.ActiveCount <= 0) _stableDecisionRows[i] = null;
-                }
-
-                var visibleConfirm = _visibleConfirmRows[i];
-                if (visibleConfirm != null && (uint)playerSlot < (uint)visibleConfirm.Known.Length && visibleConfirm.Known[playerSlot])
-                {
-                    visibleConfirm.Known[playerSlot] = false;
-                    visibleConfirm.FirstVisibleTick[playerSlot] = 0;
-                    visibleConfirm.ActiveCount--;
-                    if (visibleConfirm.ActiveCount <= 0) _visibleConfirmRows[i] = null;
-                }
-            }
-        }
-
-        _losEvaluator?.InvalidateTargetSlot(playerSlot);
-        _predictor?.InvalidateTargetSlot(playerSlot);
-
-        InvalidateLivePlayersCache();
-
-        DebugLog(
-            "Player left the server.",
-            $"Slot {playerSlot} was freed and old data for this player was removed.",
-            "No stale data remains."
-        );
-    }
-
-    private void OnEntityCreated(CEntityInstance entity)
-    {
-        MarkOwnedEntityDirty(entity, scheduleRescan: true);
-    }
-
-    private void OnEntitySpawned(CEntityInstance entity)
-    {
-        MarkOwnedEntityDirty(entity, scheduleRescan: true);
-    }
-
-    private void OnEntityDeleted(CEntityInstance entity)
-    {
-        uint entityHandleRaw = entity.EntityHandle.Raw;
-        if (entityHandleRaw == 0 || entityHandleRaw == uint.MaxValue)
-        {
-            return;
-        }
-
-        RemoveOwnedEntityRelationsForHandle(entityHandleRaw);
-        _dirtyOwnedEntityHandles.Remove(entityHandleRaw);
-        _pendingOwnedEntityRescanUntilTick.Remove(entityHandleRaw);
-        _ownedEntityBucketsTick = -1;
-    }
-
-    private void OnEntityParentChanged(CEntityInstance entity, CEntityInstance newParent)
-    {
-        MarkOwnedEntityDirty(entity, scheduleRescan: true);
     }
 
     private bool TryInitializeModules(string source)
@@ -566,12 +492,20 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
         _hasLoggedOwnedEntityScanError = false;
         _hasLoggedEntityClosureCapError = false;
         _hasLoggedReverseReferenceAuditError = false;
+        _hasLoggedCheckTransmitError = false;
+        _hasLoggedOnTickError = false;
+        _hasLoggedRuntimeValidationSummary = false;
+        _hasLoggedDependencySurfaceWarning = false;
+        _hasLoggedVisibilityScopeNote = false;
+        _lastRuntimeSelfValidationTick = int.MinValue;
+        PrimeKnownLivePlayerHandles();
 
         InfoLog(
             "RayTrace is connected.",
             "S2AWH can now check who can see who.",
             "Wallhack protection is active."
         );
+        LogRuntimeValidationSummary();
         DebugLog(
             "Setup complete.",
             $"Connected via {source}. RayTrace is responding.",
@@ -616,83 +550,110 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
 
     private void OnTick()
     {
-        if (_transmitFilter == null)
+        try
         {
-            _ticksSinceInitRetry++;
-            if (_ticksSinceInitRetry >= InitRetryIntervalTicks)
+            if (_transmitFilter == null)
             {
-                _ticksSinceInitRetry = 0;
-                DebugLog(
-                    "Retrying RayTrace.",
-                    "RayTrace is still not available.",
-                    "Checking again now."
-                );
-                TryInitializeModules("OnTick");
+                _ticksSinceInitRetry++;
+                if (_ticksSinceInitRetry >= InitRetryIntervalTicks)
+                {
+                    _ticksSinceInitRetry = 0;
+                    DebugLog(
+                        "Retrying RayTrace.",
+                        "RayTrace is still not available.",
+                        "Checking again now."
+                    );
+                    TryInitializeModules("OnTick");
+                }
+                return;
             }
-            return;
-        }
 
-        BeginViewerRayCountTick(Server.TickCount);
+            int nowTick = Server.TickCount;
+            BeginViewerRayCountTick(nowTick);
+            RunRuntimeSelfValidation(nowTick);
 
-        var config = S2AWHState.Current;
-        if (!config.Core.Enabled)
-        {
-            ClearViewerRayCountOverlays();
-            if (_collectDebugCounters)
+            var config = S2AWHState.Current;
+            if (!config.Core.Enabled)
+            {
+                ClearViewerRayCountOverlays();
+                if (_collectDebugCounters)
+                {
+                    ResetDebugWindowCounters();
+                }
+                return;
+            }
+
+            if (IsRoundStartGraceActive(Server.TickCount))
+            {
+                ClearViewerRayCountOverlays();
+                return;
+            }
+
+            // Staggered rebuild: spread viewer evaluations across UpdateFrequencyTicks.
+            // Each tick processes ceil(viewers / UpdateFrequencyTicks) viewers.
+            // This prevents N^2 pair spikes that cause slow frames at high player counts.
+            RebuildVisibilityCacheSnapshot();
+            UpdateViewerRayCountOverlays();
+
+            if (!_collectDebugCounters)
             {
                 ResetDebugWindowCounters();
+                return;
             }
-            return;
-        }
 
-        if (IsRoundStartGraceActive(Server.TickCount))
-        {
-            ClearViewerRayCountOverlays();
-            return;
-        }
+            _ticksSinceLastTransmitReport++;
+            if (_ticksSinceLastTransmitReport < DebugSummaryIntervalTicks)
+            {
+                return;
+            }
 
-        // Staggered rebuild: spread viewer evaluations across UpdateFrequencyTicks.
-        // Each tick processes ceil(viewers / UpdateFrequencyTicks) viewers.
-        // This prevents N^2 pair spikes that cause slow frames at high player counts.
-        RebuildVisibilityCacheSnapshot();
-        UpdateViewerRayCountOverlays();
+            if (_transmitCallbacksInWindow > 0 ||
+                _transmitHiddenEntitiesInWindow > 0 ||
+                _transmitFallbackChecksInWindow > 0 ||
+                _transmitRemovalNoEffectInWindow > 0 ||
+                _transmitFailOpenOwnedClosureInWindow > 0 ||
+                _transmitFailOpenEntityClosureCapInWindow > 0 ||
+                _transmitFailOpenQuarantineInWindow > 0 ||
+                _transmitFailOpenReverseAuditInWindow > 0 ||
+                _ownedEntityFullResyncsInWindow > 0 ||
+                _ownedEntityDirtyEntityUpdatesInWindow > 0 ||
+                _ownedEntityPostSpawnRescanMarksInWindow > 0 ||
+                _ownedEntityPeriodicResyncBatchesInWindow > 0 ||
+                _ownedEntityPeriodicResyncMarksInWindow > 0 ||
+                _holdRefreshInWindow > 0 ||
+                _holdHitKeepAliveInWindow > 0 ||
+                _holdExpiredInWindow > 0 ||
+                _unknownEvalInWindow > 0 ||
+                _unknownStickyHitInWindow > 0 ||
+                _unknownHoldHitInWindow > 0 ||
+                _unknownFailOpenInWindow > 0 ||
+                _unknownFromExceptionInWindow > 0)
+            {
+                DebugSummaryLog();
+            }
 
-        if (!_collectDebugCounters)
-        {
             ResetDebugWindowCounters();
-            return;
+            _hasLoggedOnTickError = false;
         }
-
-        _ticksSinceLastTransmitReport++;
-        if (_ticksSinceLastTransmitReport < DebugSummaryIntervalTicks)
+        catch (Exception ex)
         {
-            return;
-        }
+            if (_hasLoggedOnTickError)
+            {
+                return;
+            }
 
-        if (_transmitCallbacksInWindow > 0 ||
-            _transmitHiddenEntitiesInWindow > 0 ||
-            _transmitFallbackChecksInWindow > 0 ||
-            _transmitRemovalNoEffectInWindow > 0 ||
-            _transmitFailOpenOwnedClosureInWindow > 0 ||
-            _transmitFailOpenEntityClosureCapInWindow > 0 ||
-            _transmitFailOpenQuarantineInWindow > 0 ||
-            _transmitFailOpenReverseAuditInWindow > 0 ||
-            _ownedEntityFullResyncsInWindow > 0 ||
-            _ownedEntityDirtyEntityUpdatesInWindow > 0 ||
-            _ownedEntityPostSpawnRescanMarksInWindow > 0 ||
-            _holdRefreshInWindow > 0 ||
-            _holdHitKeepAliveInWindow > 0 ||
-            _holdExpiredInWindow > 0 ||
-            _unknownEvalInWindow > 0 ||
-            _unknownStickyHitInWindow > 0 ||
-            _unknownHoldHitInWindow > 0 ||
-            _unknownFailOpenInWindow > 0 ||
-            _unknownFromExceptionInWindow > 0)
-        {
-            DebugSummaryLog();
+            WarnLog(
+                "Tick loop had an unexpected error.",
+                "A transient native or game-state fault interrupted one simulation tick.",
+                "S2AWH skipped that tick safely and will continue."
+            );
+            DebugLog(
+                "Tick loop error detail.",
+                $"Error: {ex.Message}",
+                "This message only shows once."
+            );
+            _hasLoggedOnTickError = true;
         }
-
-        ResetDebugWindowCounters();
     }
 
     private void QueueStartupDigest(string mapName)
@@ -713,11 +674,22 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
             InfoLog(
                 "Startup complete.",
                 $"Map: {mapName}. S2AWH: {runtimeState}. Update rate: every {config.Core.UpdateFrequencyTicks} tick(s).",
-                "Everything is running normally."
+                "World geometry occlusion is active. Smoke-style gameplay occluders are intentionally left to the client."
             );
         }, TimerFlags.STOP_ON_MAPCHANGE);
     }
 
+
+    private static int[][] CreateRayCountArray()
+    {
+        var arr = new int[VisibilitySlotCapacity][];
+        for (int i = 0; i < VisibilitySlotCapacity; i++)
+        {
+            arr[i] = new int[ViewerRayTraceStageCount];
+        }
+
+        return arr;
+    }
 
     internal void RecordViewerRayTraceAttempt(int viewerSlot, ViewerRayTraceStage stage)
     {
@@ -727,7 +699,7 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
         }
 
         BeginViewerRayCountTick(Server.TickCount);
-        _viewerRayCountsWorking[viewerSlot, (int)stage]++;
+        _viewerRayCountsWorking[viewerSlot][(int)stage]++;
     }
 
     private void BeginViewerRayCountTick(int nowTick)
@@ -739,8 +711,12 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
 
         if (_viewerRayCounterTick >= 0)
         {
-            Array.Copy(_viewerRayCountsWorking, _viewerRayCountsDisplay, _viewerRayCountsWorking.Length);
-            Array.Clear(_viewerRayCountsWorking, 0, _viewerRayCountsWorking.Length);
+            for (int s = 0; s < VisibilitySlotCapacity; s++)
+            {
+                Array.Copy(_viewerRayCountsWorking[s], _viewerRayCountsDisplay[s], ViewerRayTraceStageCount);
+                Array.Clear(_viewerRayCountsWorking[s], 0, ViewerRayTraceStageCount);
+            }
+
             _viewerRayCountsDisplayDirty = true;
         }
 
@@ -775,42 +751,37 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
                 continue;
             }
 
-            UpdateViewerRayCountOverlay(slot, forceRefresh);
+            UpdateViewerRayCountOverlay(slot, player!, forceRefresh);
         }
     }
 
-    private void UpdateViewerRayCountOverlay(int slot, bool forceMessageRefresh)
+    private void UpdateViewerRayCountOverlay(int slot, CCSPlayerController player, bool forceMessageRefresh)
     {
-        CCSPlayerController? player = Utilities.GetPlayerFromSlot(slot);
-        if (!IsLivePlayer(player))
-        {
-            RemoveViewerRayCountOverlay(slot);
-            return;
-        }
-
-        string countText = BuildViewerRayCountHudHtml(slot);
-        int textHash = countText.GetHashCode(StringComparison.Ordinal);
         int nowTick = Server.TickCount;
-        bool shouldRefreshHud = forceMessageRefresh
-            || _viewerRayCountLastRenderedHashBySlot[slot] != textHash
-            || (nowTick - _viewerRayCountLastHudRefreshTickBySlot[slot]) >= ViewerRayCountHudRefreshIntervalTicks;
-        if (!shouldRefreshHud)
-        {
-            return;
-        }
-
-        player!.PrintToCenterHtml(countText, 1);
-        _viewerRayCountLastRenderedHashBySlot[slot] = textHash;
-        _viewerRayCountLastHudRefreshTickBySlot[slot] = nowTick;
-    }
-
-    private string BuildViewerRayCountHudHtml(int slot)
-    {
         int targets = GetViewerTargetCount(slot);
         int los = GetViewerRayStageCount(slot, ViewerRayTraceStage.Los);
         int aim = GetViewerRayStageCount(slot, ViewerRayTraceStage.Aim);
         int preload = GetViewerRayStageCount(slot, ViewerRayTraceStage.Preload);
         int jump = GetViewerRayStageCount(slot, ViewerRayTraceStage.Jump);
+        int stateHash = HashCode.Combine(targets, los, aim, preload, jump);
+
+        bool needsPeriodicRefresh =
+            (nowTick - _viewerRayCountLastHudRefreshTickBySlot[slot]) >= ViewerRayCountHudRefreshIntervalTicks;
+        if (!forceMessageRefresh &&
+            !needsPeriodicRefresh &&
+            _viewerRayCountLastRenderedHashBySlot[slot] == stateHash)
+        {
+            return;
+        }
+
+        string countText = BuildViewerRayCountHudHtml(targets, los, aim, preload, jump);
+        player.PrintToCenterHtml(countText, 1);
+        _viewerRayCountLastRenderedHashBySlot[slot] = stateHash;
+        _viewerRayCountLastHudRefreshTickBySlot[slot] = nowTick;
+    }
+
+    private string BuildViewerRayCountHudHtml(int targets, int los, int aim, int preload, int jump)
+    {
         int total = los + aim + preload + jump;
         return string.Concat(
             "<b><font color='#80DFFF'>RAYS</font></b><br>",
@@ -836,8 +807,8 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
     {
         int stageIndex = (int)stage;
         return _viewerRayCounterTick == Server.TickCount
-            ? _viewerRayCountsWorking[slot, stageIndex]
-            : _viewerRayCountsDisplay[slot, stageIndex];
+            ? _viewerRayCountsWorking[slot][stageIndex]
+            : _viewerRayCountsDisplay[slot][stageIndex];
     }
 
     private void ClearViewerRayCountOverlays()
@@ -863,6 +834,12 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
 
         _viewerRayCountLastRenderedHashBySlot[slot] = int.MinValue;
         _viewerRayCountLastHudRefreshTickBySlot[slot] = int.MinValue;
+
+        CCSPlayerController? player = Utilities.GetPlayerFromSlot(slot);
+        if (player != null && player.IsValid && !player.IsBot)
+        {
+            player.PrintToCenterHtml("", 0);
+        }
     }
 
     private void ClearViewerRayCountSlotState(int slot)
@@ -872,11 +849,8 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
             return;
         }
 
-        for (int stageIndex = 0; stageIndex < ViewerRayTraceStageCount; stageIndex++)
-        {
-            _viewerRayCountsWorking[slot, stageIndex] = 0;
-            _viewerRayCountsDisplay[slot, stageIndex] = 0;
-        }
+        Array.Clear(_viewerRayCountsWorking[slot], 0, ViewerRayTraceStageCount);
+        Array.Clear(_viewerRayCountsDisplay[slot], 0, ViewerRayTraceStageCount);
 
         _viewerTargetCounts[slot] = 0;
         _viewerRayCountLastRenderedHashBySlot[slot] = int.MinValue;

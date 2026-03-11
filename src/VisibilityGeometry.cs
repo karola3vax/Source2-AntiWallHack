@@ -8,10 +8,9 @@ namespace S2AWH;
 
 internal enum DebugAabbKind : byte
 {
-    None = 0,
-    Los = 1,
-    PredictorCurrent = 2,
-    PredictorPredicted = 3
+    Los = 0,
+    PredictorCurrent = 1,
+    PredictorPredicted = 2
 }
 
 internal enum DebugTraceKind : byte
@@ -24,6 +23,8 @@ internal enum DebugTraceKind : byte
 
 internal static class VisibilityGeometry
 {
+    public const string VisibilityOcclusionScope = "World geometry only. Smoke and other gameplay occluders are intentionally excluded.";
+
     private static readonly QAngle BeamRotationZero = new(0.0f, 0.0f, 0.0f);
     private static readonly Vector BeamVelocityZero = new(0.0f, 0.0f, 0.0f);
     private static readonly Color LosSurfaceDebugBeamColor = Color.FromArgb(255, 0, 255, 0);
@@ -40,7 +41,8 @@ internal static class VisibilityGeometry
     private const float DebugAabbLifetimeSeconds = 0.08f;
     private const float DebugAabbProbeHalfLength = 0.06f;
     private const float DebugAabbProbeLineWidth = 0.16f;
-    private const int MaxDebugBeamEntitiesPerTick = 256;
+    private const int MaxDebugBeamEntitiesPerTick = 96;
+    private const float MinDebugSegmentLengthSq = 0.0004f;
     private static readonly (int Start, int End)[] DebugAabbEdges = new[]
     {
         (0, 1), (1, 3), (3, 2), (2, 0), // lower ring
@@ -121,6 +123,27 @@ internal static class VisibilityGeometry
         in TraceResult traceResult,
         DebugTraceKind traceKind)
     {
+        float endX;
+        float endY;
+        float endZ;
+        if (traceResult.DidHit)
+        {
+            endX = traceResult.EndPosX;
+            endY = traceResult.EndPosY;
+            endZ = traceResult.EndPosZ;
+        }
+        else
+        {
+            endX = intendedEnd.X;
+            endY = intendedEnd.Y;
+            endZ = intendedEnd.Z;
+        }
+
+        if (IsDegenerateSegment(start.X, start.Y, start.Z, endX, endY, endZ))
+        {
+            return;
+        }
+
         if (!TryConsumeDebugBeamBudget(1))
         {
             return;
@@ -138,19 +161,9 @@ internal static class VisibilityGeometry
         beam.RenderFX = RenderFx_t.kRenderFxNone;
 
         beam.Teleport(start, BeamRotationZero, BeamVelocityZero);
-
-        if (traceResult.DidHit)
-        {
-            beam.EndPos.X = traceResult.EndPosX;
-            beam.EndPos.Y = traceResult.EndPosY;
-            beam.EndPos.Z = traceResult.EndPosZ;
-        }
-        else
-        {
-            beam.EndPos.X = intendedEnd.X;
-            beam.EndPos.Y = intendedEnd.Y;
-            beam.EndPos.Z = intendedEnd.Z;
-        }
+        beam.EndPos.X = endX;
+        beam.EndPos.Y = endY;
+        beam.EndPos.Z = endZ;
 
         beam.DispatchSpawn();
         beam.AddEntityIOEvent("Kill", beam, beam, delay: DebugBeamLifetimeSeconds);
@@ -168,7 +181,7 @@ internal static class VisibilityGeometry
         float maxZ,
         DebugAabbKind kind)
     {
-        if (kind == DebugAabbKind.None || !ShouldDrawDebugAabbBox(kind))
+        if (!ShouldDrawDebugAabbBox(kind))
         {
             return;
         }
@@ -202,7 +215,7 @@ internal static class VisibilityGeometry
     /// </summary>
     public static void DrawDebugAabbProbePoint(float x, float y, float z, DebugAabbKind kind)
     {
-        if (kind == DebugAabbKind.None || !ShouldDrawDebugAabbBox(kind))
+        if (!ShouldDrawDebugAabbBox(kind))
         {
             return;
         }
@@ -221,12 +234,34 @@ internal static class VisibilityGeometry
         DrawDebugLine(markerBuffer[0], markerBuffer[1], color, DebugAabbProbeLineWidth, DebugAabbLifetimeSeconds);
     }
 
-    private static void SetPoint(Vector[] pointBuffer, int index, float x, float y, float z)
+    internal static void SetPoint(Vector[] pointBuffer, int index, float x, float y, float z)
     {
         Vector point = pointBuffer[index];
         point.X = x;
         point.Y = y;
         point.Z = z;
+    }
+
+    internal static void SetVector(Vector vector, float x, float y, float z)
+    {
+        vector.X = x;
+        vector.Y = y;
+        vector.Z = z;
+    }
+
+    internal static void GetImpactPoint(in TraceResult result, out float x, out float y, out float z)
+    {
+        if (result.HasExactHit)
+        {
+            x = result.HitPointX;
+            y = result.HitPointY;
+            z = result.HitPointZ;
+            return;
+        }
+
+        x = result.EndPosX;
+        y = result.EndPosY;
+        z = result.EndPosZ;
     }
 
     [ThreadStatic]
@@ -270,6 +305,11 @@ internal static class VisibilityGeometry
 
     private static void DrawDebugLine(Vector start, Vector end, Color color, float width, float lifetime)
     {
+        if (IsDegenerateSegment(start.X, start.Y, start.Z, end.X, end.Y, end.Z))
+        {
+            return;
+        }
+
         CBeam? beam = Utilities.CreateEntityByName<CBeam>("env_beam");
         if (beam == null || !beam.IsValid)
         {
@@ -288,6 +328,14 @@ internal static class VisibilityGeometry
 
         beam.DispatchSpawn();
         beam.AddEntityIOEvent("Kill", beam, beam, delay: lifetime);
+    }
+
+    private static bool IsDegenerateSegment(float startX, float startY, float startZ, float endX, float endY, float endZ)
+    {
+        float dx = endX - startX;
+        float dy = endY - startY;
+        float dz = endZ - startZ;
+        return (dx * dx) + (dy * dy) + (dz * dz) <= MinDebugSegmentLengthSq;
     }
 
     private static bool TryConsumeDebugBeamBudget(int amount)
@@ -327,7 +375,7 @@ internal static class VisibilityGeometry
             DebugTraceKind.Preload => PreloadDebugBeamColor,
             DebugTraceKind.JumpAssist => JumpAssistDebugBeamColor,
             DebugTraceKind.AimRay => AimRayDebugBeamColor,
-            _ => throw new ArgumentOutOfRangeException(nameof(traceKind), traceKind, "Unknown debug trace kind.")
+            _ => AimRayDebugBeamColor
         };
     }
 
