@@ -838,7 +838,15 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
         CCSPlayerController? player = Utilities.GetPlayerFromSlot(slot);
         if (player != null && player.IsValid && !player.IsBot)
         {
-            player.PrintToCenterHtml("", 0);
+            try
+            {
+                player.PrintToCenterHtml("", 0);
+            }
+            catch
+            {
+                // Event listener may not be available during transient engine states
+                // (round start, map change, unload). The HUD will expire naturally.
+            }
         }
     }
 
