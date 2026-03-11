@@ -15,7 +15,9 @@ public partial class S2AWH
         float tickInterval = Server.TickInterval;
         if (!float.IsFinite(tickInterval) || tickInterval <= 0.0f)
         {
-            // Startup-safe fallback when server globals are not initialized yet.
+            // CounterStrikeSharp currently hard-codes Server.TickInterval to 0.015625 (1/64 s),
+            // so this branch is unreachable in practice. The guard is retained as a defensive
+            // measure against future CSS builds that read the value from the engine at runtime.
             tickInterval = 1.0f / 64.0f;
         }
 
@@ -28,7 +30,9 @@ public partial class S2AWH
         float tickInterval = Server.TickInterval;
         if (!float.IsFinite(tickInterval) || tickInterval <= 0.0f)
         {
-            // Startup-safe fallback when server globals are not initialized yet.
+            // CounterStrikeSharp currently hard-codes Server.TickInterval to 0.015625 (1/64 s),
+            // so this branch is unreachable in practice. The guard is retained as a defensive
+            // measure against future CSS builds that read the value from the engine at runtime.
             tickInterval = 1.0f / 64.0f;
         }
 

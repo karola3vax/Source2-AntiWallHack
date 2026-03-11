@@ -61,7 +61,6 @@ internal sealed class PreloadPredictor
     private int _cachedViewerSlot = -1;
     private int _cachedViewerTick = -1;
     private bool _cachedDrawDebugBeams;
-    private int _activeViewerSlot = -1;
 
     public PreloadPredictor(CRayTraceInterface rayTrace, Action<int, ViewerRayTraceStage>? recordViewerTraceAttempt = null)
     {
@@ -114,7 +113,6 @@ internal sealed class PreloadPredictor
             _cachedViewerTick = nowTick;
             _cachedDrawDebugBeams = VisibilityGeometry.ShouldDrawDebugTraceBeam(viewerIsBot);
         }
-        _activeViewerSlot = viewerSlot;
 
         var config = S2AWHState.Current;
         if (!config.Preload.EnablePreload)
@@ -169,6 +167,7 @@ internal sealed class PreloadPredictor
             }
 
             return CanSeeNearestSurfaceProbe(
+                viewerSlot,
                 viewerPawn,
                 targetPawn,
                 selectedEye,
@@ -185,6 +184,7 @@ internal sealed class PreloadPredictor
         if (config.Preload.EnabledForHolders && targetCache.HasTargetLookahead)
         {
             return CanSeeNearestSurfaceProbe(
+                viewerSlot,
                 viewerPawn,
                 targetPawn,
                 _viewerEyeBuffer,
@@ -237,7 +237,6 @@ internal sealed class PreloadPredictor
             _cachedViewerTick = nowTick;
             _cachedDrawDebugBeams = VisibilityGeometry.ShouldDrawDebugTraceBeam(viewerIsBot);
         }
-        _activeViewerSlot = viewerSlot;
 
         var config = S2AWHState.Current;
         float jumpHitRadiusSq = config.Aabb.LosSurfaceProbeHitRadius * config.Aabb.LosSurfaceProbeHitRadius;
@@ -253,6 +252,7 @@ internal sealed class PreloadPredictor
         }
 
         return CanSeeJumpAssistSurfaceProbes(
+            viewerSlot,
             viewerPawn,
             targetPawn,
             _predictedViewerJumpEye,
@@ -310,15 +310,8 @@ internal sealed class PreloadPredictor
         }
     }
 
-    private void RecordActiveViewerTraceAttempt(ViewerRayTraceStage stage)
-    {
-        if (_activeViewerSlot >= 0)
-        {
-            _recordViewerTraceAttempt?.Invoke(_activeViewerSlot, stage);
-        }
-    }
-
     private bool CanSeeNearestSurfaceProbe(
+        int viewerSlot,
         CBasePlayerPawn viewerPawn,
         CBasePlayerPawn targetPawn,
         Vector eyePosition,
@@ -382,20 +375,21 @@ internal sealed class PreloadPredictor
         }
 
         // Try nearest probe first; if blocked, try highest (head area) as fallback.
-        if (TraceSinglePreloadProbe(viewerPawn, targetPawn, eyePosition, bestIndex, hitRadiusSq, traceKind, drawDebugBeams))
+        if (TraceSinglePreloadProbe(viewerSlot, viewerPawn, targetPawn, eyePosition, bestIndex, hitRadiusSq, traceKind, drawDebugBeams))
         {
             return true;
         }
 
         if (highestIndex >= 0 && highestIndex != bestIndex)
         {
-            return TraceSinglePreloadProbe(viewerPawn, targetPawn, eyePosition, highestIndex, hitRadiusSq, traceKind, drawDebugBeams);
+            return TraceSinglePreloadProbe(viewerSlot, viewerPawn, targetPawn, eyePosition, highestIndex, hitRadiusSq, traceKind, drawDebugBeams);
         }
 
         return false;
     }
 
     private bool TraceSinglePreloadProbe(
+        int viewerSlot,
         CBasePlayerPawn viewerPawn,
         CBasePlayerPawn targetPawn,
         Vector eyePosition,
@@ -416,7 +410,7 @@ internal sealed class PreloadPredictor
         _surfaceTraceEnd.Y = probeY;
         _surfaceTraceEnd.Z = probeZ;
 
-        RecordActiveViewerTraceAttempt(ViewerRayTraceStage.Preload);
+        _recordViewerTraceAttempt?.Invoke(viewerSlot, ViewerRayTraceStage.Preload);
         if (!_rayTrace.TraceEndShape(_traceStart, _surfaceTraceEnd, viewerPawn, _cachedTraceOptions, out var result))
         {
             return false;
@@ -951,6 +945,7 @@ internal sealed class PreloadPredictor
 
 
     private bool CanSeeJumpAssistSurfaceProbes(
+        int viewerSlot,
         CBasePlayerPawn viewerPawn,
         CBasePlayerPawn targetPawn,
         Vector eyePosition,
@@ -1005,20 +1000,21 @@ internal sealed class PreloadPredictor
         }
 
         // Try nearest probe first; if blocked, try highest (head area) as fallback.
-        if (TraceSingleJumpAssistProbe(viewerPawn, targetPawn, eyePosition, bestIndex, hitRadiusSq, drawDebugBeams))
+        if (TraceSingleJumpAssistProbe(viewerSlot, viewerPawn, targetPawn, eyePosition, bestIndex, hitRadiusSq, drawDebugBeams))
         {
             return true;
         }
 
         if (highestIndex >= 0 && highestIndex != bestIndex)
         {
-            return TraceSingleJumpAssistProbe(viewerPawn, targetPawn, eyePosition, highestIndex, hitRadiusSq, drawDebugBeams);
+            return TraceSingleJumpAssistProbe(viewerSlot, viewerPawn, targetPawn, eyePosition, highestIndex, hitRadiusSq, drawDebugBeams);
         }
 
         return false;
     }
 
     private bool TraceSingleJumpAssistProbe(
+        int viewerSlot,
         CBasePlayerPawn viewerPawn,
         CBasePlayerPawn targetPawn,
         Vector eyePosition,
@@ -1038,7 +1034,7 @@ internal sealed class PreloadPredictor
         _surfaceTraceEnd.Y = probeY;
         _surfaceTraceEnd.Z = probeZ;
 
-        RecordActiveViewerTraceAttempt(ViewerRayTraceStage.Jump);
+        _recordViewerTraceAttempt?.Invoke(viewerSlot, ViewerRayTraceStage.Jump);
         if (!_rayTrace.TraceEndShape(_traceStart, _surfaceTraceEnd, viewerPawn, _cachedTraceOptions, out var result))
         {
             return false;
