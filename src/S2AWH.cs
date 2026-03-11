@@ -306,6 +306,7 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
         _unknownStickyWindowTicks = ConvertUnknownStickySecondsToTicks();
         _collectDebugCounters = S2AWHState.Current.Diagnostics.ShowDebugInfo;
         ResetViewerRayCountOverlayTracking();
+        FlushViewerRayCountCenterHtml();
 
         InfoLog(
             "S2AWH is starting up.",
@@ -836,9 +837,36 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
         Array.Fill(_viewerRayCountLastHudRefreshTickBySlot, int.MinValue);
     }
 
+    private void FlushViewerRayCountCenterHtml()
+    {
+        for (int slot = 0; slot < VisibilitySlotCapacity; slot++)
+        {
+            CCSPlayerController? player = Utilities.GetPlayerFromSlot(slot);
+            if (!IsLivePlayer(player))
+            {
+                continue;
+            }
+
+            try
+            {
+                player!.PrintToCenterHtml(" ", 1);
+            }
+            catch
+            {
+                // Event listener may not be available during transient engine states.
+            }
+        }
+    }
+
     private void RemoveViewerRayCountOverlay(int slot)
     {
         if ((uint)slot >= VisibilitySlotCapacity)
+        {
+            return;
+        }
+
+        if (_viewerRayCountLastRenderedHashBySlot[slot] == int.MinValue &&
+            _viewerRayCountLastHudRefreshTickBySlot[slot] == int.MinValue)
         {
             return;
         }
@@ -851,7 +879,9 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
         {
             try
             {
-                player.PrintToCenterHtml("", 0);
+                // Duration=0 can leave an empty persistent background panel on some clients.
+                // Send a short-lived blank payload once to flush center-html safely.
+                player.PrintToCenterHtml(" ", 1);
             }
             catch
             {

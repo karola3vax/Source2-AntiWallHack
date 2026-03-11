@@ -8,8 +8,8 @@ namespace S2AWH;
 internal sealed class PreloadPredictor
 {
     private const int DirectedPreloadProbePointCount = 32; // 4x4 per face, up to 2 horizontal faces
-    private const int MaxPreloadNearestProbeAttempts = 3;  // trace top-N nearest probes before highest fallback
-    private const float DirectedPreloadDualFaceRatioThreshold = 1.35f;
+    private const int MaxPreloadNearestProbeAttempts = 3;  // trace top-N nearest probes before edge/highest fallbacks
+    private const float DirectedPreloadDualFaceRatioThreshold = 4.0f;
     private const float StandingViewOffsetZ = 64.0f;
     private const float DirectedPreloadVerticalOffsetUnits = 1.0f;
     private const float MinStandUpLeadUnits = 1.0f;
@@ -137,7 +137,6 @@ internal sealed class PreloadPredictor
             DrawPredictorDebugAabb(ref targetSnapshot, _currentTargetOrigin, config, applyDirectionalShift: true, DebugAabbKind.PredictorCurrent);
         }
 
-        // Preload uses up to two trace rays per evaluation (nearest + highest fallback).
         // Priority: peeker path (when viewer lookahead exists) -> holder path.
         if (config.Preload.EnabledForPeekers &&
             TryGetViewerPeekLookahead(
@@ -341,14 +340,21 @@ internal sealed class PreloadPredictor
             return false;
         }
 
-        // Collect the top-N nearest probe indices (insertion-sorted, ascending distance) and
-        // separately track the highest probe for a head-area fallback.  Using stackalloc avoids
-        // any heap allocation on this hot path.
+        // Collect top-N nearest probes, then add edge coverage (min/max X/Y) and finally highest.
+        // Using stackalloc avoids any heap allocation on this hot path.
         Span<int>   nearestIndices   = stackalloc int[MaxPreloadNearestProbeAttempts];
         Span<float> nearestDistances = stackalloc float[MaxPreloadNearestProbeAttempts];
         int nearestCount = 0;
         int highestIndex = -1;
         float highestZ = float.MinValue;
+        int minXIndex = -1;
+        int maxXIndex = -1;
+        int minYIndex = -1;
+        int maxYIndex = -1;
+        float minProbeX = float.MaxValue;
+        float maxProbeX = float.MinValue;
+        float minProbeY = float.MaxValue;
+        float maxProbeY = float.MinValue;
 
         for (int i = 0; i < probeCount; i++)
         {
@@ -386,6 +392,30 @@ internal sealed class PreloadPredictor
                 highestZ = candidateProbe.Z;
                 highestIndex = i;
             }
+
+            if (candidateProbe.X < minProbeX)
+            {
+                minProbeX = candidateProbe.X;
+                minXIndex = i;
+            }
+
+            if (candidateProbe.X > maxProbeX)
+            {
+                maxProbeX = candidateProbe.X;
+                maxXIndex = i;
+            }
+
+            if (candidateProbe.Y < minProbeY)
+            {
+                minProbeY = candidateProbe.Y;
+                minYIndex = i;
+            }
+
+            if (candidateProbe.Y > maxProbeY)
+            {
+                maxProbeY = candidateProbe.Y;
+                maxYIndex = i;
+            }
         }
 
         if (nearestCount == 0)
@@ -393,25 +423,28 @@ internal sealed class PreloadPredictor
             return false;
         }
 
-        // Try the top-N nearest probes first; narrow-gap peeks that block the single closest
-        // probe are often clear by the second or third nearest candidate.
+        Span<int> orderedProbeIndices = stackalloc int[MaxPreloadNearestProbeAttempts + 5];
+        int orderedProbeCount = 0;
+
         for (int n = 0; n < nearestCount; n++)
         {
-            if (TraceSinglePreloadProbe(viewerSlot, viewerPawn, targetPawn, eyePosition, nearestIndices[n], hitRadiusSq, traceKind, drawDebugBeams))
+            AppendUniqueProbeIndex(orderedProbeIndices, ref orderedProbeCount, nearestIndices[n]);
+        }
+
+        // Probe edges after nearest points to improve diagonal/cross-angle peeks.
+        AppendUniqueProbeIndex(orderedProbeIndices, ref orderedProbeCount, minXIndex);
+        AppendUniqueProbeIndex(orderedProbeIndices, ref orderedProbeCount, maxXIndex);
+        AppendUniqueProbeIndex(orderedProbeIndices, ref orderedProbeCount, minYIndex);
+        AppendUniqueProbeIndex(orderedProbeIndices, ref orderedProbeCount, maxYIndex);
+        // Final fallback for head/upper-body visibility.
+        AppendUniqueProbeIndex(orderedProbeIndices, ref orderedProbeCount, highestIndex);
+
+        for (int n = 0; n < orderedProbeCount; n++)
+        {
+            if (TraceSinglePreloadProbe(viewerSlot, viewerPawn, targetPawn, eyePosition, orderedProbeIndices[n], hitRadiusSq, traceKind, drawDebugBeams))
             {
                 return true;
             }
-        }
-
-        // Final fallback: highest probe (head/upper body area).
-        bool highestAlreadyTried = false;
-        for (int n = 0; n < nearestCount; n++)
-        {
-            if (nearestIndices[n] == highestIndex) { highestAlreadyTried = true; break; }
-        }
-        if (!highestAlreadyTried && highestIndex >= 0)
-        {
-            return TraceSinglePreloadProbe(viewerSlot, viewerPawn, targetPawn, eyePosition, highestIndex, hitRadiusSq, traceKind, drawDebugBeams);
         }
 
         return false;
@@ -1004,13 +1037,20 @@ internal sealed class PreloadPredictor
             return false;
         }
 
-        // Mirror the CanSeeNearestSurfaceProbe selection strategy: collect top-N nearest
-        // probes (insertion-sorted) and track the highest for a head-area fallback.
+        // Mirror preload strategy: nearest probes first, then edge coverage and highest fallback.
         Span<int>   nearestIndices   = stackalloc int[MaxPreloadNearestProbeAttempts];
         Span<float> nearestDistances = stackalloc float[MaxPreloadNearestProbeAttempts];
         int nearestCount = 0;
         int highestIndex = -1;
         float highestZ = float.MinValue;
+        int minXIndex = -1;
+        int maxXIndex = -1;
+        int minYIndex = -1;
+        int maxYIndex = -1;
+        float minProbeX = float.MaxValue;
+        float maxProbeX = float.MinValue;
+        float minProbeY = float.MaxValue;
+        float maxProbeY = float.MinValue;
 
         for (int i = 0; i < probeCount; i++)
         {
@@ -1042,6 +1082,30 @@ internal sealed class PreloadPredictor
                 highestZ = probe.Z;
                 highestIndex = i;
             }
+
+            if (probe.X < minProbeX)
+            {
+                minProbeX = probe.X;
+                minXIndex = i;
+            }
+
+            if (probe.X > maxProbeX)
+            {
+                maxProbeX = probe.X;
+                maxXIndex = i;
+            }
+
+            if (probe.Y < minProbeY)
+            {
+                minProbeY = probe.Y;
+                minYIndex = i;
+            }
+
+            if (probe.Y > maxProbeY)
+            {
+                maxProbeY = probe.Y;
+                maxYIndex = i;
+            }
         }
 
         if (nearestCount == 0)
@@ -1049,25 +1113,47 @@ internal sealed class PreloadPredictor
             return false;
         }
 
+        Span<int> orderedProbeIndices = stackalloc int[MaxPreloadNearestProbeAttempts + 5];
+        int orderedProbeCount = 0;
+
         for (int n = 0; n < nearestCount; n++)
         {
-            if (TraceSingleJumpAssistProbe(viewerSlot, viewerPawn, targetPawn, eyePosition, nearestIndices[n], hitRadiusSq, drawDebugBeams))
+            AppendUniqueProbeIndex(orderedProbeIndices, ref orderedProbeCount, nearestIndices[n]);
+        }
+
+        AppendUniqueProbeIndex(orderedProbeIndices, ref orderedProbeCount, minXIndex);
+        AppendUniqueProbeIndex(orderedProbeIndices, ref orderedProbeCount, maxXIndex);
+        AppendUniqueProbeIndex(orderedProbeIndices, ref orderedProbeCount, minYIndex);
+        AppendUniqueProbeIndex(orderedProbeIndices, ref orderedProbeCount, maxYIndex);
+        AppendUniqueProbeIndex(orderedProbeIndices, ref orderedProbeCount, highestIndex);
+
+        for (int n = 0; n < orderedProbeCount; n++)
+        {
+            if (TraceSingleJumpAssistProbe(viewerSlot, viewerPawn, targetPawn, eyePosition, orderedProbeIndices[n], hitRadiusSq, drawDebugBeams))
             {
                 return true;
             }
         }
 
-        bool highestAlreadyTried = false;
-        for (int n = 0; n < nearestCount; n++)
+        return false;
+    }
+
+    private static void AppendUniqueProbeIndex(Span<int> indices, ref int count, int candidateIndex)
+    {
+        if (candidateIndex < 0 || count >= indices.Length)
         {
-            if (nearestIndices[n] == highestIndex) { highestAlreadyTried = true; break; }
-        }
-        if (!highestAlreadyTried && highestIndex >= 0)
-        {
-            return TraceSingleJumpAssistProbe(viewerSlot, viewerPawn, targetPawn, eyePosition, highestIndex, hitRadiusSq, drawDebugBeams);
+            return;
         }
 
-        return false;
+        for (int i = 0; i < count; i++)
+        {
+            if (indices[i] == candidateIndex)
+            {
+                return;
+            }
+        }
+
+        indices[count++] = candidateIndex;
     }
 
     private bool TraceSingleJumpAssistProbe(
@@ -1302,5 +1388,4 @@ internal sealed class PreloadPredictor
         _cachedViewerTick = -1;
     }
 }
-
 
