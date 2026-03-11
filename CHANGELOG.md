@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.0.6 - 2026-03-12
+
+- Fixed `CanSeeJumpAssistSurfaceProbes` using the old 1-nearest + 1-highest = 2-probe selection while the regular preload path already used the newer top-3 nearest strategy; jump-peek preload now applies the same `MaxPreloadNearestProbeAttempts` insertion-sort selection so narrow-gap pops on jump peeks are treated consistently.
+- Fixed the physical-cap formula in `TryGetLookahead` collapsing holder-path lookahead to near zero at low `UpdateFrequencyTicks` values (e.g. at `UpdateFrequencyTicks=1` a 250 u/s target was capped to ~5 u lookahead); a floor of 8 ticks (`MinTimeHorizonTicks`) is now enforced so holder preload remains meaningful regardless of update frequency.
+- Lowered the `UpdateFrequencyTicks` default from `16` to `4`, reducing worst-case pop-in latency from ~500 ms to ~125 ms when preload misses (two stagger cycles at 64 Hz); the previous default of 16 was optimized for 32-player CPU budgets but produced half-second reveal delays on typical servers.
+
 ## 3.0.5 - 2026-03-11
 
 - Fixed release packaging so `scripts/package-release.ps1` always generates temporary `RELEASE_NOTES` content when a version-specific notes file and matching changelog section are missing.

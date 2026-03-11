@@ -40,9 +40,9 @@ public partial class S2AWH : BasePlugin, IPluginConfig<S2AWHConfig>
     private const int MaxTrackedTransmitEntitiesPerTarget = 192;
     private const int MaxSceneNodeClosureNodesPerTarget = 256;
     private const int MaxSceneNodeClosureDepth = 10;
-    // At 64 Hz this equals ~62 ms; at 128 Hz it equals ~31 ms. Higher tick rates produce
+    // At 64 Hz this equals ~31 ms; at 128 Hz it equals ~15 ms. Higher tick rates produce
     // a shorter (more aggressive) reacquire debounce window, which is the correct direction.
-    private const int VisibleReacquireConfirmTicks = 4;
+    private const int VisibleReacquireConfirmTicks = 2;
     private const int FailOpenVisibleQuarantineTicks = 3;
     private const int OwnedEntityFullResyncIntervalTicks = 128;
     private const int OwnedEntityPostSpawnRescanTicks = 8;

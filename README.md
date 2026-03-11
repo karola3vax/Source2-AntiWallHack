@@ -279,7 +279,7 @@ S2AWH ships with conservative defaults. On most servers only two values need tun
 | Key | Default | Range | Description |
 | :-- | :---: | :---: | :-- |
 | `Core.Enabled` | `true` | — | Master on/off switch |
-| `Core.UpdateFrequencyTicks` | `16` | `1–512` | Ticks between full visibility rebuilds |
+| `Core.UpdateFrequencyTicks` | `4` | `1–512` | Ticks between full visibility rebuilds |
 
 </details>
 
@@ -470,7 +470,7 @@ Its purpose is to cut off **hidden enemy information**. It does not address aimb
 <details>
 <summary>Can it affect server performance?</summary>
 
-Yes. S2AWH fires real ray traces against world geometry each tick. The `Core.UpdateFrequencyTicks` setting controls the cost — start at `16`, confirm your server has headroom, then push lower.
+Yes. S2AWH fires real ray traces against world geometry each tick. The `Core.UpdateFrequencyTicks` setting controls the cost. The default is `4` (good balance of accuracy and CPU); push higher only on 32+ player servers with tight headroom.
 
 On a 10-player server at `UpdateFrequencyTicks = 4`, the practical per-tick ray count stays in the low dozens due to FOV culling and stationary-pair caching.
 

@@ -8,6 +8,7 @@ namespace S2AWH;
 internal sealed class PreloadPredictor
 {
     private const int DirectedPreloadProbePointCount = 32; // 4x4 per face, up to 2 horizontal faces
+    private const int MaxPreloadNearestProbeAttempts = 3;  // trace top-N nearest probes before highest fallback
     private const float DirectedPreloadDualFaceRatioThreshold = 1.35f;
     private const float StandingViewOffsetZ = 64.0f;
     private const float DirectedPreloadVerticalOffsetUnits = 1.0f;
@@ -340,10 +341,15 @@ internal sealed class PreloadPredictor
             return false;
         }
 
-        int bestIndex = -1;
-        float bestDistanceSq = float.MaxValue;
+        // Collect the top-N nearest probe indices (insertion-sorted, ascending distance) and
+        // separately track the highest probe for a head-area fallback.  Using stackalloc avoids
+        // any heap allocation on this hot path.
+        Span<int>   nearestIndices   = stackalloc int[MaxPreloadNearestProbeAttempts];
+        Span<float> nearestDistances = stackalloc float[MaxPreloadNearestProbeAttempts];
+        int nearestCount = 0;
         int highestIndex = -1;
         float highestZ = float.MinValue;
+
         for (int i = 0; i < probeCount; i++)
         {
             Vector candidateProbe = _directedPreloadProbePoints[i];
@@ -356,10 +362,23 @@ internal sealed class PreloadPredictor
             float dy = candidateProbe.Y - eyePosition.Y;
             float dz = candidateProbe.Z - eyePosition.Z;
             float distanceSq = (dx * dx) + (dy * dy) + (dz * dz);
-            if (distanceSq < bestDistanceSq)
+
+            // Insertion-sort into the nearest-N list.
+            if (nearestCount < MaxPreloadNearestProbeAttempts || distanceSq < nearestDistances[nearestCount - 1])
             {
-                bestDistanceSq = distanceSq;
-                bestIndex = i;
+                int insertAt = nearestCount < MaxPreloadNearestProbeAttempts ? nearestCount : nearestCount - 1;
+                while (insertAt > 0 && distanceSq < nearestDistances[insertAt - 1])
+                {
+                    nearestIndices[insertAt]   = nearestIndices[insertAt - 1];
+                    nearestDistances[insertAt] = nearestDistances[insertAt - 1];
+                    insertAt--;
+                }
+                nearestIndices[insertAt]   = i;
+                nearestDistances[insertAt] = distanceSq;
+                if (nearestCount < MaxPreloadNearestProbeAttempts)
+                {
+                    nearestCount++;
+                }
             }
 
             if (candidateProbe.Z > highestZ)
@@ -369,18 +388,28 @@ internal sealed class PreloadPredictor
             }
         }
 
-        if (bestIndex < 0)
+        if (nearestCount == 0)
         {
             return false;
         }
 
-        // Try nearest probe first; if blocked, try highest (head area) as fallback.
-        if (TraceSinglePreloadProbe(viewerSlot, viewerPawn, targetPawn, eyePosition, bestIndex, hitRadiusSq, traceKind, drawDebugBeams))
+        // Try the top-N nearest probes first; narrow-gap peeks that block the single closest
+        // probe are often clear by the second or third nearest candidate.
+        for (int n = 0; n < nearestCount; n++)
         {
-            return true;
+            if (TraceSinglePreloadProbe(viewerSlot, viewerPawn, targetPawn, eyePosition, nearestIndices[n], hitRadiusSq, traceKind, drawDebugBeams))
+            {
+                return true;
+            }
         }
 
-        if (highestIndex >= 0 && highestIndex != bestIndex)
+        // Final fallback: highest probe (head/upper body area).
+        bool highestAlreadyTried = false;
+        for (int n = 0; n < nearestCount; n++)
+        {
+            if (nearestIndices[n] == highestIndex) { highestAlreadyTried = true; break; }
+        }
+        if (!highestAlreadyTried && highestIndex >= 0)
         {
             return TraceSinglePreloadProbe(viewerSlot, viewerPawn, targetPawn, eyePosition, highestIndex, hitRadiusSq, traceKind, drawDebugBeams);
         }
@@ -739,7 +768,13 @@ internal sealed class PreloadPredictor
         float fullSpeed = MathF.Max(minSpeed + 1.0f, fullSpeedForMaxLookahead);
         float speedAlpha = Math.Clamp((speed - minSpeed) / (fullSpeed - minSpeed), 0.0f, 1.0f);
         float effectiveLookaheadDistance = lookaheadDistance * speedAlpha;
-        float timeHorizonSeconds = MathF.Max(Server.TickInterval, Server.TickInterval * Math.Max(1, updateFrequencyTicks) * 1.25f);
+        // Enforce a floor of 8 ticks so the physical cap stays meaningful at low
+        // UpdateFrequencyTicks values (e.g. UpdateFrequencyTicks=1 would otherwise collapse
+        // the holder-path lookahead to ~5u at 250 u/s, making preload nearly useless).
+        const float MinTimeHorizonTicks = 8.0f;
+        float timeHorizonSeconds = MathF.Max(
+            Server.TickInterval * MinTimeHorizonTicks,
+            Server.TickInterval * Math.Max(1, updateFrequencyTicks) * 1.25f);
         float physicallyReachableDistance = speed * timeHorizonSeconds;
         effectiveLookaheadDistance = MathF.Min(effectiveLookaheadDistance, physicallyReachableDistance);
         if (effectiveLookaheadDistance <= 0.001f)
@@ -969,10 +1004,14 @@ internal sealed class PreloadPredictor
             return false;
         }
 
-        int bestIndex = -1;
-        float bestDistanceSq = float.MaxValue;
+        // Mirror the CanSeeNearestSurfaceProbe selection strategy: collect top-N nearest
+        // probes (insertion-sorted) and track the highest for a head-area fallback.
+        Span<int>   nearestIndices   = stackalloc int[MaxPreloadNearestProbeAttempts];
+        Span<float> nearestDistances = stackalloc float[MaxPreloadNearestProbeAttempts];
+        int nearestCount = 0;
         int highestIndex = -1;
         float highestZ = float.MinValue;
+
         for (int i = 0; i < probeCount; i++)
         {
             Vector probe = _directedPreloadProbePoints[i];
@@ -980,11 +1019,22 @@ internal sealed class PreloadPredictor
             float dy = probe.Y - eyePosition.Y;
             float dz = probe.Z - eyePosition.Z;
             float distanceSq = (dx * dx) + (dy * dy) + (dz * dz);
-            
-            if (distanceSq < bestDistanceSq)
+
+            if (nearestCount < MaxPreloadNearestProbeAttempts || distanceSq < nearestDistances[nearestCount - 1])
             {
-                bestDistanceSq = distanceSq;
-                bestIndex = i;
+                int insertAt = nearestCount < MaxPreloadNearestProbeAttempts ? nearestCount : nearestCount - 1;
+                while (insertAt > 0 && distanceSq < nearestDistances[insertAt - 1])
+                {
+                    nearestIndices[insertAt]   = nearestIndices[insertAt - 1];
+                    nearestDistances[insertAt] = nearestDistances[insertAt - 1];
+                    insertAt--;
+                }
+                nearestIndices[insertAt]   = i;
+                nearestDistances[insertAt] = distanceSq;
+                if (nearestCount < MaxPreloadNearestProbeAttempts)
+                {
+                    nearestCount++;
+                }
             }
 
             if (probe.Z > highestZ)
@@ -994,18 +1044,25 @@ internal sealed class PreloadPredictor
             }
         }
 
-        if (bestIndex < 0)
+        if (nearestCount == 0)
         {
             return false;
         }
 
-        // Try nearest probe first; if blocked, try highest (head area) as fallback.
-        if (TraceSingleJumpAssistProbe(viewerSlot, viewerPawn, targetPawn, eyePosition, bestIndex, hitRadiusSq, drawDebugBeams))
+        for (int n = 0; n < nearestCount; n++)
         {
-            return true;
+            if (TraceSingleJumpAssistProbe(viewerSlot, viewerPawn, targetPawn, eyePosition, nearestIndices[n], hitRadiusSq, drawDebugBeams))
+            {
+                return true;
+            }
         }
 
-        if (highestIndex >= 0 && highestIndex != bestIndex)
+        bool highestAlreadyTried = false;
+        for (int n = 0; n < nearestCount; n++)
+        {
+            if (nearestIndices[n] == highestIndex) { highestAlreadyTried = true; break; }
+        }
+        if (!highestAlreadyTried && highestIndex >= 0)
         {
             return TraceSingleJumpAssistProbe(viewerSlot, viewerPawn, targetPawn, eyePosition, highestIndex, hitRadiusSq, drawDebugBeams);
         }

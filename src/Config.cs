@@ -19,7 +19,7 @@ public sealed class S2AWHConfig : BasePluginConfig
         public bool Enabled { get; set; } = true;
 
         [JsonPropertyName("UpdateFrequencyTicks")]
-        public int UpdateFrequencyTicks { get; set; } = 16;
+        public int UpdateFrequencyTicks { get; set; } = 4;
     }
 
     public sealed class TraceSettings
