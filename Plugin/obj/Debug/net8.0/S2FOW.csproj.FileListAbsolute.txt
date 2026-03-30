@@ -1,0 +1,30 @@
+C:\Users\Admin\Desktop\S2FOW\Plugin\obj\Debug\net8.0\S2FOW.csproj.AssemblyReference.cache
+C:\Users\Admin\Desktop\S2FOW\Plugin\obj\Debug\net8.0\S2FOW.GeneratedMSBuildEditorConfig.editorconfig
+C:\Users\Admin\Desktop\S2FOW\Plugin\obj\Debug\net8.0\S2FOW.AssemblyInfoInputs.cache
+C:\Users\Admin\Desktop\S2FOW\Plugin\obj\Debug\net8.0\S2FOW.AssemblyInfo.cs
+C:\Users\Admin\Desktop\S2FOW\Plugin\obj\Debug\net8.0\S2FOW.csproj.CoreCompileInputs.cache
+C:\Users\Admin\Desktop\S2FOW\Plugin\bin\Debug\net8.0\S2FOW.deps.json
+C:\Users\Admin\Desktop\S2FOW\Plugin\bin\Debug\net8.0\S2FOW.dll
+C:\Users\Admin\Desktop\S2FOW\Plugin\bin\Debug\net8.0\S2FOW.pdb
+C:\Users\Admin\Desktop\S2FOW\Plugin\bin\Debug\net8.0\RayTraceApi.dll
+C:\Users\Admin\Desktop\S2FOW\Plugin\bin\Debug\net8.0\RayTraceApi.pdb
+C:\Users\Admin\Desktop\S2FOW\Plugin\obj\Debug\net8.0\S2FOW.csproj.Up2Date
+C:\Users\Admin\Desktop\S2FOW\Plugin\obj\Debug\net8.0\S2FOW.dll
+C:\Users\Admin\Desktop\S2FOW\Plugin\obj\Debug\net8.0\refint\S2FOW.dll
+C:\Users\Admin\Desktop\S2FOW\Plugin\obj\Debug\net8.0\S2FOW.pdb
+C:\Users\Admin\Desktop\S2FOW\Plugin\obj\Debug\net8.0\ref\S2FOW.dll
+C:\Users\Admin\Desktop\anti hile\S2FOW-ANTIWALLHACK\Plugin\obj\Debug\net8.0\S2FOW.csproj.AssemblyReference.cache
+C:\Users\Admin\Desktop\anti hile\S2FOW-ANTIWALLHACK\Plugin\obj\Debug\net8.0\S2FOW.GeneratedMSBuildEditorConfig.editorconfig
+C:\Users\Admin\Desktop\anti hile\S2FOW-ANTIWALLHACK\Plugin\obj\Debug\net8.0\S2FOW.AssemblyInfoInputs.cache
+C:\Users\Admin\Desktop\anti hile\S2FOW-ANTIWALLHACK\Plugin\obj\Debug\net8.0\S2FOW.AssemblyInfo.cs
+C:\Users\Admin\Desktop\anti hile\S2FOW-ANTIWALLHACK\Plugin\obj\Debug\net8.0\S2FOW.csproj.CoreCompileInputs.cache
+C:\Users\Admin\Desktop\anti hile\S2FOW-ANTIWALLHACK\Plugin\obj\Debug\net8.0\S2FOW.dll
+C:\Users\Admin\Desktop\anti hile\S2FOW-ANTIWALLHACK\Plugin\obj\Debug\net8.0\refint\S2FOW.dll
+C:\Users\Admin\Desktop\anti hile\S2FOW-ANTIWALLHACK\Plugin\obj\Debug\net8.0\S2FOW.pdb
+C:\Users\Admin\Desktop\anti hile\S2FOW-ANTIWALLHACK\Plugin\bin\Debug\net8.0\S2FOW.deps.json
+C:\Users\Admin\Desktop\anti hile\S2FOW-ANTIWALLHACK\Plugin\bin\Debug\net8.0\S2FOW.dll
+C:\Users\Admin\Desktop\anti hile\S2FOW-ANTIWALLHACK\Plugin\bin\Debug\net8.0\S2FOW.pdb
+C:\Users\Admin\Desktop\anti hile\S2FOW-ANTIWALLHACK\Plugin\bin\Debug\net8.0\RayTraceApi.dll
+C:\Users\Admin\Desktop\anti hile\S2FOW-ANTIWALLHACK\Plugin\bin\Debug\net8.0\RayTraceApi.pdb
+C:\Users\Admin\Desktop\anti hile\S2FOW-ANTIWALLHACK\Plugin\obj\Debug\net8.0\S2FOW.csproj.Up2Date
+C:\Users\Admin\Desktop\anti hile\S2FOW-ANTIWALLHACK\Plugin\obj\Debug\net8.0\ref\S2FOW.dll
