@@ -1,0 +1,247 @@
+{
+  "source": {
+    "cs2_root": "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Counter-Strike Global Offensive 730",
+    "phase2_models": [
+      "phase2/characters/models/ctm_sas/ctm_sas_ag2.vmdl_c",
+      "phase2/characters/models/ctm_swat/ctm_swat_variante_ag2.vmdl_c",
+      "phase2/characters/models/tm_balkan/tm_balkan_variantf_ag2.vmdl_c"
+    ],
+    "legacy_reference_model": "characters/models/tm_phoenix/tm_phoenix.vmdl_c"
+  },
+  "validation": {
+    "phase2_models_identical": true,
+    "legacy_max_center_delta": 0.4074,
+    "legacy_max_center_delta_primitive": "hand_l"
+  },
+  "primitive_count": 19,
+  "primitives": [
+    {
+      "index": 0,
+      "name": "head_0",
+      "bone": "head_0",
+      "kind": "Capsule",
+      "sampling": "SupportAndEndpoints",
+      "use_fixed_head_origin": true,
+      "distal_endpoint_is_point1": true,
+      "local_point0": [0.44, 0.0, 69.78],
+      "local_point1": [-1.16, 0.0, 74.28],
+      "radius": 4.3
+    },
+    {
+      "index": 1,
+      "name": "neck_0",
+      "bone": "neck_0",
+      "kind": "Capsule",
+      "sampling": "SupportAndEndpoints",
+      "use_fixed_head_origin": false,
+      "distal_endpoint_is_point1": true,
+      "local_point0": [-3.47, 0.0, 65.4],
+      "local_point1": [-2.86, 0.0, 66.68],
+      "radius": 3.5
+    },
+    {
+      "index": 2,
+      "name": "spine_3",
+      "bone": "spine_3",
+      "kind": "Capsule",
+      "sampling": "SupportAndEndpoints",
+      "use_fixed_head_origin": false,
+      "distal_endpoint_is_point1": true,
+      "local_point0": [-3.92, -6.0, 61.31],
+      "local_point1": [-3.92, 6.0, 61.31],
+      "radius": 5.0
+    },
+    {
+      "index": 3,
+      "name": "spine_2",
+      "bone": "spine_2",
+      "kind": "Capsule",
+      "sampling": "SupportAndEndpoints",
+      "use_fixed_head_origin": false,
+      "distal_endpoint_is_point1": true,
+      "local_point0": [-3.04, -4.1, 57.29],
+      "local_point1": [-3.04, 4.1, 57.29],
+      "radius": 6.2
+    },
+    {
+      "index": 4,
+      "name": "spine_1",
+      "bone": "spine_1",
+      "kind": "Capsule",
+      "sampling": "SupportAndEndpoints",
+      "use_fixed_head_origin": false,
+      "distal_endpoint_is_point1": true,
+      "local_point0": [-1.5, -2.4, 51.6],
+      "local_point1": [-1.9, 2.4, 51.6],
+      "radius": 6.5
+    },
+    {
+      "index": 5,
+      "name": "spine_0",
+      "bone": "spine_0",
+      "kind": "Capsule",
+      "sampling": "SupportAndEndpoints",
+      "use_fixed_head_origin": false,
+      "distal_endpoint_is_point1": true,
+      "local_point0": [-1.81, 3.1, 45.06],
+      "local_point1": [-1.81, -3.1, 45.06],
+      "radius": 6.0
+    },
+    {
+      "index": 6,
+      "name": "pelvis",
+      "bone": "pelvis",
+      "kind": "Capsule",
+      "sampling": "SupportAndEndpoints",
+      "use_fixed_head_origin": false,
+      "distal_endpoint_is_point1": true,
+      "local_point0": [-1.75, -3.2, 40.12],
+      "local_point1": [-1.75, 3.2, 40.12],
+      "radius": 6.0
+    },
+    {
+      "index": 7,
+      "name": "ankle_l",
+      "bone": "ankle_l",
+      "kind": "Capsule",
+      "sampling": "SupportAndEndpoints",
+      "use_fixed_head_origin": false,
+      "distal_endpoint_is_point1": true,
+      "local_point0": [-5.26, 4.67, 1.33],
+      "local_point1": [3.71, 5.91, 1.14],
+      "radius": 2.6
+    },
+    {
+      "index": 8,
+      "name": "ankle_r",
+      "bone": "ankle_r",
+      "kind": "Capsule",
+      "sampling": "SupportAndEndpoints",
+      "use_fixed_head_origin": false,
+      "distal_endpoint_is_point1": false,
+      "local_point0": [3.69, -5.96, 1.16],
+      "local_point1": [-5.27, -4.73, 1.31],
+      "radius": 2.6
+    },
+    {
+      "index": 9,
+      "name": "leg_lower_l",
+      "bone": "leg_lower_l",
+      "kind": "Capsule",
+      "sampling": "SupportMidAndDistal",
+      "use_fixed_head_origin": false,
+      "distal_endpoint_is_point1": true,
+      "local_point0": [-1.36, 4.7, 21.03],
+      "local_point1": [-3.34, 5.29, 4.25],
+      "radius": 4.0
+    },
+    {
+      "index": 10,
+      "name": "leg_lower_r",
+      "bone": "leg_lower_r",
+      "kind": "Capsule",
+      "sampling": "SupportMidAndDistal",
+      "use_fixed_head_origin": false,
+      "distal_endpoint_is_point1": true,
+      "local_point0": [-1.74, -4.6, 21.07],
+      "local_point1": [-3.34, -5.29, 4.25],
+      "radius": 4.0
+    },
+    {
+      "index": 11,
+      "name": "arm_upper_l",
+      "bone": "arm_upper_l",
+      "kind": "Capsule",
+      "sampling": "SupportMidAndDistal",
+      "use_fixed_head_origin": false,
+      "distal_endpoint_is_point1": true,
+      "local_point0": [-3.34, 7.18, 61.66],
+      "local_point1": [-4.44, 14.33, 53.1],
+      "radius": 3.3
+    },
+    {
+      "index": 12,
+      "name": "arm_upper_r",
+      "bone": "arm_upper_r",
+      "kind": "Capsule",
+      "sampling": "SupportMidAndDistal",
+      "use_fixed_head_origin": false,
+      "distal_endpoint_is_point1": true,
+      "local_point0": [-3.34, -7.18, 61.66],
+      "local_point1": [-4.44, -14.33, 53.1],
+      "radius": 3.3
+    },
+    {
+      "index": 13,
+      "name": "arm_lower_l",
+      "bone": "arm_lower_l",
+      "kind": "Capsule",
+      "sampling": "SupportMidAndDistal",
+      "use_fixed_head_origin": false,
+      "distal_endpoint_is_point1": true,
+      "local_point0": [-4.5, 14.7, 52.65],
+      "local_point1": [-1.55, 20.35, 44.95],
+      "radius": 3.0
+    },
+    {
+      "index": 14,
+      "name": "arm_lower_r",
+      "bone": "arm_lower_r",
+      "kind": "Capsule",
+      "sampling": "SupportMidAndDistal",
+      "use_fixed_head_origin": false,
+      "distal_endpoint_is_point1": true,
+      "local_point0": [-4.5, -14.7, 52.65],
+      "local_point1": [-1.63, -19.97, 44.64],
+      "radius": 3.0
+    },
+    {
+      "index": 15,
+      "name": "hand_l",
+      "bone": "hand_l",
+      "kind": "Capsule",
+      "sampling": "SupportAndEndpoints",
+      "use_fixed_head_origin": false,
+      "distal_endpoint_is_point1": true,
+      "local_point0": [-1.28, 20.72, 43.95],
+      "local_point1": [-0.7, 21.88, 40.49],
+      "radius": 2.3
+    },
+    {
+      "index": 16,
+      "name": "hand_r",
+      "bone": "hand_r",
+      "kind": "Capsule",
+      "sampling": "SupportAndEndpoints",
+      "use_fixed_head_origin": false,
+      "distal_endpoint_is_point1": true,
+      "local_point0": [-1.26, -20.71, 43.95],
+      "local_point1": [-0.72, -21.78, 40.61],
+      "radius": 2.3
+    },
+    {
+      "index": 17,
+      "name": "leg_upper_l",
+      "bone": "leg_upper_l",
+      "kind": "Capsule",
+      "sampling": "SupportMidAndDistal",
+      "use_fixed_head_origin": false,
+      "distal_endpoint_is_point1": true,
+      "local_point0": [-1.73, 3.8, 37.76],
+      "local_point1": [-1.03, 4.53, 22.59],
+      "radius": 5.0
+    },
+    {
+      "index": 18,
+      "name": "leg_upper_r",
+      "bone": "leg_upper_r",
+      "kind": "Capsule",
+      "sampling": "SupportMidAndDistal",
+      "use_fixed_head_origin": false,
+      "distal_endpoint_is_point1": true,
+      "local_point0": [-2.08, -4.32, 37.78],
+      "local_point1": [-1.88, -5.02, 22.59],
+      "radius": 5.0
+    }
+  ]
+}
