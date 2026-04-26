@@ -36,10 +36,11 @@ S2FOW also enforces an orphan-prevention invariant every CheckTransmit frame: if
 ## Requirements
 
 - [CounterStrikeSharp](https://github.com/roflmuffin/CounterStrikeSharp) (API >= 276)
-- RayTraceImpl and RayTraceApi installed on the server
+- [Metamod:Source](https://www.sourcemm.net/downloads.php?branch=dev) (Dev build)
+- [Ray-Trace](https://github.com/FUNPLAY-pro-CS2/Ray-Trace) (RayTraceImpl and RayTraceApi installed on the server)
 - .NET 8
 
-CounterStrikeSharp, RayTraceImpl, and RayTraceApi are external server prerequisites. They are not bundled in the S2FOW release package.
+CounterStrikeSharp, Metamod:Source, and Ray-Trace are external server prerequisites. They are not bundled in the S2FOW release package.
 
 ## Build
 
@@ -52,8 +53,8 @@ Output: `Plugin/bin/Release/net8.0/`
 ## Install
 
 1. Build or download the release
-2. Install CounterStrikeSharp on the server
-3. Install RayTraceImpl and RayTraceApi on the server
+2. Install Metamod:Source and CounterStrikeSharp on the server
+3. Install Ray-Trace (RayTraceImpl and RayTraceApi) on the server
 4. Merge the release ZIP's `addons/` folder into your server's `csgo/addons/` folder
 5. If installing manually, copy only `S2FOW.dll` and `S2FOW.deps.json` to `csgo/addons/counterstrikesharp/plugins/S2FOW/`
 6. Restart the server - config generates automatically on first run
