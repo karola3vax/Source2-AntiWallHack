@@ -1,0 +1,5 @@
+C:\Users\karola3vax\Desktop\Source2-AntiWallHack-main\Plugin\obj\Debug\net8.0\S2FOW.csproj.AssemblyReference.cache
+C:\Users\karola3vax\Desktop\Source2-AntiWallHack-main\Plugin\obj\Debug\net8.0\S2FOW.GeneratedMSBuildEditorConfig.editorconfig
+C:\Users\karola3vax\Desktop\Source2-AntiWallHack-main\Plugin\obj\Debug\net8.0\S2FOW.AssemblyInfoInputs.cache
+C:\Users\karola3vax\Desktop\Source2-AntiWallHack-main\Plugin\obj\Debug\net8.0\S2FOW.AssemblyInfo.cs
+C:\Users\karola3vax\Desktop\Source2-AntiWallHack-main\Plugin\obj\Debug\net8.0\S2FOW.csproj.CoreCompileInputs.cache

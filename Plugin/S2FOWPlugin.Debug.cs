@@ -1,39 +1,52 @@
+using System.Text;
 using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
 using S2FOW.Core;
 using S2FOW.Util;
-using System.Text;
 
 namespace S2FOW;
 
+/// <summary>
+/// Debug visualization and console output — startup banner, in-game HUD overlay,
+/// and debug beam/point management.
+///
+/// When Debug.ShowRayCount is enabled, every human player sees a HUD overlay showing:
+///   - How many enemies are being checked.
+///   - How many raycasts (direct skeleton + backup AABB) were performed.
+///   - Why each target was shown or hidden (line-of-sight, smoke, death grace, etc.).
+///   - Total server-wide raycast count for this frame.
+///
+/// The overlay is rendered as HTML using PrintToCenterHtml, which CS2 renders as a
+/// semi-transparent panel in the center of the screen.
+/// </summary>
 public partial class S2FOWPlugin
 {
+    // ────────────────────────────────────────────────────────────────────────
+    //  Startup banner
+    // ────────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Prints the ASCII art "S2FOW" logo and version info to the server console
+    /// when the plugin loads. Uses magenta coloring for visual prominence.
+    /// </summary>
     private void PrintStartupBanner()
     {
-        string[] banner =
-        [
-            "",
-            "  ███████╗  ██████╗  ███████╗  ██████╗  ██╗    ██╗",
-            "  ██╔════╝  ╚════██╗ ██╔════╝ ██╔═══██╗ ██║    ██║",
-            "  ███████╗   █████╔╝ █████╗   ██║   ██║ ██║ █╗ ██║",
-            "  ╚════██║  ██╔═══╝  ██╔══╝   ██║   ██║ ██║███╗██║",
-            "  ███████║  ███████╗ ██║      ╚██████╔╝ ╚███╔███╔╝",
-            "  ╚══════╝  ╚══════╝ ╚═╝       ╚═════╝   ╚══╝╚══╝ ",
-            "           SERVER-SIDE ANTI-WALLHACK FOR CS2           ",
-            $"           Version {ModuleVersion}  |  Config v{Config.Version}  |  API {MinimumApiVersionRequired}           ",
-            $"           Author: {ModuleAuthor}           ",
-            $"           Steam: {AuthorSteamProfile}           ",
-            $"           Discord: {AuthorDiscord}           ",
-            ""
-        ];
+        string[] banner = PluginText.BuildBanner(
+            ModuleVersion,
+            Config.Version,
+            MinimumApiVersionRequired,
+            ModuleAuthor,
+            AuthorSteamProfile,
+            AuthorDiscord);
 
         ConsoleColor previousColor = Console.ForegroundColor;
         try
         {
-            WriteBannerLines(banner, ConsoleColor.Magenta, 0, 6);
-            WriteBannerLines(banner, ConsoleColor.DarkMagenta, 6, 2);
-            WriteBannerLines(banner, ConsoleColor.Magenta, 8, 1);
-            WriteBannerLines(banner, ConsoleColor.DarkMagenta, 9, 3);
+            // ASCII art lines in bright magenta.
+            WriteBannerLines(banner, ConsoleColor.Magenta, 0, Math.Min(7, banner.Length));
+            // Version/author lines in darker magenta.
+            if (banner.Length > 7)
+                WriteBannerLines(banner, ConsoleColor.DarkMagenta, 7, banner.Length - 7);
         }
         finally
         {
@@ -41,6 +54,7 @@ public partial class S2FOWPlugin
         }
     }
 
+    /// <summary>Writes a block of banner lines to the console in a specific color.</summary>
     private static void WriteBannerLines(string[] lines, ConsoleColor color, int startIndex, int count)
     {
         Console.ForegroundColor = color;
@@ -48,15 +62,26 @@ public partial class S2FOWPlugin
             Console.WriteLine(lines[startIndex + i]);
     }
 
+    // ────────────────────────────────────────────────────────────────────────
+    //  Debug output per frame
+    // ────────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Called at the end of each CheckTransmit frame to update all debug visualizations.
+    /// Updates the in-world beam visuals (target points, ray lines) and the HUD overlay.
+    /// </summary>
     private void UpdateDebugOutputs(ReadOnlySpan<Models.PlayerSnapshot> snapshots, List<CCSPlayerController> players, int currentTick)
     {
+        // Update 3D in-world beams (points on enemies and/or ray lines).
         if ((Config.Debug.ShowTargetPoints || Config.Debug.ShowRayLines) && _visibilityManager != null)
             _debugAabbRenderer?.Update(snapshots, _visibilityManager, currentTick);
 
+        // Update the on-screen HUD overlay with ray counts and decision breakdowns.
         if (Config.Debug.ShowRayCount)
             UpdateTraceCountOverlay(players);
     }
 
+    /// <summary>Updates the trace count HUD overlay for all connected human players.</summary>
     private void UpdateTraceCountOverlay(List<CCSPlayerController> players)
     {
         if (!Config.Debug.ShowRayCount)
@@ -66,6 +91,11 @@ public partial class S2FOWPlugin
             UpdateTraceCountOverlay(players[i]);
     }
 
+    /// <summary>
+    /// Updates the trace count HUD overlay for a single player.
+    /// Gathers this player's per-frame trace counts and decision reasons
+    /// from the VisibilityManager, then renders them as an HTML panel.
+    /// </summary>
     private void UpdateTraceCountOverlay(CCSPlayerController controller)
     {
         if (_visibilityManager == null)
@@ -75,94 +105,65 @@ public partial class S2FOWPlugin
         if (!FowConstants.IsValidSlot(slot) || controller.IsBot)
             return;
 
+        // Get this observer's raycasting stats for the current frame.
         _visibilityManager.GetObserverTraceCounts(
             slot,
-            out int skeleton,
-            out int aabb,
-            out int aim,
-            out int total,
-            out int targets,
-            out int debugPoints,
-            out int debugFallbackPoints);
+            out int skeleton,       // Rays cast to skeleton body points.
+            out int aabb,           // Rays cast to AABB fallback corners.
+            out int total,          // Total rays (skeleton + AABB).
+            out int targets,        // How many enemies were checked.
+            out int debugPoints,    // Number of check points rendered.
+            out int debugFallbackPoints);  // Number of fallback points rendered.
+
+        // Get this observer's decision breakdown (why each target was shown/hidden).
         _visibilityManager.GetObserverDecisionCounts(
             slot,
-            out int roundStart,
-            out int deathForce,
-            out int distanceCull,
-            out int smokeBlocked,
-            out int crosshairReveal,
-            out int cacheHit,
-            out int liveLos,
-            out int peekGrace,
-            out int budgetReuse,
-            out int budgetFailClosed,
-            out int budgetFailOpen,
-            out int fovFull,
-            out int fovPeripheral,
-            out int fovRear);
+            out int roundStart,     // Targets shown because of round-start grace.
+            out int deathForce,     // Targets shown because they just died.
+            out int smokeBlocked,   // Targets hidden because smoke blocked all rays.
+            out int liveLos,        // Targets checked via actual line-of-sight rays.
+            out int budgetFailOpen); // Targets force-shown because ray budget ran out.
+
         int serverTotalRays = _raycastEngine?.RaycastsThisFrame ?? 0;
-        long serverMinRays = _perfMonitor?.MinRaycastsPerFrame ?? 0;
-        long serverMaxRays = _perfMonitor?.PeakRaycastsPerFrame ?? 0;
 
-        int currentTick = Server.TickCount;
-        if (currentTick >= _nextServerAvgOverlayRefreshTick)
-        {
-            int avgRefreshTicks = Math.Max(1, (int)MathF.Round(1.0f / Server.TickInterval));
-            _nextServerAvgOverlayRefreshTick = currentTick + avgRefreshTicks;
-            _displayedServerAvgRaycasts = _perfMonitor?.AvgRaycastsPerFrame ?? 0.0;
-        }
-
-        if (currentTick < _nextTraceOverlayUpdateTick[slot])
-            return;
-
-        int updateIntervalTicks = Math.Max(1, (int)MathF.Round(0.05f / Server.TickInterval));
-        _nextTraceOverlayUpdateTick[slot] = currentTick + updateIntervalTicks;
-
+        // Render the overlay HTML and send it to the player's screen.
         controller.PrintToCenterHtml(
             BuildTraceOverlayHtml(
                 RaycastEngine.VisibilityPrimitiveCount,
                 skeleton,
                 aabb,
-                aim,
                 total,
                 targets,
                 debugPoints,
                 debugFallbackPoints,
                 serverTotalRays,
-                serverMinRays,
-                _displayedServerAvgRaycasts,
-                serverMaxRays,
                 BuildDecisionSummaryHtml(
                     roundStart,
                     deathForce,
-                    distanceCull,
                     smokeBlocked,
-                    crosshairReveal,
-                    cacheHit,
                     liveLos,
-                    peekGrace,
-                    budgetReuse,
-                    budgetFailClosed,
-                    budgetFailOpen,
-                    fovFull,
-                    fovPeripheral,
-                    fovRear)),
+                    budgetFailOpen)),
             1);
     }
 
+    // ────────────────────────────────────────────────────────────────────────
+    //  HTML builders for the debug overlay
+    // ────────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Builds the complete HTML for the debug overlay panel.
+    /// Shows enemy count, ray breakdown (direct vs backup), point counts,
+    /// decision reasons, and server-wide total rays.
+    /// </summary>
     private static string BuildTraceOverlayHtml(
         int primitives,
         int skeleton,
         int aabb,
-        int aim,
         int total,
         int targets,
         int debugPoints,
         int debugFallbackPoints,
         int serverTotalRays,
-        long serverMinRays,
-        double serverAvgRays,
-        long serverMaxRays,
         string decisionSummary)
     {
         return $"""
@@ -176,43 +177,36 @@ public partial class S2FOWPlugin
 <font color='#d9d9d9'>|</font>
 <font color='#8fefff'>DIRECT</font> <font color='#ffffff'>{skeleton}</font>
 <font color='#d9d9d9'>|</font>
-<font color='#a8c7ff'>BACKUP</font> <font color='#ffffff'>{aabb}</font>
-<font color='#d9d9d9'>|</font>
-<font color='#ffcc8a'>AIMING</font> <font color='#ffffff'>{aim}</font><br/>
+<font color='#a8c7ff'>BACKUP</font> <font color='#ffffff'>{aabb}</font><br/>
 <font color='#ffffff'>DOTS</font> <font color='#ffffff'>{debugPoints}</font>
 <font color='#d9d9d9'>|</font>
 <font color='#c4d4ff'>EXTRA</font> <font color='#ffffff'>{debugFallbackPoints}</font><br/>
 <font color='#ffffff'>WHY</font> {decisionSummary}<br/>
-<font color='#ffb8ec'>SERVER ALL</font> <font color='#ffffff'>{serverTotalRays}</font>
-<font color='#d9d9d9'>|</font>
-<font color='#8fefff'>MIN</font> <font color='#ffffff'>{serverMinRays}</font>
-<font color='#d9d9d9'>|</font>
-<font color='#ffe7a3'>AVG</font> <font color='#ffffff'>{serverAvgRays:F1}</font>
-<font color='#d9d9d9'>|</font>
-<font color='#ff9b9b'>MAX</font> <font color='#ffffff'>{serverMaxRays}</font>
+<font color='#ffb8ec'>SERVER THIS FRAME</font> <font color='#ffffff'>{serverTotalRays}</font>
 </div>
 </font>
 """;
     }
 
+    /// <summary>
+    /// Builds the "WHY" line of the debug overlay — a colored summary of why each
+    /// target was shown or hidden. Each reason gets a different color:
+    ///   - DIRECT (cyan): checked via line-of-sight rays.
+    ///   - SMOKE (purple): hidden because smoke blocked all rays.
+    ///   - START (gold): shown because of round-start grace period.
+    ///   - DEAD (red): shown because they just died (death grace).
+    ///   - LOAD SHOW (green): force-shown because the ray budget ran out.
+    /// </summary>
     private static string BuildDecisionSummaryHtml(
         int roundStart,
         int deathForce,
-        int distanceCull,
         int smokeBlocked,
-        int crosshairReveal,
-        int cacheHit,
         int liveLos,
-        int peekGrace,
-        int budgetReuse,
-        int budgetFailClosed,
-        int budgetFailOpen,
-        int fovFull,
-        int fovPeripheral,
-        int fovRear)
+        int budgetFailOpen)
     {
         StringBuilder builder = new();
 
+        // Helper that appends a colored "LABEL count" token, separated by pipes.
         void AppendToken(string label, int count, string color)
         {
             if (count <= 0)
@@ -231,18 +225,9 @@ public partial class S2FOWPlugin
         }
 
         AppendToken("DIRECT", liveLos, "#7fe7ff");
-        AppendToken("REUSED", cacheHit, "#93f7b0");
-        AppendToken("AIMING", crosshairReveal, "#ffb86c");
         AppendToken("SMOKE", smokeBlocked, "#b48cff");
-        AppendToken("SMOOTH", peekGrace, "#f6c177");
         AppendToken("START", roundStart, "#f0d58a");
         AppendToken("DEAD", deathForce, "#ff9d9d");
-        AppendToken("TOO FAR", distanceCull, "#9ab7ff");
-        AppendToken("FRONT", fovFull, "#7fe7ff");
-        AppendToken("SIDE", fovPeripheral, "#93f7b0");
-        AppendToken("BEHIND", fovRear, "#ff6b6b");
-        AppendToken("LOAD REUSE", budgetReuse, "#8be9fd");
-        AppendToken("LOAD HIDE", budgetFailClosed, "#ff6b6b");
         AppendToken("LOAD SHOW", budgetFailOpen, "#50fa7b");
 
         return builder.Length > 0

@@ -1,49 +1,60 @@
 using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
 using CounterStrikeSharp.API.Modules.Utils;
-using S2FOW.Config;
 using S2FOW.Core;
+using S2FOW.Models;
 using S2FOW.Util;
 
 namespace S2FOW;
 
+/// <summary>
+/// The CheckTransmit hot path — this is the heart of the anti-wallhack system.
+///
+/// Every network frame (64 times per second), the Source 2 engine prepares a list of
+/// entities to send to each connected client. This is called the "transmit list".
+///
+/// Our hook intercepts that list and removes enemy players that the client should not
+/// be able to see. Because the server never sends the enemy data, no wallhack on the
+/// client can reveal them — the data simply does not exist on their machine.
+///
+/// The overall flow each frame:
+///   1. Take a snapshot of every player's position, speed, team, etc.
+///   2. For each human player (the "observer"), look at every enemy (the "target").
+///   3. Ask the VisibilityManager: "Can this observer see this target?"
+///   4. If not → remove the target's pawn and weapon entities from the transmit list.
+///   5. If transitioning from hidden to visible → set NOINTERP to prevent rubber-banding.
+/// </summary>
 public partial class S2FOWPlugin
 {
-    // CheckTransmit hot path.
+    /// <summary>
+    /// Called by the engine every network frame with the list of transmit info
+    /// for all connected clients. This is where we actually hide enemy players.
+    /// </summary>
     private void OnCheckTransmit(CCheckTransmitInfoList infoList)
     {
+        // Do nothing if the plugin is not ready or is disabled in config.
         if (!_initialized || _visibilityManager == null || _raycastEngine == null)
             return;
 
         if (!Config.General.Enabled)
             return;
 
+        // Get the list of all connected players and clear any pending NOINTERP flags.
         var players = Utilities.GetPlayers();
         ClearPendingNoInterp(players);
+
+        // Start the performance timer for this frame.
         _perfMonitor?.BeginFrame();
         _raycastEngine.ResetFrameCounter();
         int currentTick = Server.TickCount;
+        _raycastEngine.SetFrameBudget(Config.Performance.MaxRaycastsPerFrame);
 
-        // Adaptive budget: scale with alive player count.
-        int frameBudget = Config.Performance.MaxRaycastsPerFrame;
-        if (Config.Performance.AdaptiveBudgetEnabled)
-        {
-            int aliveCount = 0;
-            for (int i = 0; i < players.Count; i++)
-            {
-                var p = players[i];
-                if (p.IsValid && p.PawnIsAlive)
-                    aliveCount++;
-            }
-            int scaledBudget = Config.Performance.BaseBudgetPerPlayer * aliveCount;
-            frameBudget = Math.Min(scaledBudget, Config.Performance.MaxAdaptiveBudget);
-            _raycastEngine.SetFrameBudget(frameBudget);
-        }
-
+        // Tell the visibility manager what tick we are on so it can track time-based decisions.
         _visibilityManager.SetFrameTick(currentTick);
         _visibilityManager.BeginFrame();
-        Array.Clear(_hiddenPairs);
 
+        // During warmup, freeze time, and round end, skip all visibility work —
+        // everyone should see everyone.
         if (_visibilityManager.ShouldBypassVisibilityWorkForCurrentPhase())
         {
             _debugAabbRenderer?.Clear();
@@ -51,72 +62,14 @@ public partial class S2FOWPlugin
             return;
         }
 
-        // Build player snapshots once per frame
-        _playerStateCache!.BuildSnapshots(players, currentTick);
-
-        // Update projectile positions once per frame
-        if (Config.AntiWallhack.BlockGrenadeESP)
-            _projectileTracker?.UpdatePositions();
+        // Take a snapshot of every player's current state (position, speed, team, weapons, etc.).
+        // This is done once per frame so all visibility checks use consistent data.
+        _playerStateCache!.BuildSnapshots(players);
 
         var snapshots = _playerStateCache.Snapshots;
         var activeSlots = _playerStateCache.ActiveSlots;
-        var terroristSlots = _playerStateCache.TerroristSlots;
-        var counterTerroristSlots = _playerStateCache.CounterTerroristSlots;
-        Span<int> syntheticBotObserverSlots = stackalloc int[FowConstants.MaxSlots];
-        int syntheticBotObserverCount = 0;
-        for (int i = 0; i < activeSlots.Length && syntheticBotObserverCount < syntheticBotObserverSlots.Length; i++)
-        {
-            int slot = activeSlots[i];
-            ref readonly var botObserver = ref snapshots[slot];
-            if (!botObserver.IsValid || !botObserver.IsAlive || !botObserver.IsBot)
-                continue;
 
-            if (botObserver.Team != CsTeam.Terrorist && botObserver.Team != CsTeam.CounterTerrorist)
-                continue;
-
-            syntheticBotObserverSlots[syntheticBotObserverCount++] = slot;
-        }
-        _playerStateCache.CollectUnresolvedEntitiesToHide(
-            _unresolvedEntitiesToHide,
-            currentTick,
-            Config.General.SecurityProfile == SecurityProfile.Strict);
-
-        bool shouldBlockBombRadarEsp = ShouldBlockBombRadarESP();
-        bool shouldHidePlantedBombEntity = ShouldHidePlantedBombEntity();
-        bool hasTrackedPlantedC4 = false;
-        CPlantedC4? trackedPlantedC4 = null;
-        if ((shouldBlockBombRadarEsp || shouldHidePlantedBombEntity) &&
-            TryGetTrackedPlantedC4(out var resolvedTrackedPlantedC4))
-        {
-            hasTrackedPlantedC4 = true;
-            trackedPlantedC4 = resolvedTrackedPlantedC4;
-        }
-
-        bool anyHiddenPlayerPairs = false;
-
-        // Per-observer budget fairness: count eligible observers first so we
-        // can distribute the frame ray budget evenly. Without this, the first
-        // few observers in slot order can consume the entire budget and starve
-        // later observers, leaving them with only cache fallback.
-        bool perObserverFairness = Config.Performance.PerObserverBudgetFairnessEnabled && frameBudget > 0;
-        int eligibleObserverCount = 0;
-        if (perObserverFairness)
-        {
-            foreach ((CCheckTransmitInfo _, CCSPlayerController? ctrl) in infoList)
-            {
-                if (ctrl == null || !FowConstants.IsValidSlot(ctrl.Slot))
-                    continue;
-                ref readonly var snap = ref snapshots[ctrl.Slot];
-                if (snap.IsValid && snap.IsAlive && !snap.IsBot &&
-                    (snap.Team == CsTeam.Terrorist || snap.Team == CsTeam.CounterTerrorist))
-                    eligibleObserverCount++;
-            }
-
-            eligibleObserverCount += syntheticBotObserverCount;
-        }
-        int processedObservers = 0;
-
-        // Process each observer
+        // Process each observer (a human player who is alive and on a real team).
         foreach ((CCheckTransmitInfo info, CCSPlayerController? controller) in infoList)
         {
             if (controller == null)
@@ -126,256 +79,152 @@ public partial class S2FOWPlugin
             if (!FowConstants.IsValidSlot(observerSlot))
                 continue;
 
+            // If another hook or the engine already removed a pawn, make sure no
+            // associated child entities remain orphaned in this transmit set.
+            EnforcePawnChildInvariant(info, activeSlots, snapshots);
+
             ref readonly var observer = ref snapshots[observerSlot];
             if (!observer.IsValid || !observer.IsAlive)
                 continue;
 
-            // Skip spectators (team None/Spectator). They should see everything.
+            // Spectators should see everything — only filter for T and CT players.
             if (observer.Team != CsTeam.Terrorist && observer.Team != CsTeam.CounterTerrorist)
                 continue;
 
-            // Skip bot observers. They do not have wallhack clients.
+            // Bots don't run wallhack clients, so don't waste CPU filtering for them.
             if (observer.IsBot)
                 continue;
 
-            // Per-observer budget fairness: set the engine budget ceiling so this
-            // observer can use at most its fair share plus any leftover from previous.
-            if (perObserverFairness && eligibleObserverCount > 0)
-            {
-                int raysUsedSoFar = _raycastEngine.RaycastsThisFrame;
-                int remainingBudget = frameBudget - raysUsedSoFar;
-                int remainingObservers = eligibleObserverCount - processedObservers;
-                int fairShare = remainingBudget / Math.Max(1, remainingObservers);
-                int minShare = (int)(frameBudget * Config.Performance.MinObserverBudgetShare);
-                int observerBudget = Math.Max(fairShare, minShare);
-                int budgetCeiling = Math.Min(raysUsedSoFar + observerBudget, frameBudget);
-                _raycastEngine.SetFrameBudget(budgetCeiling);
-                processedObservers++;
-            }
-
-            int observerPairBase = observerSlot * FowConstants.MaxSlots;
-            bool observerHasHiddenEnemy = false;
-            bool observerHasDeadEnemy = false;
-
-            for (int i = 0; i < _unresolvedEntitiesToHide.Count; i++)
-            {
-                int unresolvedIdx = _unresolvedEntitiesToHide[i];
-                if (FowConstants.IsValidEntityIndex(unresolvedIdx))
-                    info.TransmitEntities.Remove(unresolvedIdx);
-            }
-
+            // In debug mode, hide other observers' debug point beams so they do not clutter the view.
             if (Config.Debug.ShowTargetPoints && _debugAabbRenderer != null)
                 _debugAabbRenderer.RemoveOtherObserverPointEntities(info, observerSlot);
 
-            // Check each enemy target, including recently dead enemies that may
-            // still be force-visible for a short post-death grace window.
+            // Check each enemy target for this observer.
             for (int i = 0; i < activeSlots.Length; i++)
             {
                 int targetSlot = activeSlots[i];
                 ref readonly var target = ref snapshots[targetSlot];
 
+                // Skip invalid targets, self, and teammates.
                 if (!target.IsValid || target.Slot == observerSlot || target.Team == observer.Team)
                     continue;
 
+                // Dead/dying players are always transmitted. Hiding a pawn while
+                // the engine is creating death/ragdoll deltas is the crash case
+                // CounterStrikeSharp explicitly warns plugins about.
                 if (!target.IsAlive)
-                    observerHasDeadEnemy = true;
+                {
+                    _visibilityManager.MarkForceVisible(observerSlot, target.Slot);
+                    _perfMonitor?.RecordDeadForceTransmit();
+                    continue;
+                }
 
-                bool shouldTransmit = target.IsAlive
-                    ? _visibilityManager.ShouldTransmit(in observer, in target, currentTick)
-                    : _visibilityManager.ShouldTransmitRecentlyDead(target.Slot, currentTick);
+                // A live pawn without a valid controller is not a normal LOS target.
+                // Clear it only together with its known associated closure.
+                if (!target.HasValidPawnController)
+                {
+                    if (RemoveHiddenTargetEntities(info, targetSlot))
+                        _perfMonitor?.RecordInvalidControllerPawnClear();
+                    continue;
+                }
 
+                // If dependency collection was incomplete, fail open. A wallhack
+                // leak is preferable to orphaning a networked child entity.
+                if (!target.CanHideControlledLivePawn)
+                {
+                    _visibilityManager.MarkForceVisible(observerSlot, target.Slot);
+                    _perfMonitor?.RecordUnsafeHideSkipped();
+                    continue;
+                }
+
+                // For alive enemies, run the full visibility check (rays, smoke, etc.).
+                bool shouldTransmit = _visibilityManager.ShouldTransmit(in observer, in target, currentTick);
+
+                // If the target should be hidden, remove their entities from the transmit list.
                 if (!shouldTransmit)
                 {
-                    _hiddenPairs[observerPairBase + targetSlot] = true;
-                    observerHasHiddenEnemy = true;
-                    anyHiddenPlayerPairs = true;
-                    RemoveHiddenTargetEntities(info, targetSlot, in observer, currentTick);
-                }
-            }
-
-            if (shouldHidePlantedBombEntity &&
-                hasTrackedPlantedC4 &&
-                trackedPlantedC4 != null &&
-                ShouldHidePlantedC4FromObserver(observerSlot, snapshots, trackedPlantedC4, currentTick))
-            {
-                int c4Index = (int)trackedPlantedC4.Index;
-                if (FowConstants.IsValidEntityIndex(c4Index))
-                    info.TransmitEntities.Remove(c4Index);
-
-                var c4EffectEntity = trackedPlantedC4.EffectEntity.Value;
-                int c4EffectIndex = c4EffectEntity != null && c4EffectEntity.IsValid ? (int)c4EffectEntity.Index : 0;
-                if (FowConstants.IsValidEntityIndex(c4EffectIndex))
-                    info.TransmitEntities.Remove(c4EffectIndex);
-            }
-
-            // Remove projectiles owned by hidden enemies
-            if (Config.AntiWallhack.BlockGrenadeESP &&
-                _projectileTracker != null &&
-                (observerHasHiddenEnemy || observerHasDeadEnemy))
-            {
-                float revealDistSqr = Config.AntiWallhack.GrenadeRevealDistance *
-                                      Config.AntiWallhack.GrenadeRevealDistance;
-
-                using var projEnum = _projectileTracker.GetActiveProjectiles();
-                while (projEnum.MoveNext())
-                {
-                    var proj = projEnum.Current;
-                    int projEntityIndex = proj.Key;
-                    int ownerSlot = proj.Value;
-
-                    // Only hide projectiles from enemy team
-                    if (!FowConstants.IsValidSlot(ownerSlot))
-                        continue;
-
-                    ref readonly var ownerSnap = ref snapshots[ownerSlot];
-                    if (!ownerSnap.IsValid || ownerSnap.Team == observer.Team)
-                        continue;
-
-                    // Check if the owner is hidden from this observer
-                    if (!ownerSnap.IsAlive ||
-                        _hiddenPairs[observerPairBase + ownerSlot])
-                    {
-                        // Proximity override: don't hide if projectile is close to observer
-                        if (revealDistSqr > 0.0f &&
-                            _projectileTracker.TryGetProjectilePosition(projEntityIndex, out float px, out float py, out float pz))
-                        {
-                            float distSqr = Util.VectorMath.DistanceSquared(
-                                observer.EyePosX, observer.EyePosY, observer.EyePosZ,
-                                px, py, pz);
-
-                            if (distSqr <= revealDistSqr)
-                                continue; // Close enough to observer - reveal it
-                        }
-
-                        if (FowConstants.IsValidEntityIndex(projEntityIndex))
-                            info.TransmitEntities.Remove(projEntityIndex);
-                    }
-                }
-            }
-
-            // Remove bullet impact decals/effects from hidden enemies
-            if (Config.AntiWallhack.BlockBulletImpactESP &&
-                _impactTracker != null &&
-                observerHasHiddenEnemy)
-            {
-                using var impactEnum = _impactTracker.GetActiveImpactEntities();
-                while (impactEnum.MoveNext())
-                {
-                    var impact = impactEnum.Current;
-                    int impactEntityIndex = impact.Key;
-                    int shooterSlot = impact.Value;
-
-                    if (!FowConstants.IsValidSlot(shooterSlot))
-                        continue;
-
-                    ref readonly var shooterSnap = ref snapshots[shooterSlot];
-                    if (!shooterSnap.IsValid || shooterSnap.Team == observer.Team)
-                        continue;
-
-                    // If the shooter is hidden from this observer, hide their impact decals too
-                    if (_hiddenPairs[observerPairBase + shooterSlot])
-                    {
-                        if (FowConstants.IsValidEntityIndex(impactEntityIndex))
-                            info.TransmitEntities.Remove(impactEntityIndex);
-                    }
+                    RemoveHiddenTargetEntities(info, targetSlot);
                 }
             }
         }
 
-        // Stress-test pass for bot observers: run the same visibility solver
-        // without trying to hide or transmit entities to a client.
-        for (int i = 0; i < syntheticBotObserverCount; i++)
-        {
-            int observerSlot = syntheticBotObserverSlots[i];
-            ref readonly var observer = ref snapshots[observerSlot];
-
-            if (perObserverFairness && eligibleObserverCount > 0)
-            {
-                int raysUsedSoFar = _raycastEngine.RaycastsThisFrame;
-                int remainingBudget = frameBudget - raysUsedSoFar;
-                int remainingObservers = eligibleObserverCount - processedObservers;
-                int fairShare = remainingBudget / Math.Max(1, remainingObservers);
-                int minShare = (int)(frameBudget * Config.Performance.MinObserverBudgetShare);
-                int observerBudget = Math.Max(fairShare, minShare);
-                int budgetCeiling = Math.Min(raysUsedSoFar + observerBudget, frameBudget);
-                _raycastEngine.SetFrameBudget(budgetCeiling);
-                processedObservers++;
-            }
-
-            for (int t = 0; t < activeSlots.Length; t++)
-            {
-                int targetSlot = activeSlots[t];
-                ref readonly var target = ref snapshots[targetSlot];
-
-                if (!target.IsValid || target.Slot == observerSlot || target.Team == observer.Team)
-                    continue;
-
-                if (target.IsAlive)
-                {
-                    _visibilityManager.ShouldTransmit(in observer, in target, currentTick);
-                }
-                else
-                {
-                    _visibilityManager.ShouldTransmitRecentlyDead(target.Slot, currentTick);
-                }
-            }
-        }
-
-        // Restore full frame budget for post-observer work (bomb radar, C4 traces).
-        if (perObserverFairness)
-            _raycastEngine.SetFrameBudget(frameBudget);
-
-        // Scrub radar spotted state for hidden enemies
-        if (Config.AntiWallhack.BlockRadarESP && anyHiddenPlayerPairs)
-        {
-            _spottedStateScrubber?.ScrubPlayerSpottedState(
-                players, snapshots, terroristSlots, counterTerroristSlots,
-                (obsSlot, tgtSlot) => _hiddenPairs[obsSlot * FowConstants.MaxSlots + tgtSlot]);
-        }
-
-        if (shouldBlockBombRadarEsp && hasTrackedPlantedC4)
-        {
-            _spottedStateScrubber?.BlockBombRadarESP(
-                players,
-                snapshots,
-                (slot, c4Entity) => CanObserverSeeTrackedC4(slot, c4Entity, currentTick));
-        }
-
+        // Update debug overlays and handle NOINTERP for players transitioning to visible.
         UpdateDebugOutputs(snapshots, players, currentTick);
         ForceFlexStateResync(players, currentTick);
         _perfMonitor?.EndFrame(_raycastEngine.RaycastsThisFrame);
     }
 
     /// <summary>
-    /// Removes the hidden target's pawn-linked entities while intentionally leaving
-    /// the persistent <see cref="CCSPlayerController"/> transmitted.
+    /// Removes a hidden target's pawn entity, all weapon entities, all wearable
+    /// entities (gloves, agent accessories), and any hostage carry prop from the
+    /// transmit list so the client never receives them.
     ///
-    /// Counter-Strike 2 expects controller entities to remain present in the client
-    /// entity list; removing them can trigger CopyExistingEntity crashes during
-    /// delta updates. The controller only carries scoreboard-style metadata and no
-    /// reliable world-space position, so keeping it transmitted is the safer
-    /// compatibility trade-off without reintroducing wallhack-useful coordinates.
+    /// Important: We intentionally leave the player's "controller" entity transmitted.
+    /// The controller only carries scoreboard metadata (name, score, ping) and no
+    /// world-space position. Removing it would crash the client with a
+    /// "CopyExistingEntity" error during delta updates.
+    ///
+    /// All child entities that are parented or bone-merged to the pawn MUST be
+    /// hidden together. If any remain while the pawn is removed, the client
+    /// receives orphaned entity data and crashes with:
+    ///   FATAL ERROR: CL_CopyExistingEntity: missing client entity
+    ///
+    /// Entity types collected (verified against cs2-dumper schema):
+    ///   - Pawn body (C_CSPlayerPawn)
+    ///   - Weapons (CPlayer_WeaponServices → m_hMyWeapons, m_hActiveWeapon, m_hLastWeapon)
+    ///   - Wearables (C_BaseCombatCharacter → m_hMyWearables at offset 4440)
+    ///   - Hostage carry prop (CCSPlayer_HostageServices → m_hCarriedHostageProp at offset 76)
     /// </summary>
-    private void RemoveHiddenTargetEntities(
+    private void EnforcePawnChildInvariant(
         CCheckTransmitInfo info,
-        int targetSlot,
-        in Models.PlayerSnapshot observer,
-        int currentTick)
+        ReadOnlySpan<int> activeSlots,
+        ReadOnlySpan<PlayerSnapshot> snapshots)
+    {
+        for (int i = 0; i < activeSlots.Length; i++)
+        {
+            int targetSlot = activeSlots[i];
+            ref readonly var target = ref snapshots[targetSlot];
+            if (!target.IsValid || !FowConstants.IsValidEntityIndex((int)target.PawnEntityIndex))
+                continue;
+
+            if (info.TransmitEntities.Contains((int)target.PawnEntityIndex))
+                continue;
+
+            if (RemoveHiddenTargetEntities(info, targetSlot))
+                _perfMonitor?.RecordOrphanClosureCleanup();
+        }
+    }
+
+    private bool RemoveHiddenTargetEntities(
+        CCheckTransmitInfo info,
+        int targetSlot)
     {
         int assocCount = _playerStateCache?.Snapshots[targetSlot].AssociatedEntityCount ?? 0;
+        bool removedAny = false;
         for (int entityOffset = 0; entityOffset < assocCount; entityOffset++)
         {
             int entityIndex = _playerStateCache!.GetAssociatedEntity(targetSlot, entityOffset);
             if (!FowConstants.IsValidEntityIndex(entityIndex))
                 continue;
 
-            if (_playerStateCache.ShouldRevealDroppedWeaponToObserver(entityIndex, in observer, currentTick))
-                continue;
+            if (info.TransmitEntities.Contains(entityIndex))
+                removedAny = true;
 
             info.TransmitEntities.Remove(entityIndex);
         }
+
+        return removedAny;
     }
 
+    /// <summary>
+    /// When a player transitions from hidden to visible, their model would appear to
+    /// "teleport" from their last known position to their current one. To prevent this,
+    /// we set the NOINTERP effect flag which tells the client: "snap to the new position
+    /// instead of interpolating from the old one."
+    ///
+    /// We hold NOINTERP for 2 ticks (≈31ms) so the client receives at least one clean
+    /// snapshot even under single-packet loss, then clear it so normal smooth movement resumes.
+    /// </summary>
     private void ForceFlexStateResync(List<CCSPlayerController> players, int currentTick)
     {
         if (_visibilityManager == null)
@@ -386,6 +235,7 @@ public partial class S2FOWPlugin
             var controller = players[i];
             int slot = controller.Slot;
 
+            // Only process players that the visibility manager flagged for resync.
             if (!FowConstants.IsValidSlot(slot) || !_visibilityManager.NeedsFlexResync(slot))
                 continue;
 
@@ -393,24 +243,24 @@ public partial class S2FOWPlugin
             if (pawn == null || !pawn.IsValid)
                 continue;
 
+            // Set the NOINTERP flag and schedule its removal in 2 ticks.
             pawn.Effects |= EffectNoInterp;
-            // Hold NOINTERP for 2 ticks so the client receives at least one
-            // NOINTERP snapshot even under single-packet loss.
             _clearNoInterpAfterTick[slot] = currentTick + 2;
             Utilities.SetStateChanged(pawn, "CBaseEntity", "m_fEffects");
 
-            // Player pawns exclude m_flexWeight from their network table, so resync the
-            // eye/head state that still replicates and feeds the client eye pipeline.
-            Utilities.SetStateChanged(pawn, "CBaseFlex", "m_vLookTargetPosition");
+            // Mark eye angles as changed so the client gets the correct view direction.
             Utilities.SetStateChanged(pawn, "CCSPlayerPawn", "m_angEyeAngles");
-            Utilities.SetStateChanged(pawn, "CCSPlayerPawn", "m_vHeadConstraintOffset");
 
-            // Keep the resync surface narrow. Broad struct/controller dirtying produced
-            // unresolved offset spam on live servers and is not reliable through CSS.
+            // Force the interpolation history to repopulate so the client does not
+            // blend from a stale position.
             Utilities.SetStateChanged(pawn, "CBaseAnimGraph", "m_bInitiallyPopulateInterpHistory");
         }
     }
 
+    /// <summary>
+    /// Clears the NOINTERP flag on players whose scheduled removal tick has arrived.
+    /// This restores normal smooth movement interpolation.
+    /// </summary>
     private void ClearPendingNoInterp(List<CCSPlayerController> players)
     {
         int currentTick = Server.TickCount;
@@ -422,15 +272,18 @@ public partial class S2FOWPlugin
             if (!FowConstants.IsValidSlot(slot) || _clearNoInterpAfterTick[slot] == 0)
                 continue;
 
+            // Not time yet — keep waiting.
             if (currentTick < _clearNoInterpAfterTick[slot])
                 continue;
 
+            // Time to remove NOINTERP.
             _clearNoInterpAfterTick[slot] = 0;
 
             var pawn = controller.PlayerPawn.Value;
             if (pawn == null || !pawn.IsValid)
                 continue;
 
+            // Only clear if the flag is actually set (avoid redundant network updates).
             if ((pawn.Effects & EffectNoInterp) == 0)
                 continue;
 

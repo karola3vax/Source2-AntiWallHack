@@ -1,249 +1,218 @@
 using System.Numerics;
+using S2FOW.Models;
 
 namespace S2FOW.Core;
 
-internal enum VisibilityPrimitiveKind
-{
-    Capsule = 0,
-    Sphere = 1
-}
-
-internal enum VisibilityPrimitiveSampling
-{
-    SupportAndEndpoints = 0,
-    SupportMidAndDistal = 1
-}
-
+/// <summary>
+/// One visibility check point on the player model.
+///
+/// Each primitive represents a specific spot on the CS2 player skeleton
+/// (e.g., top of head, left shoulder, right knee, weapon muzzle).
+/// The LocalPoint is in model-local coordinates — it gets transformed to
+/// world-space based on the player's position and facing direction.
+/// </summary>
 internal readonly struct VisibilityPrimitive
 {
-    public required string Name { get; init; }
-    public required string BoneName { get; init; }
-    public required VisibilityPrimitiveKind Kind { get; init; }
-    public required VisibilityPrimitiveSampling Sampling { get; init; }
-    public required Vector3 LocalPoint0 { get; init; }
-    public required Vector3 LocalPoint1 { get; init; }
-    public required float Radius { get; init; }
-    public required bool DistalEndpointIsPoint1 { get; init; }
+    /// <summary>The position of this point in the player's local coordinate space.</summary>
+    public required Vector3 LocalPoint { get; init; }
+
+    /// <summary>
+    /// If true, rays to this point originate from the observer's non-predicted eye
+    /// position (more stable for head-level checks).
+    /// </summary>
     public bool UseFixedHeadOrigin { get; init; }
+
+    /// <summary>
+    /// If set to a specific weapon class, this point only exists when the target
+    /// is holding that type of weapon (e.g., sniper rifle muzzle extends further).
+    /// WeaponLosClass.None means this point applies to all weapons.
+    /// </summary>
+    public WeaponLosClass RequiredWeaponClass { get; init; }
 }
 
+/// <summary>
+/// The canonical set of visibility check points extracted from CS2's player model hitboxes.
+///
+/// These 35 skeleton points were extracted from the actual CS2 player model using the
+/// tools in the Tools/ directory. They cover the full body: head, neck, shoulders, spine,
+/// hips, knees, feet, elbows, and weapon muzzle positions for each weapon class.
+///
+/// Additionally, 8 AABB (axis-aligned bounding box) corner points serve as a fallback
+/// safety net — if all 35 skeleton rays hit walls, the 8 corners are checked to catch
+/// extreme edge cases (e.g., only a sliver of the player model is visible).
+///
+/// Together these 43 points per target provide comprehensive body coverage while keeping
+/// the raycast count manageable for real-time performance.
+/// </summary>
 internal static class Cs2VisibilityPrimitiveLayout
 {
-    public const int PrimitiveCount = 19;
+    public const int PrimitiveCount = 35;
     public const int AabbPointCount = 8;
-    public const int MaxVisibilityTestPoints = (PrimitiveCount * 3) + AabbPointCount;
+    public const int MaxVisibilityTestPoints = PrimitiveCount + AabbPointCount;
 
     private static readonly VisibilityPrimitive[] _primitives =
     [
         new()
         {
-            Name = "head_0",
-            BoneName = "head_0",
-            Kind = VisibilityPrimitiveKind.Capsule,
-            Sampling = VisibilityPrimitiveSampling.SupportAndEndpoints,
-            LocalPoint0 = new Vector3(0.44f, 0.00f, 69.78f),
-            LocalPoint1 = new Vector3(-1.16f, 0.00f, 74.28f),
-            Radius = 4.30f,
-            DistalEndpointIsPoint1 = true,
+            LocalPoint = new Vector3(-6.992f, -2.912f, 64.51f),
             UseFixedHeadOrigin = true
         },
         new()
         {
-            Name = "neck_0",
-            BoneName = "neck_0",
-            Kind = VisibilityPrimitiveKind.Capsule,
-            Sampling = VisibilityPrimitiveSampling.SupportAndEndpoints,
-            LocalPoint0 = new Vector3(-3.47f, 0.00f, 65.40f),
-            LocalPoint1 = new Vector3(-2.86f, 0.00f, 66.68f),
-            Radius = 3.50f,
-            DistalEndpointIsPoint1 = true
+            LocalPoint = new Vector3(-6.842f, -3.302f, 57.078f),
+            UseFixedHeadOrigin = true
         },
         new()
         {
-            Name = "spine_3",
-            BoneName = "spine_3",
-            Kind = VisibilityPrimitiveKind.Capsule,
-            Sampling = VisibilityPrimitiveSampling.SupportAndEndpoints,
-            LocalPoint0 = new Vector3(-3.92f, -6.00f, 61.31f),
-            LocalPoint1 = new Vector3(-3.92f, 6.00f, 61.31f),
-            Radius = 5.00f,
-            DistalEndpointIsPoint1 = true
+            LocalPoint = new Vector3(-5.178f, -2.45f, 54.506f),
+            UseFixedHeadOrigin = true
         },
         new()
         {
-            Name = "spine_2",
-            BoneName = "spine_2",
-            Kind = VisibilityPrimitiveKind.Capsule,
-            Sampling = VisibilityPrimitiveSampling.SupportAndEndpoints,
-            LocalPoint0 = new Vector3(-3.04f, -4.10f, 57.29f),
-            LocalPoint1 = new Vector3(-3.04f, 4.10f, 57.29f),
-            Radius = 6.20f,
-            DistalEndpointIsPoint1 = true
+            LocalPoint = new Vector3(-3.112f, -0.79f, 50.789f),
+            UseFixedHeadOrigin = true
         },
         new()
         {
-            Name = "spine_1",
-            BoneName = "spine_1",
-            Kind = VisibilityPrimitiveKind.Capsule,
-            Sampling = VisibilityPrimitiveSampling.SupportAndEndpoints,
-            LocalPoint0 = new Vector3(-1.50f, -2.40f, 51.60f),
-            LocalPoint1 = new Vector3(-1.90f, 2.40f, 51.60f),
-            Radius = 6.50f,
-            DistalEndpointIsPoint1 = true
+            LocalPoint = new Vector3(0.214f, 1.964f, 47.735f),
+            UseFixedHeadOrigin = true
         },
         new()
         {
-            Name = "spine_0",
-            BoneName = "spine_0",
-            Kind = VisibilityPrimitiveKind.Capsule,
-            Sampling = VisibilityPrimitiveSampling.SupportAndEndpoints,
-            LocalPoint0 = new Vector3(-1.81f, 3.10f, 45.06f),
-            LocalPoint1 = new Vector3(-1.81f, -3.10f, 45.06f),
-            Radius = 6.00f,
-            DistalEndpointIsPoint1 = true
+            LocalPoint = new Vector3(1.239f, 2.516f, 42.095f),
+            UseFixedHeadOrigin = true
         },
         new()
         {
-            Name = "pelvis",
-            BoneName = "pelvis",
-            Kind = VisibilityPrimitiveKind.Capsule,
-            Sampling = VisibilityPrimitiveSampling.SupportAndEndpoints,
-            LocalPoint0 = new Vector3(-1.75f, -3.20f, 40.12f),
-            LocalPoint1 = new Vector3(-1.75f, 3.20f, 40.12f),
-            Radius = 6.00f,
-            DistalEndpointIsPoint1 = true
+            LocalPoint = new Vector3(1.368f, 2.574f, 37.481f),
+            UseFixedHeadOrigin = true
         },
         new()
         {
-            Name = "ankle_l",
-            BoneName = "ankle_l",
-            Kind = VisibilityPrimitiveKind.Capsule,
-            Sampling = VisibilityPrimitiveSampling.SupportAndEndpoints,
-            LocalPoint0 = new Vector3(-5.26f, 4.67f, 1.33f),
-            LocalPoint1 = new Vector3(3.71f, 5.91f, 1.14f),
-            Radius = 2.60f,
-            DistalEndpointIsPoint1 = true
+            LocalPoint = new Vector3(-13.748f, 8.339f, 1.183f),
+            UseFixedHeadOrigin = true
         },
         new()
         {
-            Name = "ankle_r",
-            BoneName = "ankle_r",
-            Kind = VisibilityPrimitiveKind.Capsule,
-            Sampling = VisibilityPrimitiveSampling.SupportAndEndpoints,
-            LocalPoint0 = new Vector3(3.69f, -5.96f, 1.16f),
-            LocalPoint1 = new Vector3(-5.27f, -4.73f, 1.31f),
-            Radius = 2.60f,
-            DistalEndpointIsPoint1 = false
+            LocalPoint = new Vector3(11.336f, -4.611f, 1.186f),
+            UseFixedHeadOrigin = true
         },
         new()
         {
-            Name = "leg_lower_l",
-            BoneName = "leg_lower_l",
-            Kind = VisibilityPrimitiveKind.Capsule,
-            Sampling = VisibilityPrimitiveSampling.SupportMidAndDistal,
-            LocalPoint0 = new Vector3(-1.36f, 4.70f, 21.03f),
-            LocalPoint1 = new Vector3(-3.34f, 5.29f, 4.25f),
-            Radius = 4.00f,
-            DistalEndpointIsPoint1 = true
+            LocalPoint = new Vector3(-12.706f, 6.395f, 13.386f),
+            UseFixedHeadOrigin = true
         },
         new()
         {
-            Name = "leg_lower_r",
-            BoneName = "leg_lower_r",
-            Kind = VisibilityPrimitiveKind.Capsule,
-            Sampling = VisibilityPrimitiveSampling.SupportMidAndDistal,
-            LocalPoint0 = new Vector3(-1.74f, -4.60f, 21.07f),
-            LocalPoint1 = new Vector3(-3.34f, -5.29f, 4.25f),
-            Radius = 4.00f,
-            DistalEndpointIsPoint1 = true
+            LocalPoint = new Vector3(6.25f, -7.008f, 10.219f),
+            UseFixedHeadOrigin = true
         },
         new()
         {
-            Name = "arm_upper_l",
-            BoneName = "arm_upper_l",
-            Kind = VisibilityPrimitiveKind.Capsule,
-            Sampling = VisibilityPrimitiveSampling.SupportMidAndDistal,
-            LocalPoint0 = new Vector3(-3.34f, 7.18f, 61.66f),
-            LocalPoint1 = new Vector3(-4.44f, 14.33f, 53.10f),
-            Radius = 3.30f,
-            DistalEndpointIsPoint1 = true
+            LocalPoint = new Vector3(-9.662f, 5.599f, 58.888f),
+            UseFixedHeadOrigin = true
         },
         new()
         {
-            Name = "arm_upper_r",
-            BoneName = "arm_upper_r",
-            Kind = VisibilityPrimitiveKind.Capsule,
-            Sampling = VisibilityPrimitiveSampling.SupportMidAndDistal,
-            LocalPoint0 = new Vector3(-3.34f, -7.18f, 61.66f),
-            LocalPoint1 = new Vector3(-4.44f, -14.33f, 53.10f),
-            Radius = 3.30f,
-            DistalEndpointIsPoint1 = true
+            LocalPoint = new Vector3(-2.229f, -5.48f, 58.269f),
+            UseFixedHeadOrigin = true
         },
         new()
         {
-            Name = "arm_lower_l",
-            BoneName = "arm_lower_l",
-            Kind = VisibilityPrimitiveKind.Capsule,
-            Sampling = VisibilityPrimitiveSampling.SupportMidAndDistal,
-            LocalPoint0 = new Vector3(-4.50f, 14.70f, 52.65f),
-            LocalPoint1 = new Vector3(-1.55f, 20.35f, 44.95f),
-            Radius = 3.00f,
-            DistalEndpointIsPoint1 = true
+            LocalPoint = new Vector3(-14.146f, 5.486f, 56.11f),
+            UseFixedHeadOrigin = true
         },
         new()
         {
-            Name = "arm_lower_r",
-            BoneName = "arm_lower_r",
-            Kind = VisibilityPrimitiveKind.Capsule,
-            Sampling = VisibilityPrimitiveSampling.SupportMidAndDistal,
-            LocalPoint0 = new Vector3(-4.50f, -14.70f, 52.65f),
-            LocalPoint1 = new Vector3(-1.63f, -19.97f, 44.64f),
-            Radius = 3.00f,
-            DistalEndpointIsPoint1 = true
+            LocalPoint = new Vector3(1.17f, -7.81f, 55.162f),
+            UseFixedHeadOrigin = true
         },
         new()
         {
-            Name = "hand_l",
-            BoneName = "hand_l",
-            Kind = VisibilityPrimitiveKind.Capsule,
-            Sampling = VisibilityPrimitiveSampling.SupportAndEndpoints,
-            LocalPoint0 = new Vector3(-1.28f, 20.72f, 43.95f),
-            LocalPoint1 = new Vector3(-0.70f, 21.88f, 40.49f),
-            Radius = 2.30f,
-            DistalEndpointIsPoint1 = true
+            LocalPoint = new Vector3(-21.768f, -2.639f, 54.429f),
+            UseFixedHeadOrigin = true
         },
         new()
         {
-            Name = "hand_r",
-            BoneName = "hand_r",
-            Kind = VisibilityPrimitiveKind.Capsule,
-            Sampling = VisibilityPrimitiveSampling.SupportAndEndpoints,
-            LocalPoint0 = new Vector3(-1.26f, -20.71f, 43.95f),
-            LocalPoint1 = new Vector3(-0.72f, -21.78f, 40.61f),
-            Radius = 2.30f,
-            DistalEndpointIsPoint1 = true
+            LocalPoint = new Vector3(-7.527f, -7.862f, 53.768f),
+            UseFixedHeadOrigin = true
         },
         new()
         {
-            Name = "leg_upper_l",
-            BoneName = "leg_upper_l",
-            Kind = VisibilityPrimitiveKind.Capsule,
-            Sampling = VisibilityPrimitiveSampling.SupportMidAndDistal,
-            LocalPoint0 = new Vector3(-1.73f, 3.80f, 37.76f),
-            LocalPoint1 = new Vector3(-1.03f, 4.53f, 22.59f),
-            Radius = 5.00f,
-            DistalEndpointIsPoint1 = true
+            LocalPoint = new Vector3(-3.829f, 5.905f, 29.617f),
+            UseFixedHeadOrigin = true
         },
         new()
         {
-            Name = "leg_upper_r",
-            BoneName = "leg_upper_r",
-            Kind = VisibilityPrimitiveKind.Capsule,
-            Sampling = VisibilityPrimitiveSampling.SupportMidAndDistal,
-            LocalPoint0 = new Vector3(-2.08f, -4.32f, 37.78f),
-            LocalPoint1 = new Vector3(-1.88f, -5.02f, 22.59f),
-            Radius = 5.00f,
-            DistalEndpointIsPoint1 = true
+            LocalPoint = new Vector3(4.136f, -3.275f, 28.942f),
+            UseFixedHeadOrigin = true
+        },
+        new()
+        {
+            LocalPoint = new Vector3(-35.0f, -3.695f, 60.443f),
+            RequiredWeaponClass = WeaponLosClass.Pistol
+        },
+        new()
+        {
+            LocalPoint = new Vector3(-56.0f, -3.604f, 61.383f),
+            RequiredWeaponClass = WeaponLosClass.Sniper
+        },
+        new()
+        {
+            LocalPoint = new Vector3(-46.0f, -3.665f, 61.443f),
+            RequiredWeaponClass = WeaponLosClass.Rifle
+        },
+        new()
+        {
+            LocalPoint = new Vector3(1.239f, -6.4f, 42.095f)
+        },
+        new()
+        {
+            LocalPoint = new Vector3(1.239f, 13.62f, 42.095f)
+        },
+        new()
+        {
+            LocalPoint = new Vector3(1.368f, 12.67f, 37.481f)
+        },
+        new()
+        {
+            LocalPoint = new Vector3(1.367f, -4.843f, 37.481f)
+        },
+        new()
+        {
+            LocalPoint = new Vector3(0.214f, -5.355f, 47.735f)
+        },
+        new()
+        {
+            LocalPoint = new Vector3(0.214f, 13.381f, 47.735f)
+        },
+        new()
+        {
+            LocalPoint = new Vector3(-3.112f, 11.901f, 50.789f)
+        },
+        new()
+        {
+            LocalPoint = new Vector3(-3.112f, -5.552f, 50.789f)
+        },
+        new()
+        {
+            LocalPoint = new Vector3(-5.178f, 10.984f, 54.506f)
+        },
+        new()
+        {
+            LocalPoint = new Vector3(-5.178f, -7.886f, 54.506f)
+        },
+        new()
+        {
+            LocalPoint = new Vector3(-1.543f, 10.403f, 72.019f)
+        },
+        new()
+        {
+            LocalPoint = new Vector3(8.677f, 10.403f, 56.313f)
+        },
+        new()
+        {
+            LocalPoint = new Vector3(11.08f, 12.403f, 44.349f)
         }
     ];
 

@@ -4,9 +4,23 @@ using S2FOW.Core;
 
 namespace S2FOW;
 
+/// <summary>
+/// Game event handlers — reacts to things that happen during a match.
+///
+/// Each handler listens for a specific game event (player death, smoke detonation,
+/// round start, etc.) and updates the plugin's internal state accordingly.
+/// All handlers return HookResult.Continue so the event keeps flowing to other plugins.
+/// </summary>
 public partial class S2FOWPlugin
 {
-    // Event handlers.
+    // ────────────────────────────────────────────────────────────────────────
+    //  Player events
+    // ────────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// A player disconnected from the server.
+    /// We clear their NOINTERP state and tell the visibility manager to forget them.
+    /// </summary>
     private HookResult OnPlayerDisconnect(EventPlayerDisconnect @event, GameEventInfo info)
     {
         var player = @event.Userid;
@@ -18,6 +32,12 @@ public partial class S2FOWPlugin
         return HookResult.Continue;
     }
 
+    /// <summary>
+    /// A player just died.
+    /// We record the tick so the plugin can keep them visible for a brief "death grace"
+    /// period (default 128 ticks ≈ 2 seconds). This prevents the corpse from vanishing
+    /// mid-death-animation, which would look jarring.
+    /// </summary>
     private HookResult OnPlayerDeath(EventPlayerDeath @event, GameEventInfo info)
     {
         var victim = @event.Userid;
@@ -25,14 +45,15 @@ public partial class S2FOWPlugin
         {
             int currentTick = Server.TickCount;
             _visibilityManager?.OnPlayerDeath(victim.Slot, currentTick);
-
-            // Record temporal ownership for weapons that will drop on death
-            if (Config.AntiWallhack.BlockDroppedWeaponESPDurationTicks > 0)
-                _playerStateCache?.RecordTemporalOwnershipForDeath(victim.Slot, currentTick);
         }
         return HookResult.Continue;
     }
 
+    /// <summary>
+    /// A player just spawned (either at round start or after a respawn).
+    /// We record the tick so the plugin can apply a brief "spawn grace" window
+    /// to avoid glitches while the player model initializes.
+    /// </summary>
     private HookResult OnPlayerSpawn(EventPlayerSpawn @event, GameEventInfo info)
     {
         var player = @event.Userid;
@@ -42,154 +63,124 @@ public partial class S2FOWPlugin
         return HookResult.Continue;
     }
 
+    // ────────────────────────────────────────────────────────────────────────
+    //  Round phase events
+    // ────────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// A new round has started. Reset NOINTERP state and update the round phase.
+    /// During freeze time, all players are visible (they cannot move yet).
+    /// </summary>
     private HookResult OnRoundStart(EventRoundStart @event, GameEventInfo info)
     {
-        ApplyRuntimeProfile(resetRuntimeState: false, logProfileChange: true);
         ResetNoInterpState();
         _visibilityManager?.OnRoundStart(Server.TickCount);
         RefreshRoundPhaseFromGameRules(fallbackPhase: RoundPhase.FreezeTime);
-        _projectileTracker?.Clear();
-        _spottedStateScrubber?.Clear();
-        _impactTracker?.Clear();
         return HookResult.Continue;
     }
 
+    /// <summary>
+    /// The freeze period just ended — the round is now live.
+    /// Players can move, so we switch to active visibility checking.
+    /// </summary>
     private HookResult OnRoundFreezeEnd(EventRoundFreezeEnd @event, GameEventInfo info)
     {
         RefreshRoundPhaseFromGameRules(fallbackPhase: RoundPhase.Live);
         return HookResult.Continue;
     }
 
+    /// <summary>
+    /// The round ended. Switch to RoundEnd phase — everyone becomes visible
+    /// since the round outcome is already decided.
+    /// </summary>
     private HookResult OnRoundEnd(EventRoundEnd @event, GameEventInfo info)
     {
         SetRoundPhase(RoundPhase.RoundEnd);
         return HookResult.Continue;
     }
 
+    /// <summary>
+    /// Warmup just ended. Refresh the round phase from the engine's game rules.
+    /// </summary>
     private HookResult OnWarmupEnd(EventWarmupEnd @event, GameEventInfo info)
     {
         RefreshRoundPhaseFromGameRules(fallbackPhase: RoundPhase.Live);
         return HookResult.Continue;
     }
 
+    // ────────────────────────────────────────────────────────────────────────
+    //  Smoke grenade events
+    // ────────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// A smoke grenade just detonated (bloomed) at the given world coordinates.
+    /// We track it so we can block visibility through smoke clouds.
+    /// The smoke starts small and grows to full size over a short "bloom" period.
+    /// </summary>
     private HookResult OnSmokeDetonate(EventSmokegrenadeDetonate @event, GameEventInfo info)
     {
         _smokeTracker?.OnSmokeDetonate(
             @event.X, @event.Y, @event.Z,
             Server.TickCount,
-            Config.AntiWallhack.SmokeBlockDelayTicks);
+            Config.AntiWallhack.SmokeBloomDurationTicks);
         return HookResult.Continue;
     }
 
+    /// <summary>
+    /// A smoke grenade has expired (dissipated). We remove it from our tracker
+    /// so it no longer blocks visibility.
+    /// </summary>
     private HookResult OnSmokeExpired(EventSmokegrenadeExpired @event, GameEventInfo info)
     {
         _smokeTracker?.OnSmokeExpired(@event.X, @event.Y, @event.Z);
         return HookResult.Continue;
     }
 
-    private void OnEntityCreated(CEntityInstance entity)
-    {
-        _playerStateCache?.MarkEntityDirty(entity);
-        _projectileTracker?.OnEntityCreated(entity);
-        if (Config.AntiWallhack.BlockBulletImpactESP)
-            _impactTracker?.OnEntityCreated(entity);
-    }
+    // ────────────────────────────────────────────────────────────────────────
+    //  Bomb events
+    // ────────────────────────────────────────────────────────────────────────
 
-    private void OnEntitySpawned(CEntityInstance entity)
-    {
-        _playerStateCache?.MarkEntityDirty(entity);
-        _projectileTracker?.OnEntitySpawned(entity);
-        if (Config.AntiWallhack.BlockBulletImpactESP)
-            _impactTracker?.OnEntitySpawned(entity);
-
-        if (entity is CPlantedC4 plantedC4 && plantedC4.IsValid && plantedC4.Index > 0)
-        {
-            _trackedPlantedC4EntityIndex = (int)plantedC4.Index;
-            _lastPlantedC4LookupTick = Server.TickCount;
-            SyncTrackedPlantedC4RadarState();
-        }
-    }
-
-    private void OnEntityDeleted(CEntityInstance entity)
-    {
-        _playerStateCache?.OnEntityDeleted(entity);
-        _projectileTracker?.OnEntityDeleted(entity);
-        _impactTracker?.OnEntityDeleted(entity);
-
-        if (entity is CPlantedC4 || (entity != null && entity.Index == _trackedPlantedC4EntityIndex))
-        {
-            _spottedStateScrubber?.OnC4Removed();
-            _trackedPlantedC4EntityIndex = 0;
-            _lastPlantedC4LookupTick = int.MinValue;
-        }
-    }
-
+    /// <summary>
+    /// The bomb was planted. Switch to PostPlant phase — this affects how
+    /// aggressively we check visibility (post-plant rounds tend to be more static).
+    /// </summary>
     private HookResult OnBombPlanted(EventBombPlanted @event, GameEventInfo info)
     {
         SetRoundPhase(RoundPhase.PostPlant);
-
-        // Find the planted C4 entity
-        try
-        {
-            var entities = Utilities.FindAllEntitiesByDesignerName<CPlantedC4>("planted_c4");
-            foreach (var c4 in entities)
-            {
-                if (c4 != null && c4.IsValid)
-                {
-                    _trackedPlantedC4EntityIndex = (int)c4.Index;
-                    _lastPlantedC4LookupTick = Server.TickCount;
-                    SyncTrackedPlantedC4RadarState();
-                    break;
-                }
-            }
-        }
-        catch
-        {
-            _suppressedEntityLookupErrors++;
-        }
-
         return HookResult.Continue;
     }
 
+    /// <summary>The bomb was defused. Round is effectively over — make everyone visible.</summary>
     private HookResult OnBombDefused(EventBombDefused @event, GameEventInfo info)
     {
         SetRoundPhase(RoundPhase.RoundEnd);
-        _spottedStateScrubber?.OnC4Removed();
-        _trackedPlantedC4EntityIndex = 0;
-        _lastPlantedC4LookupTick = int.MinValue;
         return HookResult.Continue;
     }
 
+    /// <summary>The bomb exploded. Round is effectively over — make everyone visible.</summary>
     private HookResult OnBombExploded(EventBombExploded @event, GameEventInfo info)
     {
         SetRoundPhase(RoundPhase.RoundEnd);
-        _spottedStateScrubber?.OnC4Removed();
-        _trackedPlantedC4EntityIndex = 0;
-        _lastPlantedC4LookupTick = int.MinValue;
         return HookResult.Continue;
     }
 
-    private HookResult OnBulletImpact(EventBulletImpact @event, GameEventInfo info)
-    {
-        if (!Config.AntiWallhack.BlockBulletImpactESP)
-            return HookResult.Continue;
+    // ────────────────────────────────────────────────────────────────────────
+    //  Map lifecycle
+    // ────────────────────────────────────────────────────────────────────────
 
-        var shooter = @event.Userid;
-        if (shooter != null)
-        {
-            _impactTracker?.OnBulletImpact(shooter.Slot, @event.X, @event.Y, @event.Z, Server.TickCount);
-        }
-        return HookResult.Continue;
-    }
-
-    // Map lifecycle.
+    /// <summary>
+    /// A new map just loaded. Reset all internal state (smoke positions, cached
+    /// snapshots, debug visuals, performance counters) for the new map.
+    /// </summary>
     private void OnMapStart(string mapName)
     {
-        ApplyRuntimeProfile(resetRuntimeState: false, logProfileChange: true);
         ResetRuntimeState(mapName);
         RefreshRoundPhaseFromGameRules(fallbackPhase: RoundPhase.Live);
     }
 
+    /// <summary>
+    /// The current map is ending. Reset state in preparation for the next map.
+    /// </summary>
     private void OnMapEnd()
     {
         ResetRuntimeState(logMapName: null);

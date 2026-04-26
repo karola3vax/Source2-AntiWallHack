@@ -2,12 +2,22 @@ using S2FOW.Config;
 
 namespace S2FOW.Util;
 
+/// <summary>
+/// Text strings and message builders used for console output.
+/// Centralizes all user-facing text so it can be easily found and updated.
+/// </summary>
 internal static class PluginText
 {
+    /// <summary>Description shown for the css_fow_stats command.</summary>
     public static readonly string StatsCommandDescription = "Show the current S2FOW health summary";
-    public static readonly string ToggleCommandDescription = "Turn S2FOW protection on or off";
-    public static readonly string ProfileCommandDescription = "Show or override the active S2FOW auto-profile";
 
+    /// <summary>Description shown for the css_fow_toggle command.</summary>
+    public static readonly string ToggleCommandDescription = "Turn S2FOW protection on or off";
+
+    /// <summary>
+    /// Builds the ASCII art banner that is printed to the server console when the plugin loads.
+    /// Shows the plugin name, version, config version, API version, and author info.
+    /// </summary>
     public static string[] BuildBanner(
         string moduleVersion,
         int configVersion,
@@ -34,45 +44,24 @@ internal static class PluginText
         ];
     }
 
-    public static string BuildStartupProfileLine(bool enabled, SecurityProfile profile, int configVersion)
+    /// <summary>Builds a one-line summary of the protection status and config version.</summary>
+    public static string BuildStartupConfigLine(bool enabled, int configVersion)
     {
         string state = enabled ? "Protection on" : "Protection off";
-        return $"Coverage mode: {state} | {profile} mode | Config v{configVersion}";
+        return $"Coverage mode: {state} | Config v{configVersion}";
     }
 
-    public static string BuildCoverageLine(
-        AntiWallhackSettings antiWallhack,
-        bool plantedC4RadarProtection,
-        bool plantedC4EntityProtection)
+    /// <summary>
+    /// Builds a one-line summary of what entity types are currently protected.
+    /// Always includes player entities and their associated closure. Adds "smoke blocking" if enabled.
+    /// </summary>
+    public static string BuildCoverageLine(AntiWallhackSettings antiWallhack)
     {
-        List<string> protections = new(8) { "players" };
+        List<string> protections = new(6) { "players", "weapons", "wearables", "scene children", "hostage carry" };
 
-        if (antiWallhack.BlockRadarESP)
-            protections.Add("radar");
-        if (antiWallhack.BlockGrenadeESP)
-            protections.Add("grenades");
-        if (antiWallhack.BlockBulletImpactESP)
-            protections.Add("impacts");
-        if (antiWallhack.BlockDroppedWeaponESPDurationTicks > 0)
-            protections.Add("dropped weapons");
-        if (plantedC4RadarProtection)
-            protections.Add("bomb radar");
-        if (plantedC4EntityProtection)
-            protections.Add("planted C4 entity");
         if (antiWallhack.SmokeBlocksWallhack)
             protections.Add("smoke blocking");
 
         return $"Coverage: {string.Join(", ", protections)}";
-    }
-
-    public static string[] BuildLegacyConfigWarning(string configPath)
-    {
-        return
-        [
-            "Old config format detected.",
-            "S2FOW now expects the newer grouped config layout.",
-            $"Update this file before enabling protection: {configPath}",
-            "Protection has been left disabled until the config is updated."
-        ];
     }
 }

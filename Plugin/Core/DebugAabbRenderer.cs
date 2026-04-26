@@ -9,20 +9,47 @@ using S2FOW.Models;
 
 namespace S2FOW.Core;
 
-internal sealed class DebugAabbRenderer : IDisposable
+/// <summary>
+/// Draws in-world debug beams showing visibility check points and ray lines.
+///
+/// When Debug.ShowTargetPoints is enabled, this class creates env_beam entities
+/// (colored laser beams) at each check point on every enemy target:
+///   - White beams: skeleton body points (head, shoulders, hips, etc.)
+///   - Blue beams: AABB fallback corner points (bounding box corners)
+///   - Blue wireframe edges connect the 8 AABB corners to visualize the box
+///
+/// When Debug.ShowRayLines is enabled, it also draws the actual rays fired:
+///   - Yellow: ray reached the target (visible)
+///   - Blue: ray hit a wall (blocked)
+///
+/// These beams are real engine entities that are visible to all players in-game.
+/// Each observer only sees their own debug points — other observers' point entities
+/// are stripped from the transmit list to avoid clutter.
+///
+/// DEVELOPMENT ONLY: Debug visuals create many entities and consume server resources.
+/// Keep all debug options disabled in production.
+/// </summary>
+internal sealed class DebugAabbRenderer
 {
     private const float RayBeamWidth = 0.1f;
     private const float PointBeamWidth = 0.4f;
     private const float FallbackPointBeamWidth = 0.45f;
-    private const float LineBeamWidth = 0.2f;
-    private const float FallbackLineBeamWidth = 0.225f;
+    private const float AabbEdgeBeamWidth = 0.11f;
     private const float PointHalfHeight = 0.5f;
     private const float FallbackPointHalfHeight = 0.58f;
     private const float PointBeamHdrColorScale = 2.4f;
-    private const float LineBeamHdrColorScale = 1.6f;
+    private const float AabbEdgeBeamHdrColorScale = 1.7f;
     private const float BeamBoundsPadding = 256.0f;
     private const int VisualUpdateIntervalTicks = 1;
-    private const float PointUpdateDistanceSqr = 1.0f;
+    private const int AabbFallbackPointCount = 8;
+    private const int AabbEdgeCount = 12;
+
+    private static readonly (int Start, int End)[] AabbEdges =
+    [
+        (0, 1), (1, 3), (3, 2), (2, 0),
+        (4, 5), (5, 7), (7, 6), (6, 4),
+        (0, 4), (1, 5), (2, 6), (3, 7)
+    ];
 
     private readonly RaycastEngine _raycastEngine;
     private readonly S2FOWConfig _config;
@@ -32,8 +59,6 @@ internal sealed class DebugAabbRenderer : IDisposable
     private readonly List<int> _observersToRemove = new(16);
     private readonly Vector3[] _points = new Vector3[RaycastEngine.MaxDebugPointsPerObserver];
     private readonly bool[] _aabbFallbackPoints = new bool[RaycastEngine.MaxDebugPointsPerObserver];
-    private readonly Vector3[] _lineStarts = new Vector3[RaycastEngine.MaxDebugLinesPerObserver];
-    private readonly Vector3[] _lineEnds = new Vector3[RaycastEngine.MaxDebugLinesPerObserver];
 
     public DebugAabbRenderer(RaycastEngine raycastEngine, S2FOWConfig config)
     {
@@ -94,16 +119,16 @@ internal sealed class DebugAabbRenderer : IDisposable
             if (ownerSlot == observerSlot)
                 continue;
 
-            for (int i = 0; i < state.PointBeams.Length; i++)
+            for (int i = 0; i < state.ActivePointCount; i++)
             {
                 var beam = state.PointBeams[i];
                 if (beam != null && beam.IsValid && beam.Index > 0)
                     info.TransmitEntities.Remove((int)beam.Index);
             }
 
-            for (int i = 0; i < state.LineBeams.Length; i++)
+            for (int i = 0; i < state.ActiveAabbEdgeCount; i++)
             {
-                var beam = state.LineBeams[i];
+                var beam = state.AabbEdgeBeams[i];
                 if (beam != null && beam.IsValid && beam.Index > 0)
                     info.TransmitEntities.Remove((int)beam.Index);
             }
@@ -135,36 +160,23 @@ internal sealed class DebugAabbRenderer : IDisposable
         state.NextVisualUpdateTick = currentTick + VisualUpdateIntervalTicks;
 
         int pointCount = visibilityManager.FillObserverDebugPoints(observer.Slot, _points, _aabbFallbackPoints);
+        int previousPointCount = state.ActivePointCount;
         EnsurePointSet(state, pointCount);
 
         for (int i = 0; i < pointCount; i++)
             UpdatePointBeam(state, i, _points[i], GetPointColor(_aabbFallbackPoints[i]), _aabbFallbackPoints[i]);
 
-        for (int i = pointCount; i < RaycastEngine.MaxDebugPointsPerObserver; i++)
+        for (int i = pointCount; i < previousPointCount; i++)
             DisablePointBeam(state, i);
 
-        int lineCount = visibilityManager.FillObserverDebugLines(observer.Slot, _lineStarts, _lineEnds);
-        EnsureLineSet(state, lineCount);
-        for (int i = 0; i < lineCount; i++)
-            UpdateLineBeam(state, i, _lineStarts[i], _lineEnds[i], GetLineColor(false), false);
+        state.ActivePointCount = pointCount;
+        UpdateAabbEdgeBeams(state, pointCount);
     }
 
     private void EnsurePointSet(DebugVisualState state, int pointCount)
     {
         for (int i = 0; i < pointCount; i++)
             EnsurePointBeam(state, i, _aabbFallbackPoints[i]);
-
-        for (int i = pointCount; i < RaycastEngine.MaxDebugPointsPerObserver; i++)
-            DisablePointBeam(state, i);
-    }
-
-    private void EnsureLineSet(DebugVisualState state, int lineCount)
-    {
-        for (int i = 0; i < lineCount; i++)
-            EnsureLineBeam(state, i, isAabbFallback: false);
-
-        for (int i = lineCount; i < state.LineBeams.Length; i++)
-            DisableLineBeam(state, i);
     }
 
     private void UpdateRayBeams()
@@ -179,7 +191,7 @@ internal sealed class DebugAabbRenderer : IDisposable
             if (beam == null || !beam.IsValid)
                 continue;
 
-            UpdateBeam(beam, rays[i].Start, rays[i].End, GetRayColor(rays[i].Visible, rays[i].Elevated, rays[i].Aim));
+            UpdateBeam(beam, rays[i].Start, rays[i].End, GetRayColor(rays[i].Visible));
         }
 
         for (int i = rays.Length; i < _rayBeams.Length; i++)
@@ -203,11 +215,15 @@ internal sealed class DebugAabbRenderer : IDisposable
         if (!_states.TryGetValue(observerSlot, out DebugVisualState? state))
             return;
 
-        for (int i = 0; i < RaycastEngine.MaxDebugPointsPerObserver; i++)
+        for (int i = 0; i < state.ActivePointCount; i++)
             DisablePointBeam(state, i);
 
-        for (int i = 0; i < state.LineBeams.Length; i++)
-            DisableLineBeam(state, i);
+        state.ActivePointCount = 0;
+
+        for (int i = 0; i < state.ActiveAabbEdgeCount; i++)
+            DisableBeam(state.AabbEdgeBeams[i]);
+
+        state.ActiveAabbEdgeCount = 0;
     }
 
     private void RemoveObserverVisual(int observerSlot)
@@ -218,8 +234,8 @@ internal sealed class DebugAabbRenderer : IDisposable
         for (int i = 0; i < RaycastEngine.MaxDebugPointsPerObserver; i++)
             RemovePointBeam(state, i);
 
-        for (int i = 0; i < state.LineBeams.Length; i++)
-            RemoveLineBeam(state, i);
+        for (int i = 0; i < state.AabbEdgeBeams.Length; i++)
+            RemoveEntity(ref state.AabbEdgeBeams[i]);
 
         _states.Remove(observerSlot);
     }
@@ -231,32 +247,16 @@ internal sealed class DebugAabbRenderer : IDisposable
             : Color.FromArgb(255, 255, 255, 255);
     }
 
-    private static Color GetLineColor(bool isAabbFallback)
+    private static Color GetRayColor(bool visible)
     {
-        return isAabbFallback
-            ? Color.FromArgb(215, 85, 130, 190)
-            : Color.FromArgb(215, 235, 235, 235);
-    }
-
-    private static Color GetRayColor(bool visible, bool elevated, bool aim)
-    {
-        if (aim)
-        {
-            return visible
-                ? Color.FromArgb(255, 255, 210, 90)
-                : Color.FromArgb(255, 255, 150, 90);
-        }
-
-        if (elevated)
-        {
-            return visible
-                ? Color.FromArgb(255, 120, 255, 220)
-                : Color.FromArgb(255, 120, 170, 255);
-        }
-
         return visible
             ? Color.FromArgb(255, 255, 220, 70)
             : Color.FromArgb(255, 70, 130, 255);
+    }
+
+    private static Color GetAabbEdgeColor()
+    {
+        return Color.FromArgb(255, 95, 145, 220);
     }
 
     private static CEnvBeam? CreateBeam(float width, float hdrColorScale)
@@ -310,18 +310,6 @@ internal sealed class DebugAabbRenderer : IDisposable
         state.PointBeams[pointIndex] = CreateBeam(width, PointBeamHdrColorScale);
     }
 
-    private void EnsureLineBeam(DebugVisualState state, int lineIndex, bool isAabbFallback)
-    {
-        if (state.LineBeams[lineIndex] != null && state.LineBeams[lineIndex]!.IsValid)
-        {
-            ApplyLineBeamVisualSettings(state.LineBeams[lineIndex], isAabbFallback);
-            return;
-        }
-
-        GetLineVisualSettings(isAabbFallback, out float width);
-        state.LineBeams[lineIndex] = CreateBeam(width, LineBeamHdrColorScale);
-    }
-
     private static void UpdateBeam(CEnvBeam beam, Vector3 start, Vector3 end, Color color)
     {
         beam.Teleport(start, null, null);
@@ -367,48 +355,71 @@ internal sealed class DebugAabbRenderer : IDisposable
 
     private static void UpdatePointBeam(DebugVisualState state, int pointIndex, Vector3 center, Color color, bool isAabbFallback)
     {
-        if (state.PointInitialized[pointIndex] &&
-            Vector3.DistanceSquared(state.LastPointCenters[pointIndex], center) <= PointUpdateDistanceSqr)
-        {
-            return;
-        }
-
         GetPointVisualSettings(isAabbFallback, out _, out float halfHeight);
         ApplyPointBeamVisualSettings(state.PointBeams[pointIndex], isAabbFallback);
         UpdatePointBeamEntity(state.PointBeams[pointIndex], center, color, halfHeight);
-        state.LastPointCenters[pointIndex] = center;
-        state.PointInitialized[pointIndex] = true;
+    }
+
+    private void UpdateAabbEdgeBeams(DebugVisualState state, int pointCount)
+    {
+        int edgeIndex = 0;
+        for (int pointIndex = 0; pointIndex <= pointCount - AabbFallbackPointCount; pointIndex++)
+        {
+            if (!IsAabbFallbackRun(pointIndex))
+                continue;
+
+            for (int i = 0; i < AabbEdges.Length && edgeIndex < state.AabbEdgeBeams.Length; i++)
+            {
+                EnsureAabbEdgeBeam(state, edgeIndex);
+                var beam = state.AabbEdgeBeams[edgeIndex];
+                if (beam == null || !beam.IsValid)
+                    continue;
+
+                var edge = AabbEdges[i];
+                UpdateBeam(
+                    beam,
+                    _points[pointIndex + edge.Start],
+                    _points[pointIndex + edge.End],
+                    GetAabbEdgeColor());
+                edgeIndex++;
+            }
+
+            pointIndex += AabbFallbackPointCount - 1;
+        }
+
+        for (int i = edgeIndex; i < state.ActiveAabbEdgeCount; i++)
+            DisableBeam(state.AabbEdgeBeams[i]);
+
+        state.ActiveAabbEdgeCount = edgeIndex;
+    }
+
+    private bool IsAabbFallbackRun(int pointIndex)
+    {
+        for (int i = 0; i < AabbFallbackPointCount; i++)
+        {
+            if (!_aabbFallbackPoints[pointIndex + i])
+                return false;
+        }
+
+        return true;
+    }
+
+    private static void EnsureAabbEdgeBeam(DebugVisualState state, int edgeIndex)
+    {
+        if (state.AabbEdgeBeams[edgeIndex] != null && state.AabbEdgeBeams[edgeIndex]!.IsValid)
+            return;
+
+        state.AabbEdgeBeams[edgeIndex] = CreateBeam(AabbEdgeBeamWidth, AabbEdgeBeamHdrColorScale);
     }
 
     private static void DisablePointBeam(DebugVisualState state, int pointIndex)
     {
-        state.PointInitialized[pointIndex] = false;
         DisableBeam(state.PointBeams[pointIndex]);
     }
 
     private static void RemovePointBeam(DebugVisualState state, int pointIndex)
     {
-        state.PointInitialized[pointIndex] = false;
         RemoveEntity(ref state.PointBeams[pointIndex]);
-    }
-
-    private static void UpdateLineBeam(DebugVisualState state, int lineIndex, Vector3 start, Vector3 end, Color color, bool isAabbFallback)
-    {
-        ApplyLineBeamVisualSettings(state.LineBeams[lineIndex], isAabbFallback);
-        if (state.LineBeams[lineIndex] == null || !state.LineBeams[lineIndex]!.IsValid)
-            return;
-
-        UpdateBeam(state.LineBeams[lineIndex]!, start, end, color);
-    }
-
-    private static void DisableLineBeam(DebugVisualState state, int lineIndex)
-    {
-        DisableBeam(state.LineBeams[lineIndex]);
-    }
-
-    private static void RemoveLineBeam(DebugVisualState state, int lineIndex)
-    {
-        RemoveEntity(ref state.LineBeams[lineIndex]);
     }
 
     private static void UpdatePointBeamEntity(CEnvBeam? beam, Vector3 center, Color color, float halfHeight)
@@ -434,33 +445,12 @@ internal sealed class DebugAabbRenderer : IDisposable
         halfHeight = PointHalfHeight;
     }
 
-    private static void GetLineVisualSettings(bool isAabbFallback, out float beamWidth)
-    {
-        beamWidth = isAabbFallback
-            ? FallbackLineBeamWidth
-            : LineBeamWidth;
-    }
-
     private static void ApplyPointBeamVisualSettings(CEnvBeam? beam, bool isAabbFallback)
     {
         if (beam == null || !beam.IsValid)
             return;
 
         GetPointVisualSettings(isAabbFallback, out float width, out _);
-        beam.Width = width;
-        beam.EndWidth = width;
-        beam.BoltWidth = width;
-        TrySetStateChanged(beam, "CBeam", "m_fWidth");
-        TrySetStateChanged(beam, "CBeam", "m_fEndWidth");
-        TrySetStateChanged(beam, "CBeam", "m_fBoltWidth");
-    }
-
-    private static void ApplyLineBeamVisualSettings(CEnvBeam? beam, bool isAabbFallback)
-    {
-        if (beam == null || !beam.IsValid)
-            return;
-
-        GetLineVisualSettings(isAabbFallback, out float width);
         beam.Width = width;
         beam.EndWidth = width;
         beam.BoltWidth = width;
@@ -498,10 +488,5 @@ internal sealed class DebugAabbRenderer : IDisposable
             entity.Remove();
 
         entity = null;
-    }
-
-    public void Dispose()
-    {
-        Clear();
     }
 }

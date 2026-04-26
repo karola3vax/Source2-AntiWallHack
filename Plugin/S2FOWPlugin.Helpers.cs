@@ -1,13 +1,23 @@
 using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
 using CounterStrikeSharp.API.Modules.Utils;
-using S2FOW.Config;
 using S2FOW.Core;
 
 namespace S2FOW;
 
+/// <summary>
+/// Helper methods used by multiple parts of the plugin:
+///   - Round phase tracking (warmup → freeze → live → post-plant → round end).
+///   - State resets between maps and rounds.
+///   - NOINTERP flag management for individual players.
+///   - Debug renderer creation.
+/// </summary>
 public partial class S2FOWPlugin
 {
+    /// <summary>
+    /// Creates (or destroys) the debug beam renderer based on current debug settings.
+    /// The renderer is only needed when ShowTargetPoints or ShowRayLines are enabled.
+    /// </summary>
     private void RebuildDebugRenderer()
     {
         _debugAabbRenderer?.Clear();
@@ -16,6 +26,11 @@ public partial class S2FOWPlugin
             : null;
     }
 
+    /// <summary>
+    /// Resets all runtime state. Called on map changes and config reloads.
+    /// This ensures no stale data (old smoke positions, cached player states,
+    /// debug visuals, performance counters) carries over between maps.
+    /// </summary>
     private void ResetRuntimeState(string? logMapName)
     {
         ResetNoInterpState();
@@ -24,25 +39,26 @@ public partial class S2FOWPlugin
         _playerStateCache?.ResetTracking();
         _debugAabbRenderer?.Clear();
         _perfMonitor?.Reset();
-        _projectileTracker?.Clear();
-        _spottedStateScrubber?.Clear();
-        _impactTracker?.Clear();
-        _trackedPlantedC4EntityIndex = 0;
-        _lastPlantedC4LookupTick = int.MinValue;
 
         if (!string.IsNullOrEmpty(logMapName))
             Log($"Map changed to {logMapName}. Internal state refreshed.");
     }
 
+    /// <summary>
+    /// Clears all pending NOINTERP flags across all players.
+    /// Used during round resets and plugin unload to ensure no player
+    /// gets stuck with the "no interpolation" effect.
+    /// </summary>
     private void ResetNoInterpState()
     {
         ClearPendingNoInterp(Utilities.GetPlayers());
         Array.Clear(_clearNoInterpAfterTick);
-        Array.Clear(_nextTraceOverlayUpdateTick);
-        _nextServerAvgOverlayRefreshTick = 0;
-        _displayedServerAvgRaycasts = 0.0;
     }
 
+    /// <summary>
+    /// Immediately clears the NOINTERP flag for a single player.
+    /// Used when a player disconnects to clean up their state.
+    /// </summary>
     private void ClearNoInterpState(CCSPlayerController controller)
     {
         int slot = controller.Slot;
@@ -59,115 +75,16 @@ public partial class S2FOWPlugin
         Utilities.SetStateChanged(pawn, "CBaseEntity", "m_fEffects");
     }
 
-    private bool ShouldBlockBombRadarESP()
-    {
-        return Config.General.SecurityProfile == SecurityProfile.Strict ||
-               Config.AntiWallhack.BlockBombRadarESP;
-    }
+    // ────────────────────────────────────────────────────────────────────────
+    //  Round phase management
+    // ────────────────────────────────────────────────────────────────────────
 
-    private bool ShouldHidePlantedBombEntity()
-    {
-        return Config.AntiWallhack.HidePlantedBombEntityWhenNotVisible;
-    }
-
-    private void SyncTrackedPlantedC4RadarState()
-    {
-        if (_spottedStateScrubber == null)
-            return;
-
-        if (_trackedPlantedC4EntityIndex > 0 && ShouldBlockBombRadarESP())
-        {
-            _spottedStateScrubber.OnC4Planted(_trackedPlantedC4EntityIndex);
-            return;
-        }
-
-        _spottedStateScrubber.OnC4Removed();
-    }
-
-    private bool CanObserverSeeTrackedC4(int observerSlot, CPlantedC4 c4Entity, int currentTick)
-    {
-        if (_playerStateCache == null || _visibilityManager == null || !FowConstants.IsValidSlot(observerSlot))
-            return false;
-
-        var observerSnapshot = _playerStateCache.Snapshots[observerSlot];
-        return _visibilityManager.CanSeePlantedC4(in observerSnapshot, c4Entity, currentTick);
-    }
-
-    private bool TryGetTrackedPlantedC4(out CPlantedC4 plantedC4)
-    {
-        plantedC4 = null!;
-        if (_trackedPlantedC4EntityIndex <= 0)
-        {
-            int currentTick = Server.TickCount;
-            if (_lastPlantedC4LookupTick == currentTick)
-                return false;
-
-            _lastPlantedC4LookupTick = currentTick;
-
-            try
-            {
-                var plantedC4Entities = Utilities.FindAllEntitiesByDesignerName<CPlantedC4>("planted_c4");
-                foreach (var c4 in plantedC4Entities)
-                {
-                    if (c4 != null && c4.IsValid && c4.Index > 0)
-                    {
-                        _trackedPlantedC4EntityIndex = (int)c4.Index;
-                        _lastPlantedC4LookupTick = currentTick;
-                        SyncTrackedPlantedC4RadarState();
-                        plantedC4 = c4;
-                        return true;
-                    }
-                }
-            }
-            catch
-            {
-                _suppressedEntityLookupErrors++;
-            }
-
-            return false;
-        }
-
-        var entity = Utilities.GetEntityFromIndex<CPlantedC4>(_trackedPlantedC4EntityIndex);
-        if (entity == null || !entity.IsValid)
-        {
-            _spottedStateScrubber?.OnC4Removed();
-            _trackedPlantedC4EntityIndex = 0;
-            return false;
-        }
-
-        plantedC4 = entity;
-        return true;
-    }
-
-    private bool ShouldHidePlantedC4FromObserver(
-        int observerSlot,
-        ReadOnlySpan<Models.PlayerSnapshot> snapshots,
-        CPlantedC4 plantedC4,
-        int currentTick)
-    {
-        if (!CanObserverSeeTrackedC4(observerSlot, plantedC4, currentTick))
-            return true;
-
-        if (!plantedC4.BeingDefused)
-            return false;
-
-        var defuserPawn = plantedC4.BombDefuser.Value;
-        if (defuserPawn == null || !defuserPawn.IsValid)
-            return false;
-
-        var defuserController = defuserPawn.Controller.Value as CCSPlayerController;
-        if (defuserController == null || !defuserController.IsValid || !FowConstants.IsValidSlot(defuserController.Slot))
-            return false;
-
-        ref readonly var observer = ref snapshots[observerSlot];
-        ref readonly var defuser = ref snapshots[defuserController.Slot];
-
-        if (!observer.IsValid || !defuser.IsValid || defuser.Team == observer.Team)
-            return false;
-
-        return _hiddenPairs[observerSlot * FowConstants.MaxSlots + defuserController.Slot];
-    }
-
+    /// <summary>
+    /// Determines the current round phase by querying the engine's game rules entity.
+    /// The game rules entity knows whether it is warmup, freeze time, or if the bomb
+    /// is planted. If the entity cannot be found (e.g., during a map transition),
+    /// we fall back to the provided default phase.
+    /// </summary>
     private void RefreshRoundPhaseFromGameRules(RoundPhase fallbackPhase)
     {
         if (!TryGetGameRules(out CCSGameRules? gameRules) || gameRules == null)
@@ -178,6 +95,8 @@ public partial class S2FOWPlugin
 
         CCSGameRules resolvedGameRules = gameRules;
 
+        // Check conditions in priority order:
+        // Warmup overrides everything, then freeze time, then bomb planted.
         if (resolvedGameRules.WarmupPeriod)
         {
             SetRoundPhase(RoundPhase.Warmup);
@@ -196,13 +115,20 @@ public partial class S2FOWPlugin
             return;
         }
 
+        // No special condition — use the fallback (Live or RoundEnd).
         SetRoundPhase(fallbackPhase == RoundPhase.RoundEnd ? RoundPhase.RoundEnd : RoundPhase.Live);
     }
 
+    /// <summary>
+    /// Updates the round phase and tells the visibility manager about the change.
+    /// Logs the transition to the console so operators can track phase changes.
+    /// </summary>
     private void SetRoundPhase(RoundPhase phase)
     {
         if (_currentRoundPhase == phase)
         {
+            // Even if the phase has not changed, re-send it to the visibility manager
+            // so it can re-check any internal state that depends on the phase.
             _visibilityManager?.SetRoundPhase(phase);
             return;
         }
