@@ -1,5 +1,7 @@
 # S2FOW (Source2 Fog Of War)
 
+![S2FOW Action](https://raw.githubusercontent.com/karola3vax/server-assets/main/s2fow.gif)
+
 Server-side anti-wallhack for Counter-Strike 2. Hides enemy players that the server cannot confirm are visible.
 
 No client-side data means no wallhack can reveal them — the information simply does not exist on their machine.
@@ -109,6 +111,8 @@ tools/
   los-point-editor/           3D editor for tuning visibility test points
   apply_los_points_to_layout.py
 ```
+
+![LOS Editor](https://raw.githubusercontent.com/karola3vax/server-assets/main/los-editor.png)
 
 ## License
 
