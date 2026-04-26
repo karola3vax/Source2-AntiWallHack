@@ -1,4 +1,4 @@
-# S2FOW
+# S2FOW (Source2 Fog Of War)
 
 Server-side anti-wallhack for Counter-Strike 2. Hides enemy players that the server cannot confirm are visible.
 
