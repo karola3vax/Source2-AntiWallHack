@@ -4,6 +4,8 @@ Server-side anti-wallhack for Counter-Strike 2. Hides enemy players that the ser
 
 No client-side data means no wallhack can reveal them — the information simply does not exist on their machine.
 
+https://raw.githubusercontent.com/karola3vax/server-assets/refs/heads/main/Screenshot_1.png
+
 ## How It Works
 
 Every network frame, S2FOW:
