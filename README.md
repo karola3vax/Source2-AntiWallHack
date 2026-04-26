@@ -1,7 +1,6 @@
 # S2FOW (Source2 Fog Of War)
 
 ![S2FOW Action](https://raw.githubusercontent.com/karola3vax/server-assets/main/s2fow.gif)
-![LOS Editor](https://raw.githubusercontent.com/karola3vax/server-assets/main/los-editor.png)
 
 Server-side anti-wallhack for Counter-Strike 2. Hides enemy players that the server cannot confirm are visible.
 
@@ -31,6 +30,8 @@ Every network frame, S2FOW:
 | Carried hostage | `HostageServices.CarriedHostage` | ✅ |
 | Hostage carry prop | `HostageServices.CarriedHostageProp` | ✅ |
 | Player controller | Scoreboard only — left transmitted | ✅ |
+
+![LOS Editor](https://raw.githubusercontent.com/karola3vax/server-assets/main/los-editor.png)
 
 Hiding all child entities atomically prevents the `FATAL ERROR: CL_CopyExistingEntity: missing client entity` crash. If S2FOW cannot prove the associated entity closure is complete for a live controlled pawn, it transmits that pawn instead of hiding it.
 
