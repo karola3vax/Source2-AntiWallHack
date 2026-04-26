@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>S2AC LOS Point Editor</title>
+  <link rel="stylesheet" href="./styles.css">
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <main id="app">
+    <canvas id="viewport" aria-label="LOS point editor viewport"></canvas>
+    <div id="labels" aria-hidden="true"></div>
+
+    <section class="hud topbar" aria-label="Editor toolbar">
+      <div class="brand">
+        <span class="title">LOS Pose Points</span>
+        <span id="status" class="status">Loading</span>
+      </div>
+      <div class="toolbar-group" role="group" aria-label="Axis lock">
+        <button class="tool active" type="button" data-axis="free" title="Free drag">Free</button>
+        <button class="tool" type="button" data-axis="x" title="Lock Source X">X</button>
+        <button class="tool" type="button" data-axis="y" title="Lock Source Y">Y</button>
+        <button class="tool" type="button" data-axis="z" title="Lock Source Z">Z</button>
+      </div>
+      <label class="toggle">
+        <input id="fineMode" type="checkbox">
+        <span>Fine</span>
+      </label>
+      <label class="toggle">
+        <input id="orbitEnabled" type="checkbox" checked>
+        <span>Orbit</span>
+      </label>
+      <button id="toggleExport" class="tool" type="button" title="Open export drawer">Export</button>
+    </section>
+
+    <section class="hud opacity-panel" aria-label="Model opacity">
+      <label>Opacity <input id="modelOpacity" type="range" min="0.15" max="1" step="0.01" value="1"></label>
+    </section>
+
+    <section class="hud point-panel" aria-label="Selected point">
+      <div class="panel-row">
+        <select id="pointSelect" aria-label="LOS point"></select>
+      </div>
+      <label class="name-row">Name <input id="pointName" type="text" maxlength="48" spellcheck="false" placeholder="Custom point name"></label>
+      <div class="coords" aria-label="Source coordinates">
+        <label>X <input id="coordX" type="number" step="0.01"></label>
+        <label>Y <input id="coordY" type="number" step="0.01"></label>
+        <label>Z <input id="coordZ" type="number" step="0.01"></label>
+      </div>
+      <div class="panel-actions">
+        <button id="autoGlbMatch" type="button" disabled title="Apply posed GLB bone transforms">Automatic GLB Match</button>
+        <button id="addCustomPoint" type="button" title="Add a custom draggable LOS dot near the selected point">Add Dot</button>
+        <button id="deleteCustomPoint" type="button" disabled title="Delete the selected custom dot">Delete Dot</button>
+        <button id="resetSelected" type="button" title="Reset the selected dot to its baseline position">Reset Point</button>
+        <button id="resetCustom" type="button" disabled title="Reset only custom dots">Reset Custom</button>
+        <button id="focusSelected" type="button" title="Center and follow the selected dot">Focus</button>
+        <button id="resetAll" type="button" title="Reset built-in and custom dots">Reset All</button>
+      </div>
+    </section>
+
+    <section class="hud calibration" aria-label="Viewer calibration">
+      <button id="toggleCalibration" class="section-button" type="button">Calibration</button>
+      <div id="calibrationBody" class="calibration-body hidden">
+        <label>Unit <input id="unitScale" type="number" min="1" step="1" value="36"></label>
+        <label>Yaw
+          <select id="modelYaw">
+            <option value="0">0</option>
+            <option value="90">90</option>
+            <option value="180">180</option>
+            <option value="270">270</option>
+          </select>
+        </label>
+        <label>Scale <input id="modelScale" type="number" min="0.1" step="0.05" value="1"></label>
+        <label>Offset X <input id="modelOffsetX" type="number" step="0.01" value="0"></label>
+        <label>Offset Y <input id="modelOffsetY" type="number" step="0.01" value="0"></label>
+        <label>Offset Z <input id="modelOffsetZ" type="number" step="0.01" value="0"></label>
+      </div>
+    </section>
+
+    <section id="exportDrawer" class="hud export-drawer hidden" aria-label="Export drawer">
+      <div class="drawer-head">
+        <select id="exportKind" aria-label="Export format">
+          <option value="json">JSON</option>
+          <option value="csharp">C# layout</option>
+        </select>
+        <button id="copyExport" type="button">Copy</button>
+        <button id="downloadJson" type="button">Download JSON</button>
+        <label class="file-button">
+          Load JSON
+          <input id="loadJson" type="file" accept="application/json,.json">
+        </label>
+      </div>
+      <textarea id="exportText" spellcheck="false"></textarea>
+    </section>
+  </main>
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>

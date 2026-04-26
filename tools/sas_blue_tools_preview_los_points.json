@@ -1,0 +1,651 @@
+{
+  "source": {
+    "model": "ct sas/source/sas blue.glb",
+    "animation": "tools_preview_sas blue",
+    "baseline": "tools/cs2_player_hitboxes_canonical.json",
+    "coordinate_space": "source_local_units",
+    "description": "Editable LOS points for the CT SAS blue model in the tools_preview_sas blue pose."
+  },
+  "viewer_mapping": {
+    "source_x": "forward/back",
+    "source_y": "left/right",
+    "source_z": "up",
+    "three_x": "source_y / unit_scale",
+    "three_y": "source_z / unit_scale",
+    "three_z": "-source_x / unit_scale",
+    "unit_scale": 36
+  },
+  "primitive_count": 35,
+  "points": [
+    {
+      "index": 0,
+      "name": "head_0",
+      "bone": "head_0",
+      "custom": false,
+      "required_weapon_class": "None",
+      "use_fixed_head_origin": true,
+      "local_point": [
+        -6.992,
+        -2.912,
+        64.51
+      ],
+      "canonical_midpoint": [
+        -0.36,
+        0,
+        72.03
+      ]
+    },
+    {
+      "index": 1,
+      "name": "neck_0",
+      "bone": "neck_0",
+      "custom": false,
+      "required_weapon_class": "None",
+      "use_fixed_head_origin": true,
+      "local_point": [
+        -6.842,
+        -3.302,
+        57.078
+      ],
+      "canonical_midpoint": [
+        -3.165,
+        0,
+        66.04
+      ]
+    },
+    {
+      "index": 2,
+      "name": "spine_3",
+      "bone": "spine_3",
+      "custom": false,
+      "required_weapon_class": "None",
+      "use_fixed_head_origin": true,
+      "local_point": [
+        -5.178,
+        -2.45,
+        54.506
+      ],
+      "canonical_midpoint": [
+        -3.92,
+        0,
+        61.31
+      ]
+    },
+    {
+      "index": 3,
+      "name": "spine_2",
+      "bone": "spine_2",
+      "custom": false,
+      "required_weapon_class": "None",
+      "use_fixed_head_origin": true,
+      "local_point": [
+        -3.112,
+        -0.79,
+        50.789
+      ],
+      "canonical_midpoint": [
+        -3.04,
+        0,
+        57.29
+      ]
+    },
+    {
+      "index": 4,
+      "name": "spine_1",
+      "bone": "spine_1",
+      "custom": false,
+      "required_weapon_class": "None",
+      "use_fixed_head_origin": true,
+      "local_point": [
+        0.214,
+        1.964,
+        47.735
+      ],
+      "canonical_midpoint": [
+        -1.7,
+        0,
+        51.6
+      ]
+    },
+    {
+      "index": 5,
+      "name": "spine_0",
+      "bone": "spine_0",
+      "custom": false,
+      "required_weapon_class": "None",
+      "use_fixed_head_origin": true,
+      "local_point": [
+        1.239,
+        2.516,
+        42.095
+      ],
+      "canonical_midpoint": [
+        -1.81,
+        0,
+        45.06
+      ]
+    },
+    {
+      "index": 6,
+      "name": "pelvis",
+      "bone": "pelvis",
+      "custom": false,
+      "required_weapon_class": "None",
+      "use_fixed_head_origin": true,
+      "local_point": [
+        1.368,
+        2.574,
+        37.481
+      ],
+      "canonical_midpoint": [
+        -1.75,
+        0,
+        40.12
+      ]
+    },
+    {
+      "index": 7,
+      "name": "ankle_l",
+      "bone": "ankle_l",
+      "custom": false,
+      "required_weapon_class": "None",
+      "use_fixed_head_origin": true,
+      "local_point": [
+        -13.748,
+        8.339,
+        1.183
+      ],
+      "canonical_midpoint": [
+        -0.775,
+        5.29,
+        1.235
+      ]
+    },
+    {
+      "index": 8,
+      "name": "ankle_r",
+      "bone": "ankle_r",
+      "custom": false,
+      "required_weapon_class": "None",
+      "use_fixed_head_origin": true,
+      "local_point": [
+        11.336,
+        -4.611,
+        1.186
+      ],
+      "canonical_midpoint": [
+        -0.79,
+        -5.345,
+        1.235
+      ]
+    },
+    {
+      "index": 9,
+      "name": "leg_lower_l",
+      "bone": "leg_lower_l",
+      "custom": false,
+      "required_weapon_class": "None",
+      "use_fixed_head_origin": true,
+      "local_point": [
+        -12.706,
+        6.395,
+        13.386
+      ],
+      "canonical_midpoint": [
+        -2.35,
+        4.995,
+        12.64
+      ]
+    },
+    {
+      "index": 10,
+      "name": "leg_lower_r",
+      "bone": "leg_lower_r",
+      "custom": false,
+      "required_weapon_class": "None",
+      "use_fixed_head_origin": true,
+      "local_point": [
+        6.25,
+        -7.008,
+        10.219
+      ],
+      "canonical_midpoint": [
+        -2.54,
+        -4.945,
+        12.66
+      ]
+    },
+    {
+      "index": 11,
+      "name": "arm_upper_l",
+      "bone": "arm_upper_l",
+      "custom": false,
+      "required_weapon_class": "None",
+      "use_fixed_head_origin": true,
+      "local_point": [
+        -9.662,
+        5.599,
+        58.888
+      ],
+      "canonical_midpoint": [
+        -3.89,
+        10.755,
+        57.38
+      ]
+    },
+    {
+      "index": 12,
+      "name": "arm_upper_r",
+      "bone": "arm_upper_r",
+      "custom": false,
+      "required_weapon_class": "None",
+      "use_fixed_head_origin": true,
+      "local_point": [
+        -2.229,
+        -5.48,
+        58.269
+      ],
+      "canonical_midpoint": [
+        -3.89,
+        -10.755,
+        57.38
+      ]
+    },
+    {
+      "index": 13,
+      "name": "arm_lower_l",
+      "bone": "arm_lower_l",
+      "custom": false,
+      "required_weapon_class": "None",
+      "use_fixed_head_origin": true,
+      "local_point": [
+        -14.146,
+        5.486,
+        56.11
+      ],
+      "canonical_midpoint": [
+        -3.025,
+        17.525,
+        48.8
+      ]
+    },
+    {
+      "index": 14,
+      "name": "arm_lower_r",
+      "bone": "arm_lower_r",
+      "custom": false,
+      "required_weapon_class": "None",
+      "use_fixed_head_origin": true,
+      "local_point": [
+        1.17,
+        -7.81,
+        55.162
+      ],
+      "canonical_midpoint": [
+        -3.065,
+        -17.335,
+        48.645
+      ]
+    },
+    {
+      "index": 15,
+      "name": "hand_l",
+      "bone": "hand_l",
+      "custom": false,
+      "required_weapon_class": "None",
+      "use_fixed_head_origin": true,
+      "local_point": [
+        -21.768,
+        -2.639,
+        54.429
+      ],
+      "canonical_midpoint": [
+        -0.99,
+        21.3,
+        42.22
+      ]
+    },
+    {
+      "index": 16,
+      "name": "hand_r",
+      "bone": "hand_r",
+      "custom": false,
+      "required_weapon_class": "None",
+      "use_fixed_head_origin": true,
+      "local_point": [
+        -7.527,
+        -7.862,
+        53.768
+      ],
+      "canonical_midpoint": [
+        -0.99,
+        -21.245,
+        42.28
+      ]
+    },
+    {
+      "index": 17,
+      "name": "leg_upper_l",
+      "bone": "leg_upper_l",
+      "custom": false,
+      "required_weapon_class": "None",
+      "use_fixed_head_origin": true,
+      "local_point": [
+        -3.829,
+        5.905,
+        29.617
+      ],
+      "canonical_midpoint": [
+        -1.38,
+        4.165,
+        30.175
+      ]
+    },
+    {
+      "index": 18,
+      "name": "leg_upper_r",
+      "bone": "leg_upper_r",
+      "custom": false,
+      "required_weapon_class": "None",
+      "use_fixed_head_origin": true,
+      "local_point": [
+        4.136,
+        -3.275,
+        28.942
+      ],
+      "canonical_midpoint": [
+        -1.98,
+        -4.67,
+        30.185
+      ]
+    },
+    {
+      "index": 19,
+      "name": "pistol",
+      "bone": "",
+      "custom": true,
+      "required_weapon_class": "Pistol",
+      "use_fixed_head_origin": false,
+      "local_point": [
+        -35,
+        -3.695,
+        60.443
+      ],
+      "canonical_midpoint": [
+        -22.764,
+        3.193,
+        52.007
+      ]
+    },
+    {
+      "index": 20,
+      "name": "sniper",
+      "bone": "",
+      "custom": true,
+      "required_weapon_class": "Sniper",
+      "use_fixed_head_origin": false,
+      "local_point": [
+        -56,
+        -3.604,
+        61.383
+      ],
+      "canonical_midpoint": [
+        -30.506,
+        3.039,
+        51.995
+      ]
+    },
+    {
+      "index": 21,
+      "name": "rifle",
+      "bone": "",
+      "custom": true,
+      "required_weapon_class": "Rifle",
+      "use_fixed_head_origin": false,
+      "local_point": [
+        -46,
+        -3.665,
+        61.443
+      ],
+      "canonical_midpoint": [
+        -36.67,
+        -1.17,
+        55.443
+      ]
+    },
+    {
+      "index": 22,
+      "name": "custom_04",
+      "bone": "",
+      "custom": true,
+      "required_weapon_class": "None",
+      "use_fixed_head_origin": false,
+      "local_point": [
+        1.239,
+        -6.4,
+        42.095
+      ],
+      "canonical_midpoint": [
+        1.239,
+        4.516,
+        42.095
+      ]
+    },
+    {
+      "index": 23,
+      "name": "custom_05",
+      "bone": "",
+      "custom": true,
+      "required_weapon_class": "None",
+      "use_fixed_head_origin": false,
+      "local_point": [
+        1.239,
+        13.62,
+        42.095
+      ],
+      "canonical_midpoint": [
+        1.239,
+        4.516,
+        42.095
+      ]
+    },
+    {
+      "index": 24,
+      "name": "custom_06",
+      "bone": "",
+      "custom": true,
+      "required_weapon_class": "None",
+      "use_fixed_head_origin": false,
+      "local_point": [
+        1.368,
+        12.67,
+        37.481
+      ],
+      "canonical_midpoint": [
+        1.368,
+        4.574,
+        37.481
+      ]
+    },
+    {
+      "index": 25,
+      "name": "custom_07",
+      "bone": "",
+      "custom": true,
+      "required_weapon_class": "None",
+      "use_fixed_head_origin": false,
+      "local_point": [
+        1.367,
+        -4.843,
+        37.481
+      ],
+      "canonical_midpoint": [
+        1.368,
+        4.574,
+        37.481
+      ]
+    },
+    {
+      "index": 26,
+      "name": "custom_08",
+      "bone": "",
+      "custom": true,
+      "required_weapon_class": "None",
+      "use_fixed_head_origin": false,
+      "local_point": [
+        0.214,
+        -5.355,
+        47.735
+      ],
+      "canonical_midpoint": [
+        0.214,
+        3.964,
+        47.735
+      ]
+    },
+    {
+      "index": 27,
+      "name": "custom_09",
+      "bone": "",
+      "custom": true,
+      "required_weapon_class": "None",
+      "use_fixed_head_origin": false,
+      "local_point": [
+        0.214,
+        13.381,
+        47.735
+      ],
+      "canonical_midpoint": [
+        0.214,
+        3.964,
+        47.735
+      ]
+    },
+    {
+      "index": 28,
+      "name": "custom_10",
+      "bone": "",
+      "custom": true,
+      "required_weapon_class": "None",
+      "use_fixed_head_origin": false,
+      "local_point": [
+        -3.112,
+        11.901,
+        50.789
+      ],
+      "canonical_midpoint": [
+        -3.112,
+        1.21,
+        50.789
+      ]
+    },
+    {
+      "index": 29,
+      "name": "custom_11",
+      "bone": "",
+      "custom": true,
+      "required_weapon_class": "None",
+      "use_fixed_head_origin": false,
+      "local_point": [
+        -3.112,
+        -5.552,
+        50.789
+      ],
+      "canonical_midpoint": [
+        -3.112,
+        1.21,
+        50.789
+      ]
+    },
+    {
+      "index": 30,
+      "name": "custom_12",
+      "bone": "",
+      "custom": true,
+      "required_weapon_class": "None",
+      "use_fixed_head_origin": false,
+      "local_point": [
+        -5.178,
+        10.984,
+        54.506
+      ],
+      "canonical_midpoint": [
+        -5.178,
+        -0.45,
+        54.506
+      ]
+    },
+    {
+      "index": 31,
+      "name": "custom_13",
+      "bone": "",
+      "custom": true,
+      "required_weapon_class": "None",
+      "use_fixed_head_origin": false,
+      "local_point": [
+        -5.178,
+        -7.886,
+        54.506
+      ],
+      "canonical_midpoint": [
+        -5.178,
+        -0.45,
+        54.506
+      ]
+    },
+    {
+      "index": 32,
+      "name": "custom_14",
+      "bone": "",
+      "custom": true,
+      "required_weapon_class": "None",
+      "use_fixed_head_origin": false,
+      "local_point": [
+        -1.543,
+        10.403,
+        72.019
+      ],
+      "canonical_midpoint": [
+        -6.992,
+        -0.912,
+        64.51
+      ]
+    },
+    {
+      "index": 33,
+      "name": "custom_15",
+      "bone": "",
+      "custom": true,
+      "required_weapon_class": "None",
+      "use_fixed_head_origin": false,
+      "local_point": [
+        8.677,
+        10.403,
+        56.313
+      ],
+      "canonical_midpoint": [
+        -1.543,
+        10.403,
+        65.019
+      ]
+    },
+    {
+      "index": 34,
+      "name": "custom_16",
+      "bone": "",
+      "custom": true,
+      "required_weapon_class": "None",
+      "use_fixed_head_origin": false,
+      "local_point": [
+        11.08,
+        12.403,
+        44.349
+      ],
+      "canonical_midpoint": [
+        7.292,
+        12.403,
+        56.313
+      ]
+    }
+  ]
+}

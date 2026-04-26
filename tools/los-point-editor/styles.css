@@ -1,0 +1,486 @@
+:root {
+  color-scheme: dark;
+  --bg: #1b2024;
+  --panel: rgba(17, 20, 23, 0.80);
+  --panel-strong: rgba(17, 20, 23, 0.94);
+  --line: rgba(255, 255, 255, 0.18);
+  --line-strong: rgba(255, 255, 255, 0.34);
+  --text: #f4f7f8;
+  --muted: #a4adb4;
+  --accent: #47d7ac;
+  --accent-strong: #5ef5c6;
+  --warn: #f0b25a;
+  --danger: #ef7777;
+  --shadow: 0 18px 54px rgba(0, 0, 0, 0.32);
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--text);
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+button,
+select,
+input {
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--text);
+  color-scheme: dark;
+}
+
+input:disabled {
+  color: rgba(244, 247, 248, 0.48);
+  cursor: default;
+}
+
+button,
+select {
+  height: 30px;
+  border-radius: 6px;
+}
+
+select option {
+  background: #20252a;
+  color: #f4f7f8;
+}
+
+select option:checked,
+select option:hover {
+  background: #2e6f61;
+  color: #ffffff;
+}
+
+button {
+  padding: 0 10px;
+  cursor: pointer;
+}
+
+button:hover,
+select:hover,
+input:hover {
+  border-color: var(--line-strong);
+  background: rgba(255, 255, 255, 0.11);
+}
+
+button:focus-visible,
+select:focus-visible,
+input:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid rgba(71, 215, 172, 0.55);
+  outline-offset: 2px;
+}
+
+canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  cursor: crosshair;
+}
+
+.hud {
+  position: absolute;
+  z-index: 4;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(16px);
+}
+
+.topbar {
+  top: 14px;
+  left: 14px;
+  right: 14px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 46px;
+  padding: 8px;
+}
+
+.brand {
+  min-width: 190px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin-right: auto;
+}
+
+.title {
+  font-size: 14px;
+  font-weight: 650;
+  line-height: 1.15;
+}
+
+.status {
+  min-height: 14px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.toolbar-group {
+  display: flex;
+  gap: 4px;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.tool {
+  min-width: 42px;
+}
+
+.tool.active {
+  border-color: rgba(71, 215, 172, 0.85);
+  background: rgba(71, 215, 172, 0.18);
+  color: var(--accent-strong);
+}
+
+.toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.05);
+  font-size: 12px;
+  user-select: none;
+}
+
+.toggle input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.point-panel {
+  left: 14px;
+  bottom: 14px;
+  width: min(390px, calc(100vw - 28px));
+  padding: 10px;
+  background: var(--panel-strong);
+}
+
+.opacity-panel {
+  left: 50%;
+  bottom: 14px;
+  width: min(300px, calc(100vw - 28px));
+  padding: 9px 12px;
+  transform: translateX(-50%);
+  background: var(--panel-strong);
+}
+
+.opacity-panel label {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.opacity-panel input[type="range"] {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.panel-row,
+.drawer-head {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.panel-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+#pointSelect {
+  width: 100%;
+}
+
+.name-row {
+  display: grid;
+  gap: 4px;
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.name-row input {
+  width: 100%;
+  height: 30px;
+  border-radius: 6px;
+  padding: 0 8px;
+}
+
+.coords {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: 8px 0;
+}
+
+.coords label,
+.calibration-body label {
+  display: grid;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.coords input,
+.calibration-body input,
+.calibration-body select {
+  width: 100%;
+  height: 30px;
+  border-radius: 6px;
+  padding: 0 8px;
+}
+
+.calibration-body input[type="range"] {
+  padding: 0;
+  accent-color: var(--accent);
+}
+
+.panel-actions button {
+  width: 100%;
+}
+
+#autoGlbMatch {
+  grid-column: 1 / -1;
+  border-color: rgba(71, 215, 172, 0.42);
+  background: rgba(71, 215, 172, 0.13);
+  color: var(--accent-strong);
+}
+
+#autoGlbMatch:disabled {
+  border-color: var(--line);
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(244, 247, 248, 0.38);
+  cursor: default;
+}
+
+#addCustomPoint {
+  border-color: rgba(147, 214, 255, 0.38);
+  background: rgba(147, 214, 255, 0.12);
+}
+
+#deleteCustomPoint {
+  border-color: rgba(239, 119, 119, 0.42);
+  background: rgba(239, 119, 119, 0.11);
+}
+
+#deleteCustomPoint:disabled {
+  border-color: var(--line);
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(244, 247, 248, 0.38);
+  cursor: default;
+}
+
+#resetCustom {
+  border-color: rgba(240, 178, 90, 0.42);
+  background: rgba(240, 178, 90, 0.10);
+}
+
+#resetCustom:disabled {
+  border-color: var(--line);
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(244, 247, 248, 0.38);
+  cursor: default;
+}
+
+#focusSelected {
+  border-color: rgba(255, 255, 255, 0.26);
+  background: rgba(255, 255, 255, 0.10);
+}
+
+.calibration {
+  right: 14px;
+  top: 74px;
+  width: 226px;
+  overflow: hidden;
+}
+
+.section-button {
+  width: 100%;
+  height: 34px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+}
+
+.calibration-body {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  padding: 0 10px 10px;
+}
+
+.export-drawer {
+  right: 14px;
+  bottom: 14px;
+  width: min(560px, calc(100vw - 28px));
+  height: min(360px, calc(100vh - 96px));
+  padding: 10px;
+  background: var(--panel-strong);
+}
+
+.drawer-head {
+  margin-bottom: 8px;
+}
+
+#exportKind {
+  min-width: 126px;
+}
+
+#exportText {
+  width: 100%;
+  height: calc(100% - 38px);
+  resize: none;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: rgba(3, 4, 5, 0.82);
+  color: #e7ecef;
+  padding: 10px;
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.file-button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--text);
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.file-button input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.hidden {
+  display: none !important;
+}
+
+#labels {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+}
+
+.point-label {
+  position: absolute;
+  transform: translate(-50%, -145%);
+  padding: 3px 6px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 5px;
+  background: rgba(8, 10, 12, 0.86);
+  color: var(--text);
+  font-size: 11px;
+  line-height: 1;
+  white-space: nowrap;
+  opacity: 0;
+  transition: opacity 100ms ease;
+}
+
+.point-label.visible {
+  opacity: 1;
+}
+
+@media (max-width: 720px) {
+  .topbar {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    right: auto;
+    width: calc(100vw - 28px);
+    align-items: stretch;
+  }
+
+  .brand {
+    grid-column: 1 / -1;
+    min-width: 100%;
+    margin-right: 0;
+  }
+
+  .toolbar-group {
+    display: grid;
+    grid-column: 1 / -1;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    width: auto;
+  }
+
+  .toolbar-group .tool {
+    min-width: 0;
+  }
+
+  .toggle,
+  #toggleExport {
+    min-width: 0;
+    justify-content: center;
+  }
+
+  .calibration {
+    top: auto;
+    left: 14px;
+    right: 14px;
+    width: auto;
+    bottom: 398px;
+  }
+
+  .opacity-panel {
+    left: 14px;
+    right: 14px;
+    bottom: 346px;
+    width: auto;
+    transform: none;
+  }
+
+  .export-drawer {
+    left: 14px;
+    right: 14px;
+    width: auto;
+  }
+}
