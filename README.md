@@ -1,50 +1,142 @@
-# S2FOW (Source2 Fog Of War)
+# S2FOW - Source 2 Fog Of War
 
-![S2FOW Action](https://raw.githubusercontent.com/karola3vax/server-assets/main/s2fow.gif)
+![S2FOW in action](https://raw.githubusercontent.com/karola3vax/server-assets/main/s2fow.gif)
 
-S2FOW is a server-side Counter-Strike 2 visibility plugin. It hides enemy players from a client when the server cannot confirm that the player should see them.
+S2FOW is a server-side visibility protection plugin for Counter-Strike 2.
 
-If the server does not send an enemy to a client, a client-side cheat cannot reveal that enemy from local game data.
+It does one job: when a player should not be able to see an enemy, the server can stop sending that enemy to that player's game client. If the client never receives the hidden enemy, a client-side cheat has far less local player data to reveal.
 
-## How It Works
+This is not a ban system, not an anti-aim system, and not a sound/radar blocker. It is a practical fog-of-war layer for player visibility.
 
-Every network frame, S2FOW:
+## Why Server Owners Use It
 
-1. Reads each player's position, body size, movement, weapon, and connected child entities.
-2. Checks whether each human player can see each enemy with RayTrace.
-3. Hides players behind smoke when smoke hiding is enabled.
-4. Removes the hidden player's body, weapons, wearables, carried hostage props, and scene children from that viewer's update.
-5. Sends a crash-recovery full update after hide/show changes so clients resync cleanly.
-6. Shows the player instead of hiding them whenever S2FOW cannot complete a safe check.
+Most wallhack protection fails when the enemy data is already on the player's computer. S2FOW attacks that problem earlier.
 
-S2FOW always shows players during warmup, freeze time, round start, spawn grace, death grace, and round end. Dead and dying player bodies are not hidden.
+Instead of only trusting the client, S2FOW checks visibility on the server every network frame. If an enemy is behind walls or fully blocked by smoke, S2FOW can remove that enemy's body and connected player objects from only that viewer's update.
 
-## Entity Coverage
+The result is a cleaner, harder-to-abuse visibility pipeline:
 
-| Entity Type | Source | Handled |
-|---|---|---|
-| Player body | `C_CSPlayerPawn` | Yes |
-| Weapons | `WeaponServices.MyWeapons / ActiveWeapon / LastWeapon` | Yes |
-| Wearables | `C_BaseCombatCharacter.m_hMyWearables` | Yes |
-| Scene children | `CGameSceneNode.Child / NextSibling / Owner` | Yes |
-| Carried hostage | `HostageServices.CarriedHostage` | Yes |
-| Hostage carry prop | `HostageServices.CarriedHostageProp` | Yes |
-| Player controller | Scoreboard/controller data is left visible | Yes |
+| What matters | What S2FOW does |
+|---|---|
+| Hidden enemies | Stops sending hidden enemy player bodies to that viewer |
+| Weapons and wearables | Hides them together with the player body |
+| Smoke | Can hide enemies fully blocked by smoke |
+| Safety | Shows players when S2FOW is unsure |
+| Crash mitigation | Sends client refreshes after hide/show changes |
+| Server control | Runs from the server, not from the player client |
 
-![Visibility Point Editor](https://raw.githubusercontent.com/karola3vax/server-assets/main/los-editor.png)
+## Real Behavior
 
-S2FOW hides connected player entities together. This prevents the `FATAL ERROR: CL_CopyExistingEntity: missing client entity` crash that can happen when a client loses a player body but still receives one of that player's child entities.
+Every network frame, S2FOW follows this flow:
 
-S2FOW also sends a full client update after hide/show changes. This crash-recovery path is active when the packaged `gamedata/s2fow.gamedata.json` is installed with the plugin.
+1. Read current players, teams, positions, movement, weapons, body size, and connected player objects.
+2. Skip hiding during warmup, freeze time, round end, and other moments where everyone should be visible.
+3. Keep recently spawned and recently dead players visible for a short grace period.
+4. Check smoke first. If smoke blocks every checked path to the enemy, the enemy can be hidden.
+5. If the viewer is already aiming close to the enemy body, show the enemy to avoid a harsh pop-in.
+6. Ask RayTrace whether walls block the checked body points.
+7. Hide the enemy only when S2FOW completed a safe check and the enemy should not be visible.
+8. Show the enemy whenever data is missing, RayTrace fails, or the configured raycast budget is exhausted.
+
+That last rule is important: S2FOW is built to fail safe. When the plugin cannot prove a hide is safe, it shows the player.
+
+## What Gets Hidden
+
+S2FOW does not only remove the player body. It also removes the connected objects that can crash a client or leak the hidden player visually.
+
+| Object | Covered |
+|---|---|
+| Player body | Yes |
+| Inventory weapons | Yes |
+| Active weapon | Yes |
+| Previous weapon used for switching animations | Yes |
+| Wearables | Yes |
+| Attached scene objects | Yes |
+| Carried hostage objects | Yes |
+| Hostage carry prop | Yes |
+| Scoreboard/controller data | Left visible |
+
+This connected-object handling is part of the crash-mitigation design. A CS2 client can fail badly if it receives a weapon, wearable, or attached object that points to a player body it never received.
+
+## Crash Recovery
+
+S2FOW includes a full-update recovery path for the viewer whose visibility list changed.
+
+When S2FOW hides or shows enemies for a viewer, it can request a client refresh for that viewer. Requests are combined to one refresh per viewer per frame and throttled to once every 32 ticks per viewer.
+
+This requires the packaged file:
+
+```text
+gamedata/s2fow.gamedata.json
+```
+
+If full-update support is unavailable, S2FOW logs the problem and continues running. Visibility decisions still follow the safe-show rule.
+
+## Smoke Visibility
+
+S2FOW can hide enemies behind smoke when `SmokeVisibility.HidePlayersBehindSmoke` is enabled.
+
+Smoke is modeled as a growing sphere:
+
+- It starts smaller when it blooms.
+- It grows to full size over the configured tick window.
+- It stops blocking after the configured lifetime or when the engine reports the smoke expired.
+- Fast pre-checking skips expensive smoke math when no smoke is near the viewer/enemy path.
+
+Smoke hiding only happens when smoke blocks all checked paths for that enemy. A partly visible enemy is shown.
+
+## Visibility Points
+
+![Visibility point editor](https://raw.githubusercontent.com/karola3vax/server-assets/main/los-editor.png)
+
+S2FOW checks real points on the CS2 player model:
+
+- 35 model-based body and weapon points
+- 8 backup box corners around the enemy
+- Weapon-aware muzzle points for pistol, rifle, and sniper weapon classes
+- Movement prediction for both the viewer's eyes and the enemy body
+
+The included editor under `tools/los-point-editor/` is used to inspect and tune these points. The runtime layout is generated into:
+
+```text
+Plugin/Core/Cs2VisibilityPrimitiveLayout.cs
+```
+
+## What S2FOW Does Not Claim To Do
+
+S2FOW is intentionally narrow. It does not claim unsupported behavior.
+
+It does not:
+
+- detect or ban cheaters
+- hide footsteps or sound cues
+- control radar or spotted-state behavior
+- hide projectiles, grenades, dropped weapons, or map props
+- replace server-side moderation, demos, or other anti-cheat tools
+- control Source 2 PVS outside the player objects it removes from transmit
+
+It focuses on player visibility data sent to each client.
 
 ## Requirements
 
-- [CounterStrikeSharp](https://github.com/roflmuffin/CounterStrikeSharp) (API >= 276)
-- [Metamod:Source](https://www.sourcemm.net/downloads.php?branch=dev) (Dev build)
-- [Ray-Trace](https://github.com/FUNPLAY-pro-CS2/Ray-Trace) (RayTraceImpl and RayTraceApi installed on the server)
-- .NET 8
+- [CounterStrikeSharp](https://github.com/roflmuffin/CounterStrikeSharp), API 276 or newer
+- [Metamod:Source](https://www.sourcemm.net/downloads.php?branch=dev), dev build
+- [Ray-Trace](https://github.com/FUNPLAY-pro-CS2/Ray-Trace), with both RayTraceImpl and RayTraceApi installed
+- .NET 8 for building
 
-CounterStrikeSharp, Metamod:Source, and Ray-Trace are external server prerequisites. They are not bundled in the S2FOW release package.
+RayTrace is required. If RayTrace is not loaded, S2FOW stays idle and players are sent normally.
+
+## Install
+
+1. Install Metamod:Source and CounterStrikeSharp on the server.
+2. Install Ray-Trace with both RayTraceImpl and RayTraceApi.
+3. Build S2FOW or download a release.
+4. Copy the release `addons/` folder into the server's `csgo/addons/` folder.
+5. Make sure `gamedata/s2fow.gamedata.json` is installed with the plugin.
+6. Restart the server.
+7. Check the server console for the S2FOW startup banner and RayTrace connection message.
+
+S2FOW generates its config automatically on first run.
 
 ## Build
 
@@ -52,84 +144,129 @@ CounterStrikeSharp, Metamod:Source, and Ray-Trace are external server prerequisi
 dotnet build S2FOW.sln -c Release
 ```
 
-Output: `Plugin/bin/Release/net8.0/`
+Build output:
 
-## Install
-
-1. Build or download the release.
-2. Install Metamod:Source and CounterStrikeSharp on the server.
-3. Install Ray-Trace with both RayTraceImpl and RayTraceApi.
-4. Merge the release ZIP's `addons/` folder into the server's `csgo/addons/` folder.
-5. For manual installs, copy `S2FOW.dll`, `S2FOW.deps.json`, and `gamedata/s2fow.gamedata.json` into the S2FOW plugin folder layout.
-6. Restart the server. The config is generated automatically on first run.
+```text
+Plugin/bin/Release/net8.0/
+```
 
 ## Commands
 
-| Command | Permission | Description |
-|---|---|---|
-| `css_s2fow_status` | `@css/root` | Show status, workload, warnings, and crash protection counters |
-| `css_fow_stats` | `@css/root` | Same as `css_s2fow_status`; kept for existing admin habits |
-| `css_s2fow_toggle` | `@css/root` | Turn S2FOW player hiding on or off |
-| `css_fow_toggle` | `@css/root` | Same as `css_s2fow_toggle`; kept for existing admin habits |
+All commands require `@css/root`.
+
+| Command | What it does |
+|---|---|
+| `css_s2fow_status` | Shows protection status, workload, visibility decisions, crash protection counters, and warnings |
+| `css_fow_stats` | Same status command, kept for older admin habits |
+| `css_s2fow_toggle` | Turns S2FOW protection on or off |
+| `css_fow_toggle` | Same toggle command, kept for older admin habits |
+
+When protection is disabled with the toggle command, S2FOW sends players normally and requests full updates so clients refresh cleanly.
 
 ## Config
 
-Auto-generated at `csgo/addons/counterstrikesharp/configs/plugins/S2FOW/`. S2FOW writes a guided config with short comments. Old v32 config files still load, then S2FOW rewrites them with the new plain-English names.
+Config files are generated here:
 
-| Section | Controls |
+```text
+csgo/addons/counterstrikesharp/configs/plugins/S2FOW/
+```
+
+S2FOW writes a guided JSON config with plain-English comments. Current config schema: `33`.
+
+Old v32 config files still load. S2FOW reads the old names once, then rewrites the file with the current plain-English names.
+
+| Section | Plain meaning |
 |---|---|
-| `Main` | `ProtectionEnabled`, death grace, and round-start visibility |
-| `SmokeVisibility` | Smoke hiding on/off, smoke size, smoke lifetime, and smoke growth |
-| `EnemyCheckPoints` | Body points checked on enemies and reduced-check distance/view rules |
-| `ViewerEyePrediction` | Small viewer eye prediction for fast movement |
-| `Advanced` | Raycast limit, fast smoke pre-check, box padding, and aim reveal distance |
-| `Debug` | Debug HUD, debug rays, and debug body points |
+| `Main` | Main on/off behavior, death grace, and round-start visibility |
+| `SmokeVisibility` | Smoke hiding, smoke size, smoke lifetime, and smoke growth |
+| `EnemyCheckPoints` | Enemy body checks, distance rules, view-angle rules, and enemy movement prediction |
+| `ViewerEyePrediction` | Small viewer eye prediction for fast movement and jumps |
+| `Debug` | Optional HUD, ray lines, and body-point drawings |
+| `Advanced` | Raycast budget, smoke pre-checking, box padding, aim reveal, and eye height offset |
 
 Common settings:
 
-| Setting | Plain meaning |
-|---|---|
-| `Main.ProtectionEnabled` | Main on/off switch |
-| `Main.KeepDeadPlayersVisibleTicks` | Keeps dead players visible briefly; 128 ticks is about 2 seconds on a 64 tick server |
-| `Main.ShowEveryoneAtRoundStartTicks` | Shows everyone at live round start; 32 ticks is about 0.5 seconds |
-| `SmokeVisibility.HidePlayersBehindSmoke` | Lets smoke hide players from viewers |
-| `SmokeVisibility.SmokeSizeUnits` | Approximate smoke size in Source 2 units |
-| `SmokeVisibility.SmokeLastsTicks` | How long smoke can hide players; 1232 ticks is about 19.25 seconds |
-| `SmokeVisibility.SmokeGrowsTicks` | How long smoke takes to reach full size; 192 ticks is about 3 seconds |
+| Setting | Default | Meaning |
+|---|---:|---|
+| `Main.ProtectionEnabled` | `true` | Main protection switch |
+| `Main.KeepDeadPlayersVisibleTicks` | `128` | Keeps killed players visible briefly, about 2 seconds on 64 tick |
+| `Main.ShowEveryoneAtRoundStartTicks` | `32` | Shows everyone briefly when live play starts, about 0.5 seconds on 64 tick |
+| `SmokeVisibility.HidePlayersBehindSmoke` | `true` | Allows smoke to hide enemies |
+| `SmokeVisibility.SmokeSizeUnits` | `130.0` | Approximate smoke blocking size in Source 2 units |
+| `SmokeVisibility.SmokeLastsTicks` | `1232` | Smoke blocking lifetime, about 19.25 seconds on 64 tick |
+| `SmokeVisibility.SmokeGrowsTicks` | `192` | Smoke growth time, about 3 seconds on 64 tick |
+| `EnemyCheckPoints.UseFewerChecksFarAway` | `true` | Uses lighter checks for far enemies |
+| `EnemyCheckPoints.UseFewerChecksOutsideView` | `false` | Optional lighter checks outside the viewer's aim direction |
+| `Advanced.RaycastLimitPerFrame` | `0` | `0` means unlimited raycasts, which avoids delayed visibility decisions |
+| `Advanced.FastSmokePreCheck` | `true` | Skips detailed smoke checks when smoke is nowhere near the viewer/enemy path |
+| `Debug.ShowDebugHud` | `false` | Shows the in-game S2FOW debug HUD |
+| `Debug.ShowDebugRays` | `false` | Draws the wall checks S2FOW sends to RayTrace |
+| `Debug.ShowDebugPoints` | `false` | Draws the enemy body points S2FOW checks |
 
-The old `RayHitFractionThreshold` and `RayHitDistanceThreshold` settings are no longer written. Visibility now treats any world hit before the target point as blocked.
+The old `RayHitFractionThreshold` and `RayHitDistanceThreshold` settings are no longer written. Current visibility behavior is strict: any world hit before the checked enemy point blocks that path.
 
-## Debug
+## Status Output
 
-Enable debug settings only while testing:
+Use:
 
-- `Debug.ShowDebugHud` shows the in-game S2FOW HUD with plain labels such as `Enemies checked`, `Raycasts`, and `Why shown/hidden`.
-- `Debug.ShowDebugRays` draws sight checks sent to RayTrace.
-- `Debug.ShowDebugPoints` marks the enemy body points S2FOW checks.
+```text
+css_s2fow_status
+```
 
-## Source Layout
+The status output is grouped for server owners:
+
+- `Status`: protection on/off, RayTrace readiness, round state, config schema
+- `Work`: player checks, raycasts, average plugin time, average raycasts, peak raycasts
+- `Visibility decisions`: smoke hides, blocked-sight hides, safe-show fallbacks
+- `Crash protection`: full updates sent, throttled, failed, requested, and combined
+- `Warnings`: config write failures, player-object read failures, incomplete child collection, RayTrace failures
+
+## Debug Mode
+
+Debug mode is for testing, not normal public play.
+
+When enabled, S2FOW can draw:
+
+- a small HUD with labels like `Enemies checked`, `Raycasts`, and `Why shown/hidden`
+- yellow ray lines for clear checks
+- blue ray lines for blocked checks
+- white body points and blue backup box points around enemies
+
+These debug drawings create real game objects, so keep them off during normal matches.
+
+## Project Layout
 
 ```text
 Plugin/
-  S2FOWPlugin.cs              Shared fields, helpers, plugin identity
-  S2FOWPlugin.Lifecycle.cs    Load, unload, RayTrace connection
-  S2FOWPlugin.Transmit.cs     CheckTransmit player hiding
-  S2FOWPlugin.Events.cs       Game event handlers
-  S2FOWPlugin.Config.cs       Config loading, migration, diff logging
+  S2FOWPlugin.cs              Plugin identity, shared fields, reading guide
+  S2FOWPlugin.Lifecycle.cs    Loading, unloading, config setup, RayTrace connection
+  S2FOWPlugin.Transmit.cs     Per-viewer player hiding in CheckTransmit
+  S2FOWPlugin.Events.cs       Match events: spawn, death, smoke, bomb, map changes
+  S2FOWPlugin.FullUpdate.cs   Viewer refresh queue and crash-recovery updates
   S2FOWPlugin.Commands.cs     Admin commands
-  S2FOWPlugin.Debug.cs        HUD overlay, startup banner
-  S2FOWPlugin.Helpers.cs      Round state, resets, NOINTERP
-  Config/                     Config schema and guided JSON writer
-  Core/                       RaycastEngine, VisibilityManager, PlayerStateCache, SmokeTracker
-  Models/                     PlayerSnapshot, SmokeData, DebugRay
-  Util/                       PerformanceMonitor, VectorMath, diagnostics
+  S2FOWPlugin.Debug.cs        Startup banner, status text, debug HUD
+  Config/                     Config schema and guided config writer
+  Core/                       Visibility decisions, ray checks, snapshots, smoke, full update bridge
+  Models/                     Player snapshots, smoke data, debug drawing data
+  Util/                       Text, diagnostics, performance counters, vector math
 gamedata/
-  s2fow.gamedata.json         Full-update crash-recovery offsets
+  s2fow.gamedata.json         Required data for full-update crash recovery
 tools/
-  los-point-editor/           3D editor for tuning visibility points
+  los-point-editor/           Browser editor for visibility points
   apply_los_points_to_layout.py
+  extract_cs2_visibility_primitives.py
 ```
+
+## Recommended Server Owner Flow
+
+1. Install dependencies first: CounterStrikeSharp, Metamod:Source, and Ray-Trace.
+2. Install S2FOW with its `gamedata` file.
+3. Start the server and confirm RayTrace connects.
+4. Leave defaults on the first test.
+5. Use `css_s2fow_status` to watch workload and warnings.
+6. Enable debug drawings only on a private test server.
+7. Tune config only if your server has a specific visibility or performance issue.
 
 ## License
 
-[AGPLv3](LICENSE)
+S2FOW is licensed under [AGPLv3](LICENSE).
