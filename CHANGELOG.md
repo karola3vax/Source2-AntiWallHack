@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.0.6 - 2026-04-30
+
+### Crash Safety
+- Paused protection when full-update crash recovery is unavailable or fails, so S2FOW does not hide players without the recovery path that prevents `CopyExistingEntity: missing client entity` crashes.
+- Updated startup, toggle, and status output to say plainly when protection is paused because crash recovery is not ready.
+
 ## v1.0.5 - 2026-04-30
 
 ### Plain-English Output And Config

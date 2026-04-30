@@ -10,8 +10,8 @@ namespace S2FOW;
 /// A full update is a crash-recovery refresh for one viewer. S2FOW queues at most
 /// one refresh per viewer per frame, combines multiple reasons into that one queued
 /// refresh, and then throttles each viewer to one refresh every 32 ticks.
-/// If full-update support is unavailable, S2FOW logs the problem once and keeps
-/// running; the visibility logic still shows players safely when it is unsure.
+/// If full-update support is unavailable or fails, S2FOW leaves all players visible
+/// instead of hiding without the recovery path.
 /// </summary>
 public partial class S2FOWPlugin
 {
@@ -99,14 +99,15 @@ public partial class S2FOWPlugin
             if (_networkFullUpdateService == null)
             {
                 _perfMonitor?.RecordFullUpdateFailed(reason);
-                LogFullUpdateFailureOnce("full-update service is unavailable");
+                LogFullUpdateFailureOnce("full-update service is unavailable; protection is paused and all players are sent normally");
                 continue;
             }
 
             if (!_networkFullUpdateService.TryForceFullUpdate(controller, out string error))
             {
                 _perfMonitor?.RecordFullUpdateFailed(reason);
-                LogFullUpdateFailureOnce(error);
+                _networkFullUpdateService = null;
+                LogFullUpdateFailureOnce($"{error}; protection is paused and all players are sent normally");
                 continue;
             }
 

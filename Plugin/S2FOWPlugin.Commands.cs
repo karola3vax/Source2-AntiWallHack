@@ -33,15 +33,22 @@ public partial class S2FOWPlugin
             ForceFullUpdateAllObserversNow(ObserverFullUpdateReason.Unhide | ObserverFullUpdateReason.Toggle);
 
         Reply(command, Config.General.Enabled
-            ? "Protection enabled. S2FOW may hide enemies the player cannot see."
+            ? IsCrashRecoveryReady
+                ? "Protection enabled. S2FOW may hide enemies the player cannot see."
+                : "Protection enabled but paused because crash recovery full-update support is unavailable. All players are sent normally."
             : "Protection disabled. All players are sent normally; full updates were sent to clients.");
     }
 
     private IEnumerable<string> BuildStatsLines()
     {
+        string protectionState = Config.General.Enabled
+            ? IsCrashRecoveryReady ? "on" : "paused because crash recovery is unavailable"
+            : "off";
+
         yield return PluginOutput.Prefix(
-            $"Status: protection {(Config.General.Enabled ? "on" : "off")} | " +
+            $"Status: protection {protectionState} | " +
             $"RayTrace {(_initialized ? "ready" : "not ready")} | " +
+            $"crash recovery {(IsCrashRecoveryReady ? "ready" : "not ready")} | " +
             $"round state {FriendlyRoundPhase(_currentRoundPhase)} | " +
             $"config schema v{Config.Version}");
 

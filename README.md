@@ -70,7 +70,7 @@ This requires the packaged file:
 gamedata/s2fow.gamedata.json
 ```
 
-If full-update support is unavailable, S2FOW logs the problem and continues running. Visibility decisions still follow the safe-show rule.
+If full-update support is unavailable, S2FOW logs the problem and pauses protection. That means all players are sent normally until the gamedata file is installed correctly. This is intentional: hiding players without the recovery refresh can cause the `CopyExistingEntity: missing client entity` crash.
 
 ## Smoke Visibility
 

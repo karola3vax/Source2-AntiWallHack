@@ -38,6 +38,13 @@ public partial class S2FOWPlugin
         if (!Config.General.Enabled)
             return;
 
+        // Hiding players without the full-update recovery path can trigger the
+        // "CopyExistingEntity: missing client entity" client crash. When the
+        // required gamedata/engine bridge is missing or has failed, S2FOW pauses
+        // protection and leaves every player visible.
+        if (!IsCrashRecoveryReady)
+            return;
+
         // Read current players and clear any short-lived visual refresh flags that
         // have expired from earlier hide/show transitions.
         var players = Utilities.GetPlayers();

@@ -35,7 +35,7 @@ public partial class S2FOWPlugin
         _playerStateCache = new PlayerStateCache();
         _perfMonitor = new PerformanceMonitor();
         if (!NetworkFullUpdateService.TryCreate(out _networkFullUpdateService, out string fullUpdateError))
-            Log($"Crash recovery full-update support is unavailable: {fullUpdateError}");
+            Log($"Crash recovery full-update support is unavailable: {fullUpdateError}. Protection will stay paused so clients are not risked by hidden players without the recovery path. Install s2fow.gamedata.json in addons/counterstrikesharp/gamedata.");
         else
             Log("Crash recovery full-update support is active.");
 
@@ -157,6 +157,8 @@ public partial class S2FOWPlugin
         RebuildDebugRenderer();
 
         _initialized = true;
-        Log("RayTrace connected. S2FOW is now checking player visibility.");
+        Log(IsCrashRecoveryReady
+            ? "RayTrace connected. S2FOW is now checking player visibility."
+            : "RayTrace connected, but protection is paused because crash recovery full-update support is unavailable.");
     }
 }

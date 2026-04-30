@@ -40,10 +40,15 @@ internal static class PluginText
         ];
     }
 
-    public static string BuildStartupConfigLine(bool enabled, int configVersion)
+    public static string BuildStartupConfigLine(bool enabled, bool crashRecoveryReady, int configVersion)
     {
-        string state = enabled ? "protection on" : "protection off";
-        return $"Status: {state} | config schema v{configVersion}";
+        string state = enabled
+            ? crashRecoveryReady
+                ? "protection on"
+                : "protection paused because crash recovery is unavailable"
+            : "protection off";
+        string crashRecoveryState = crashRecoveryReady ? "crash recovery ready" : "crash recovery not ready";
+        return $"Status: {state} | {crashRecoveryState} | config schema v{configVersion}";
     }
 
     public static string BuildCoverageLine(AntiWallhackSettings antiWallhack)

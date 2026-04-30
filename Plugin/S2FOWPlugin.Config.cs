@@ -84,6 +84,7 @@ public partial class S2FOWPlugin
     {
         return PluginText.BuildStartupConfigLine(
             Config.General.Enabled,
+            IsCrashRecoveryReady,
             Config.Version);
     }
 
