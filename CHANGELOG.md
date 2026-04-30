@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.0.7 - 2026-04-30
+
+### Crash Safety
+- Fixed a false pause where one temporary full-update send failure, such as `network client not found for slot 0` during a round or connection transition, could turn protection off for the rest of the map.
+- Startup status now says crash recovery is "not checked yet" during early config parsing instead of incorrectly saying protection is paused before the bridge has been created.
+
 ## v1.0.6 - 2026-04-30
 
 ### Crash Safety

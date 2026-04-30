@@ -10,8 +10,9 @@ namespace S2FOW;
 /// A full update is a crash-recovery refresh for one viewer. S2FOW queues at most
 /// one refresh per viewer per frame, combines multiple reasons into that one queued
 /// refresh, and then throttles each viewer to one refresh every 32 ticks.
-/// If full-update support is unavailable or fails, S2FOW leaves all players visible
-/// instead of hiding without the recovery path.
+/// If full-update support is unavailable, S2FOW leaves all players visible instead
+/// of hiding without the recovery path. If one send fails because a viewer is not
+/// ready during a connection or round transition, S2FOW counts it and retries later.
 /// </summary>
 public partial class S2FOWPlugin
 {
@@ -106,8 +107,7 @@ public partial class S2FOWPlugin
             if (!_networkFullUpdateService.TryForceFullUpdate(controller, out string error))
             {
                 _perfMonitor?.RecordFullUpdateFailed(reason);
-                _networkFullUpdateService = null;
-                LogFullUpdateFailureOnce($"{error}; protection is paused and all players are sent normally");
+                LogFullUpdateFailureOnce($"full update send failed for slot {observerSlot}: {error}. S2FOW will retry later; protection remains active because crash recovery support is installed");
                 continue;
             }
 

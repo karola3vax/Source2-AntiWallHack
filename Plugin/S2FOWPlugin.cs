@@ -105,7 +105,7 @@ public partial class S2FOWPlugin : BasePlugin, IPluginConfig<S2FOWConfig>
     // Plugin metadata shown in the server plugin list
 
     public override string ModuleName => "S2FOW";
-    public override string ModuleVersion => "1.0.6";
+    public override string ModuleVersion => "1.0.7";
     public override string ModuleAuthor => "karola3vax";
     public override string ModuleDescription => "Server-side CS2 player visibility plugin that hides enemies a viewer cannot see, supports smoke hiding, and sends crash-recovery full updates after hide/show changes.";
 
@@ -140,6 +140,9 @@ public partial class S2FOWPlugin : BasePlugin, IPluginConfig<S2FOWConfig>
 
     /// <summary>Bridge used to force a viewer refresh after hide/show changes.</summary>
     private NetworkFullUpdateService? _networkFullUpdateService;
+
+    /// <summary>True after S2FOW has tried to create the full-update crash-recovery bridge.</summary>
+    private bool _crashRecoveryChecked;
 
     /// <summary>
     /// True only when S2FOW can send the client refresh that protects viewers after

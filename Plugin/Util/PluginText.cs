@@ -40,14 +40,18 @@ internal static class PluginText
         ];
     }
 
-    public static string BuildStartupConfigLine(bool enabled, bool crashRecoveryReady, int configVersion)
+    public static string BuildStartupConfigLine(bool enabled, bool crashRecoveryChecked, bool crashRecoveryReady, int configVersion)
     {
         string state = enabled
-            ? crashRecoveryReady
+            ? !crashRecoveryChecked
+                ? "protection waiting for crash recovery startup check"
+                : crashRecoveryReady
                 ? "protection on"
                 : "protection paused because crash recovery is unavailable"
             : "protection off";
-        string crashRecoveryState = crashRecoveryReady ? "crash recovery ready" : "crash recovery not ready";
+        string crashRecoveryState = !crashRecoveryChecked
+            ? "crash recovery not checked yet"
+            : crashRecoveryReady ? "crash recovery ready" : "crash recovery not ready";
         return $"Status: {state} | {crashRecoveryState} | config schema v{configVersion}";
     }
 

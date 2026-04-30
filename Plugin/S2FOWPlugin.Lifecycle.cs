@@ -38,6 +38,7 @@ public partial class S2FOWPlugin
             Log($"Crash recovery full-update support is unavailable: {fullUpdateError}. Protection will stay paused so clients are not risked by hidden players without the recovery path. Install s2fow.gamedata.json in addons/counterstrikesharp/gamedata.");
         else
             Log("Crash recovery full-update support is active.");
+        _crashRecoveryChecked = true;
 
         // Listen for map changes so we can reset state between maps.
         RegisterListener<Listeners.OnMapStart>(OnMapStart);
