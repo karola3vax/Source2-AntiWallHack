@@ -35,6 +35,7 @@ public partial class S2FOWPlugin
     {
         ResetNoInterpState();
         ResetObserverFullUpdateState();
+        ResetDeferredRevealState();
         _visibilityManager?.OnMapChange();
         _visibilityManager?.SetRoundPhase(_currentRoundPhase);
         _playerStateCache?.ResetTracking();

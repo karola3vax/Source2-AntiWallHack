@@ -9,7 +9,8 @@ namespace S2FOW;
 ///
 /// A full update is a crash-recovery refresh for one viewer. S2FOW queues at most
 /// one refresh per viewer per frame, combines multiple reasons into that one queued
-/// refresh, and then throttles each viewer to one refresh every 32 ticks.
+/// refresh. Real hide/show transitions are sent immediately; repeated non-critical
+/// refreshes, such as round-state refreshes, are throttled.
 /// If full-update support is unavailable, S2FOW leaves all players visible instead
 /// of hiding without the recovery path. If one send fails because a viewer is not
 /// ready during a connection or round transition, S2FOW counts it and retries later.
@@ -91,7 +92,8 @@ public partial class S2FOWPlugin
             _observerFullUpdateQueued[observerSlot] = false;
             _observerFullUpdateReasons[observerSlot] = ObserverFullUpdateReason.None;
 
-            if (currentTick < _nextObserverFullUpdateTick[observerSlot])
+            bool shouldThrottle = ShouldThrottleFullUpdate(reason);
+            if (shouldThrottle && currentTick < _nextObserverFullUpdateTick[observerSlot])
             {
                 _perfMonitor?.RecordFullUpdateThrottled(reason);
                 continue;
@@ -111,7 +113,9 @@ public partial class S2FOWPlugin
                 continue;
             }
 
-            _nextObserverFullUpdateTick[observerSlot] = currentTick + FullUpdateThrottleTicks;
+            if (shouldThrottle)
+                _nextObserverFullUpdateTick[observerSlot] = currentTick + FullUpdateThrottleTicks;
+
             _perfMonitor?.RecordFullUpdateSent(reason);
         }
 
@@ -137,6 +141,22 @@ public partial class S2FOWPlugin
                controller.IsValid &&
                !controller.IsBot &&
                FowConstants.IsValidSlot(controller.Slot);
+    }
+
+    /// <summary>
+    /// Hide/show changes need an immediate refresh to avoid late pop-in. Repeated
+    /// phase/toggle refreshes can be throttled because they are not tied to a new
+    /// child-before-body risk.
+    /// </summary>
+    private static bool ShouldThrottleFullUpdate(ObserverFullUpdateReason reason)
+    {
+        const ObserverFullUpdateReason immediateReasons =
+            ObserverFullUpdateReason.Hide |
+            ObserverFullUpdateReason.Unhide |
+            ObserverFullUpdateReason.OrphanCleanup |
+            ObserverFullUpdateReason.SafetyClear;
+
+        return (reason & immediateReasons) == 0;
     }
 
     /// <summary>Logs forced-refresh failure only once to avoid console spam.</summary>

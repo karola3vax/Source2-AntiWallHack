@@ -67,7 +67,8 @@ public partial class S2FOWPlugin
         if (_visibilityManager.ShouldBypassVisibilityWorkForCurrentPhase())
         {
             _debugAabbRenderer?.Clear();
-            QueueAllObserversFullUpdate(players, ObserverFullUpdateReason.Unhide | ObserverFullUpdateReason.PhaseBypass);
+            ResetDeferredRevealState();
+            QueueAllObserversFullUpdate(players, ObserverFullUpdateReason.PhaseBypass);
             ProcessObserverFullUpdates(players, currentTick);
             _perfMonitor?.EndFrame(0);
             return;
@@ -126,7 +127,7 @@ public partial class S2FOWPlugin
                 // unsafe because the engine may still be building death/ragdoll updates.
                 if (!target.IsAlive)
                 {
-                    _visibilityManager.MarkForceVisible(observerSlot, target.Slot);
+                    MarkTargetVisibleSafely(info, observerSlot, target.Slot, currentTick);
                     _perfMonitor?.RecordDeadForceTransmit();
                     continue;
                 }
@@ -148,25 +149,39 @@ public partial class S2FOWPlugin
                 // connected object is still sent to the viewer.
                 if (!target.CanHideControlledLivePawn)
                 {
-                    _visibilityManager.MarkForceVisible(observerSlot, target.Slot);
+                    MarkTargetVisibleSafely(info, observerSlot, target.Slot, currentTick);
                     _perfMonitor?.RecordUnsafeHideSkipped();
                     continue;
                 }
 
                 // Ask the visibility manager whether this viewer should receive this enemy.
+                bool wasHiddenBeforeDecision = _visibilityManager.IsPairHidden(observerSlot, target.Slot);
                 bool shouldTransmit = _visibilityManager.ShouldTransmit(in observer, in target, currentTick);
 
                 // If not visible, remove the enemy body and connected objects from
-                // this viewer's update list, then queue a viewer refresh.
+                // this viewer's update list. Queue a viewer refresh only when the
+                // pair changed from visible to hidden; already-hidden pairs do not
+                // need another full update every frame.
                 if (!shouldTransmit)
                 {
-                    QueueObserverFullUpdate(observerSlot, ObserverFullUpdateReason.Hide);
-                    RemoveHiddenTargetEntities(info, targetSlot);
-                }
-            }
+                    ClearDeferredReveal(observerSlot, targetSlot);
+                    if (!wasHiddenBeforeDecision)
+                        QueueObserverFullUpdate(observerSlot, ObserverFullUpdateReason.Hide);
 
-            if (_visibilityManager.NeedsObserverFullUpdate(observerSlot))
-                QueueObserverFullUpdate(observerSlot, ObserverFullUpdateReason.Unhide);
+                    RemoveHiddenTargetEntities(info, targetSlot);
+                    continue;
+                }
+
+                // If the enemy just changed from hidden to visible, do not reveal
+                // them in this same packet. First queue the forced refresh, then
+                // keep body and child objects hidden briefly so weapons/wearables
+                // cannot appear before the player body exists on the viewer.
+                if (wasHiddenBeforeDecision)
+                    BeginDeferredReveal(observerSlot, targetSlot, currentTick, ObserverFullUpdateReason.Unhide);
+
+                if (ShouldKeepDeferredRevealHidden(observerSlot, targetSlot, currentTick))
+                    RemoveHiddenTargetEntities(info, targetSlot);
+            }
         }
 
         // Send queued viewer refreshes, update optional debug visuals, and refresh
@@ -232,6 +247,81 @@ public partial class S2FOWPlugin
         }
 
         return removedAny;
+    }
+
+    /// <summary>
+    /// Shows a target for safety, but if they were hidden last frame, holds their
+    /// body and connected objects back briefly until a forced refresh can rebuild
+    /// the player body on the viewer's client.
+    /// </summary>
+    private void MarkTargetVisibleSafely(
+        CCheckTransmitInfo info,
+        int observerSlot,
+        int targetSlot,
+        int currentTick)
+    {
+        bool wasHiddenBeforeDecision = _visibilityManager?.IsPairHidden(observerSlot, targetSlot) ?? false;
+        _visibilityManager?.MarkForceVisible(observerSlot, targetSlot);
+
+        if (wasHiddenBeforeDecision)
+            BeginDeferredReveal(observerSlot, targetSlot, currentTick, ObserverFullUpdateReason.Unhide);
+
+        if (ShouldKeepDeferredRevealHidden(observerSlot, targetSlot, currentTick))
+            RemoveHiddenTargetEntities(info, targetSlot);
+    }
+
+    private void BeginDeferredReveal(
+        int observerSlot,
+        int targetSlot,
+        int currentTick,
+        ObserverFullUpdateReason reason)
+    {
+        if (!FowConstants.IsValidSlot(observerSlot) || !FowConstants.IsValidSlot(targetSlot))
+            return;
+
+        int pairIndex = GetObserverTargetPairIndex(observerSlot, targetSlot);
+        _deferredRevealUntilTick[pairIndex] = Math.Max(
+            _deferredRevealUntilTick[pairIndex],
+            currentTick + RevealSettleTicks);
+        QueueObserverFullUpdate(observerSlot, reason);
+    }
+
+    private bool ShouldKeepDeferredRevealHidden(int observerSlot, int targetSlot, int currentTick)
+    {
+        if (!FowConstants.IsValidSlot(observerSlot) || !FowConstants.IsValidSlot(targetSlot))
+            return false;
+
+        return currentTick < _deferredRevealUntilTick[GetObserverTargetPairIndex(observerSlot, targetSlot)];
+    }
+
+    private void ClearDeferredReveal(int observerSlot, int targetSlot)
+    {
+        if (!FowConstants.IsValidSlot(observerSlot) || !FowConstants.IsValidSlot(targetSlot))
+            return;
+
+        _deferredRevealUntilTick[GetObserverTargetPairIndex(observerSlot, targetSlot)] = 0;
+    }
+
+    private void ResetDeferredRevealState()
+    {
+        Array.Clear(_deferredRevealUntilTick);
+    }
+
+    private void ClearDeferredRevealStateForSlot(int slot)
+    {
+        if (!FowConstants.IsValidSlot(slot))
+            return;
+
+        for (int i = 0; i < FowConstants.MaxSlots; i++)
+        {
+            _deferredRevealUntilTick[GetObserverTargetPairIndex(slot, i)] = 0;
+            _deferredRevealUntilTick[GetObserverTargetPairIndex(i, slot)] = 0;
+        }
+    }
+
+    private static int GetObserverTargetPairIndex(int observerSlot, int targetSlot)
+    {
+        return observerSlot * FowConstants.MaxSlots + targetSlot;
     }
 
     /// <summary>

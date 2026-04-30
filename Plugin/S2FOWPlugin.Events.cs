@@ -25,6 +25,7 @@ public partial class S2FOWPlugin
         if (player != null)
         {
             ClearNoInterpState(player);
+            ClearDeferredRevealStateForSlot(player.Slot);
             _visibilityManager?.OnPlayerDisconnect(player.Slot);
         }
         return HookResult.Continue;

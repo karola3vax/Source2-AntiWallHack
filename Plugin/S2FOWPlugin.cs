@@ -67,10 +67,17 @@ public partial class S2FOWPlugin : BasePlugin, IPluginConfig<S2FOWConfig>
     private const uint EffectNoInterp = 1u << 3;
 
     /// <summary>
-    /// Minimum time between forced refreshes for one viewer. 32 ticks is about
-    /// half a second on a 64 tick server.
+    /// Minimum time between repeated non-critical forced refreshes for one viewer.
+    /// Real hide/show transitions bypass this so visible enemies do not pop in late.
     /// </summary>
     private const int FullUpdateThrottleTicks = 32;
+
+    /// <summary>
+    /// When an enemy changes from hidden to visible, S2FOW keeps their body and
+    /// connected objects hidden for this many ticks while the viewer receives a
+    /// forced refresh. This prevents weapons or wearables appearing before the body.
+    /// </summary>
+    private const int RevealSettleTicks = 3;
 
     /// <summary>Author's Steam profile link, shown in the startup banner.</summary>
     private const string AuthorSteamProfile = "https://steamcommunity.com/profiles/76561198353131845/";
@@ -97,6 +104,12 @@ public partial class S2FOWPlugin : BasePlugin, IPluginConfig<S2FOWConfig>
     private readonly int[] _nextObserverFullUpdateTick = new int[FowConstants.MaxSlots];
 
     /// <summary>
+    /// Per viewer/enemy pair, the tick until which a newly visible enemy stays
+    /// hidden while the client rebuilds the player body and attached objects.
+    /// </summary>
+    private readonly int[] _deferredRevealUntilTick = new int[FowConstants.MaxSlots * FowConstants.MaxSlots];
+
+    /// <summary>
     /// The current phase of the round. During warmup, freeze time, and round end,
     /// S2FOW shows everyone because hiding is not needed for live play.
     /// </summary>
@@ -105,7 +118,7 @@ public partial class S2FOWPlugin : BasePlugin, IPluginConfig<S2FOWConfig>
     // Plugin metadata shown in the server plugin list
 
     public override string ModuleName => "S2FOW";
-    public override string ModuleVersion => "1.0.7";
+    public override string ModuleVersion => "1.0.8";
     public override string ModuleAuthor => "karola3vax";
     public override string ModuleDescription => "Server-side CS2 player visibility plugin that hides enemies a viewer cannot see, supports smoke hiding, and sends crash-recovery full updates after hide/show changes.";
 

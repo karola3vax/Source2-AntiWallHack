@@ -62,7 +62,7 @@ This connected-object handling is part of the crash-mitigation design. A CS2 cli
 
 S2FOW includes a full-update recovery path for the viewer whose visibility list changed.
 
-When S2FOW hides or shows enemies for a viewer, it can request a client refresh for that viewer. Requests are combined to one refresh per viewer per frame and throttled to once every 32 ticks per viewer.
+When S2FOW hides or shows enemies for a viewer, it requests a client refresh for that viewer. Real hide/show changes are sent immediately and combined to one refresh per viewer per frame. Repeated non-critical refreshes, such as round-state refreshes, are throttled.
 
 This requires the packaged file:
 

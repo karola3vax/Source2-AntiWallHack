@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.0.8 - 2026-04-30
+
+### Crash Safety And Pop-In
+- Full updates for real hide/show transitions now bypass the 32-tick throttle, removing the half-second reappearance delay.
+- Already-hidden enemies no longer request another hide full update every frame; S2FOW only requests one when the viewer/enemy pair changes state.
+- When an enemy changes from hidden to visible, S2FOW keeps the body and connected objects hidden for a few ticks while the forced refresh rebuilds the player body, preventing weapons or wearables from appearing before the model.
+
 ## v1.0.7 - 2026-04-30
 
 ### Crash Safety

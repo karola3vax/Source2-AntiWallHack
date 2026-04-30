@@ -161,6 +161,15 @@ public class VisibilityManager
         return FowConstants.IsValidSlot(observerSlot) && _needsObserverFullUpdate[observerSlot];
     }
 
+    /// <summary>Returns true if this enemy was hidden from this viewer before the current decision.</summary>
+    public bool IsPairHidden(int observerSlot, int targetSlot)
+    {
+        if (!FowConstants.IsValidSlot(observerSlot) || !FowConstants.IsValidSlot(targetSlot))
+            return false;
+
+        return _wasHidden[observerSlot * FowConstants.MaxSlots + targetSlot];
+    }
+
     /// <summary>
     /// Clears hidden state when another part of S2FOW decides an enemy must be
     /// shown for safety reasons.
