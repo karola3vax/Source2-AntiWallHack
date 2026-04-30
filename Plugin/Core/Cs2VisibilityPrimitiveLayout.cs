@@ -4,45 +4,43 @@ using S2FOW.Models;
 namespace S2FOW.Core;
 
 /// <summary>
-/// One visibility check point on the player model.
+/// One body or weapon spot S2FOW can check for visibility.
 ///
-/// Each primitive represents a specific spot on the CS2 player skeleton
-/// (e.g., top of head, left shoulder, right knee, weapon muzzle).
-/// The LocalPoint is in model-local coordinates — it gets transformed to
-/// world-space based on the player's position and facing direction.
+/// Each entry is a specific spot on the enemy being checked, such as the
+/// head, shoulder, knee, foot, or weapon muzzle.
+/// LocalPoint uses coordinates relative to the player model. At runtime,
+/// S2FOW moves that point to the enemy's real position and facing direction.
 /// </summary>
 internal readonly struct VisibilityPrimitive
 {
-    /// <summary>The position of this point in the player's local coordinate space.</summary>
+    /// <summary>The point's position relative to the center of the player model.</summary>
     public required Vector3 LocalPoint { get; init; }
 
     /// <summary>
-    /// If true, rays to this point originate from the observer's non-predicted eye
-    /// position (more stable for head-level checks).
+    /// If true, S2FOW checks this point from the viewer's current eye position
+    /// instead of the movement-predicted eye position. This keeps head checks stable.
     /// </summary>
     public bool UseFixedHeadOrigin { get; init; }
 
     /// <summary>
-    /// If set to a specific weapon class, this point only exists when the target
-    /// is holding that type of weapon (e.g., sniper rifle muzzle extends further).
-    /// WeaponLosClass.None means this point applies to all weapons.
+    /// If set, this point is used only when the enemy is holding that weapon type.
+    /// WeaponLosClass.None means the point is always checked.
     /// </summary>
     public WeaponLosClass RequiredWeaponClass { get; init; }
 }
 
 /// <summary>
-/// The canonical set of visibility check points extracted from CS2's player model hitboxes.
+/// The body and weapon points S2FOW checks when deciding if an enemy is visible.
 ///
-/// These 35 skeleton points were extracted from the actual CS2 player model using the
-/// tools in the Tools/ directory. They cover the full body: head, neck, shoulders, spine,
-/// hips, knees, feet, elbows, and weapon muzzle positions for each weapon class.
+/// These 35 points come from the actual CS2 player model data. They cover the
+/// head, neck, shoulders, spine, hips, knees, feet, elbows, and weapon muzzle
+/// positions for each weapon class.
 ///
-/// Additionally, 8 AABB (axis-aligned bounding box) corner points serve as a fallback
-/// safety net — if all 35 skeleton rays hit walls, the 8 corners are checked to catch
-/// extreme edge cases (e.g., only a sliver of the player model is visible).
+/// S2FOW can also check 8 backup box corners around the enemy. Those backup points
+/// help catch edge cases where only a small visible sliver of the model can be seen.
 ///
-/// Together these 43 points per target provide comprehensive body coverage while keeping
-/// the raycast count manageable for real-time performance.
+/// Together, the 35 model points plus 8 backup box points give broad body coverage
+/// while keeping the amount of per-frame work predictable.
 /// </summary>
 internal static class Cs2VisibilityPrimitiveLayout
 {

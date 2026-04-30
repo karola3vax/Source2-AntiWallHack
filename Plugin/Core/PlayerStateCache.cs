@@ -7,25 +7,16 @@ using S2FOW.Util;
 namespace S2FOW.Core;
 
 /// <summary>
-/// Builds and stores a per-frame snapshot of every connected player's state.
+/// Reads and stores one frame of player state.
 ///
-/// Every network frame, the CheckTransmit hook needs to know each player's position,
-/// speed, team, weapon, and collision bounds. Instead of reading this data multiple
-/// times from live engine entities (which can change mid-frame), we capture everything
-/// into flat value-type snapshots once at the start of each frame.
+/// S2FOW needs each player's position, view direction, team, weapon, body size,
+/// and connected objects. Reading that data once per frame keeps all visibility
+/// decisions consistent and avoids repeatedly walking live engine objects.
 ///
-/// This gives us:
-///   - Consistency: all visibility checks within a frame use the same data.
-///   - Performance: reading from a flat struct array is faster than traversing
-///     managed object hierarchies repeatedly.
-///   - Safety: stale entity references can throw exceptions; by capturing once
-///     and wrapping in try/catch, we isolate failures to a single snapshot.
-///
-/// Additionally, this class tracks which entity indices (pawn + weapons +
-/// wearables + hostage entities + scene-node child owners) are "associated" with
-/// each player. When a
-/// player is hidden, ALL of these entities must be removed from the transmit
-/// list — otherwise orphaned child entities cause a fatal client crash.
+/// This class also records every networked object that must be hidden together
+/// with a player body: weapons, wearables, hostage carry objects, and attached
+/// scene objects. If S2FOW cannot collect that full list, the player stays visible
+/// because hiding only part of a player can crash the client.
 /// </summary>
 public class PlayerStateCache
 {
@@ -37,13 +28,13 @@ public class PlayerStateCache
     /// </summary>
     private const int WarningIntervalTicks = 128;
 
-    /// <summary>Maximum scene-node descendants scanned from any one associated entity.</summary>
+    /// <summary>Maximum attached scene objects scanned from any one connected object.</summary>
     private const int MaxSceneNodesPerRoot = 96;
 
-    /// <summary>Maximum child depth followed in the scene-node hierarchy.</summary>
+    /// <summary>Maximum depth followed in the attached-object tree.</summary>
     private const int MaxSceneNodeDepth = 8;
 
-    /// <summary>Maximum siblings followed at each scene-node level.</summary>
+    /// <summary>Maximum sibling objects followed at each attached-object level.</summary>
     private const int MaxSceneNodeSiblingsPerLevel = 96;
 
     // ────────────────────────────────────────────────────────────────────────
@@ -54,10 +45,10 @@ public class PlayerStateCache
     private readonly PlayerSnapshot[] _snapshots = new PlayerSnapshot[FowConstants.MaxSlots];
 
     /// <summary>
-    /// 2D array of entity indices associated with each player.
-    /// For slot 5 with 7 entities: _associatedEntities[5, 0] through [5, 6].
-    /// These include the pawn itself, all weapon entities, wearables, hostage entities,
-    /// and valid scene-node child owners reachable from those entities.
+    /// 2D array of connected object indexes for each player.
+    /// For slot 5 with 7 objects: _associatedEntities[5, 0] through [5, 6].
+    /// These include the body, weapons, wearables, hostage objects, and attached
+    /// scene objects that must be hidden with the body.
     /// </summary>
     private readonly int[,] _associatedEntities = new int[FowConstants.MaxSlots, PlayerSnapshot.MaxAssociatedEntities];
 
@@ -73,13 +64,13 @@ public class PlayerStateCache
     /// <summary>How many warnings have been suppressed (rate-limited) in total.</summary>
     private long _suppressedWarningCount;
 
-    /// <summary>How many player snapshots had incomplete dependent-entity collection.</summary>
+    /// <summary>How many player reads could not collect every connected object.</summary>
     private long _dependentEntityCollectionFailureCount;
 
-    /// <summary>How many player snapshots exceeded the associated entity capacity.</summary>
+    /// <summary>How many player reads found more connected objects than S2FOW can store.</summary>
     private long _associatedEntityOverflowCount;
 
-    /// <summary>Total scene-node child owner entities added to player closures.</summary>
+    /// <summary>Total attached scene objects added to player connected-object lists.</summary>
     private long _sceneChildEntitiesCollected;
 
     // ────────────────────────────────────────────────────────────────────────
@@ -95,16 +86,16 @@ public class PlayerStateCache
     /// <summary>How many warnings have been suppressed since the last reset.</summary>
     public long SuppressedWarningCount => _suppressedWarningCount;
 
-    /// <summary>How many snapshots were marked unsafe because dependent entity collection failed.</summary>
+    /// <summary>How many player reads were unsafe because connected objects could not be fully read.</summary>
     public long DependentEntityCollectionFailureCount => _dependentEntityCollectionFailureCount;
 
-    /// <summary>How many snapshots exceeded the associated entity closure capacity.</summary>
+    /// <summary>How many player reads found more connected objects than the fixed list can hold.</summary>
     public long AssociatedEntityOverflowCount => _associatedEntityOverflowCount;
 
-    /// <summary>Total scene-node child owner entities added to closures since the last reset.</summary>
+    /// <summary>Total attached scene objects added to connected-object lists since the last reset.</summary>
     public long SceneChildEntitiesCollected => _sceneChildEntitiesCollected;
 
-    /// <summary>Gets the entity index of the Nth associated entity for a given player slot.</summary>
+    /// <summary>Gets the engine object index of the Nth connected object for a player slot.</summary>
     public int GetAssociatedEntity(int slot, int index)
     {
         return _associatedEntities[slot, index];
@@ -125,14 +116,14 @@ public class PlayerStateCache
     // ────────────────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Captures a fresh snapshot of every connected player's state.
+    /// Captures a fresh read of every connected player's state.
     ///
     /// For each player, we read:
     ///   - Position (feet and eyes), view angles, velocity.
     ///   - Team, alive/dead status, bot flag.
     ///   - Collision bounds (bounding box).
     ///   - Active weapon type and max movement speed.
-    ///   - All entity indices (pawn + weapons + wearables + hostage prop) that should be hidden together.
+    ///   - All connected object indexes that must be hidden with the player body.
     /// </summary>
     public void BuildSnapshots(List<CCSPlayerController> players)
     {
@@ -141,11 +132,14 @@ public class PlayerStateCache
 
         for (int i = 0; i < players.Count; i++)
         {
+            int slot = -1;
+            try
+            {
             var controller = players[i];
             if (!controller.IsValid)
                 continue;
 
-            int slot = controller.Slot;
+            slot = controller.Slot;
             if (!FowConstants.IsValidSlot(slot))
                 continue;
 
@@ -192,7 +186,7 @@ public class PlayerStateCache
                 snap.VelZ = vel.Z;
             }
 
-            // Weapon data (affects movement speed and which LOS points to use).
+            // Weapon data affects movement speed and which weapon-tip body points apply.
             snap.WeaponMaxSpeed = TryGetWeaponMaxSpeed(pawn);
             snap.ActiveWeaponLosClass = TryGetActiveWeaponLosClass(pawn);
 
@@ -223,16 +217,11 @@ public class PlayerStateCache
             // Register this slot as active for iteration.
             _activeSlots[_activeSlotCount++] = slot;
 
-            // Collect all entity indices associated with this player.
-            // This includes the pawn itself, all weapons in the inventory,
-            // the active weapon, the previously held weapon, all wearable
-            // entities (gloves, agent accessories), hostage entities, and
-            // scene-node child owners reachable from those entities.
-            // Every one of these must be hidden together — if we hide the pawn
-            // but leave a child entity transmitted, the client crashes with:
-            //   FATAL ERROR: CL_CopyExistingEntity: missing client entity
-            // because the orphaned entity references a parent pawn that was
-            // removed from the transmit list.
+            // Collect every object that must be hidden with this player body.
+            // This includes the body, inventory weapons, current/previous weapon,
+            // wearables, hostage carry objects, and attached scene objects.
+            // If the body is hidden but one connected object is still sent, the
+            // client can crash because that object refers to a body it never received.
             int entityIdx = 0;
             AddAssociatedEntity(slot, ref entityIdx, pawn, ref snap);
             CollectWeaponEntities(slot, ref entityIdx, pawn, ref snap);
@@ -240,6 +229,17 @@ public class PlayerStateCache
             CollectHostageEntities(slot, ref entityIdx, pawn, ref snap);
             CollectSceneNodeClosure(slot, ref entityIdx, pawn, ref snap);
             snap.AssociatedEntityCount = entityIdx;
+            }
+            catch (Exception ex)
+            {
+                if (FowConstants.IsValidSlot(slot))
+                    _snapshots[slot] = default;
+
+                if (_activeSlotCount > 0 && _activeSlots[_activeSlotCount - 1] == slot)
+                    _activeSlotCount--;
+
+                LogSuppressedException("player snapshot", ex, null);
+            }
         }
     }
 
@@ -341,10 +341,9 @@ public class PlayerStateCache
     }
 
     /// <summary>
-    /// Collects all weapon entity indices for a player.
-    /// Each weapon the player carries is a separate entity that must be hidden
-    /// together with the player's body (pawn). Otherwise, a hidden player's
-    /// floating gun would still be visible.
+    /// Collects all weapon object indexes for a player.
+    /// Weapons are separate networked objects. If the player body is hidden,
+    /// these weapons must be hidden from the same viewer too.
     /// </summary>
     private void CollectWeaponEntities(int slot, ref int entityIdx, CCSPlayerPawn pawn, ref PlayerSnapshot snap)
     {
@@ -421,16 +420,11 @@ public class PlayerStateCache
     }
 
     /// <summary>
-    /// Collects all wearable entity indices for a player.
+    /// Collects all wearable object indexes for a player.
     ///
-    /// In CS2, wearable items (gloves, agent accessories, charms) are stored in
-    /// the pawn's m_hMyWearables array (inherited from C_BaseCombatCharacter at
-    /// schema offset 4440). Each wearable is a C_EconWearable — a fully independent
-    /// networked entity with its own entity index.
-    ///
-    /// If we hide the pawn but leave its wearables in the transmit list, the client
-    /// receives orphaned entity data for wearables whose parent pawn is missing,
-    /// causing: FATAL ERROR: CL_CopyExistingEntity: missing client entity.
+    /// Gloves, agent accessories, and similar wearables are separate networked
+    /// objects. If the body is hidden but a wearable is still sent, the client can
+    /// crash because the wearable points at a body the client does not have.
     /// </summary>
     private void CollectWearableEntities(int slot, ref int entityIdx, CCSPlayerPawn pawn, ref PlayerSnapshot snap)
     {
@@ -468,20 +462,10 @@ public class PlayerStateCache
     }
 
     /// <summary>
-    /// Collects hostage-related entity indices for a player.
+    /// Collects hostage-related objects for a player.
     ///
-    /// On hostage maps (cs_office, cs_italy, etc.), when a CT picks up a hostage,
-    /// the engine creates a C_HostageCarriableProp entity (parent: CBaseAnimGraph)
-    /// and parents it to the pawn via SetParent. The prop's m_hOwnerEntity (offset
-    /// 1312 in C_BaseEntity) references the carrying pawn.
-    ///
-    /// If the pawn is hidden but the carry prop remains transmitted, the client
-    /// receives entity data whose owner does not exist → same crash class as
-    /// orphaned wearables.
-    ///
-    /// This is a rare scenario (hostage maps only, during active carry, while
-    /// simultaneously hidden by visibility checks) but costs nearly zero CPU
-    /// to check defensively.
+    /// On hostage maps, a carried hostage uses separate networked objects attached
+    /// to the player body. Those objects must be hidden together with the body.
     /// </summary>
     private void CollectHostageEntities(int slot, ref int entityIdx, CCSPlayerPawn pawn, ref PlayerSnapshot snap)
     {
@@ -491,7 +475,7 @@ public class PlayerStateCache
             if (hostageServices == null)
                 return;
 
-            // The hostage carry prop — a visual model parented to the pawn's back.
+            // The hostage carry prop is a visual model attached to the player's back.
             try
             {
                 var carriedHostage = hostageServices.CarriedHostage.Value;
@@ -531,7 +515,7 @@ public class PlayerStateCache
         }
     }
 
-    /// <summary>Returns true only when the pawn still has a valid engine controller handle.</summary>
+    /// <summary>Returns true only when the player body still has a valid engine controller.</summary>
     private bool HasValidPawnController(CCSPlayerPawn pawn, ref PlayerSnapshot snap)
     {
         try
@@ -548,7 +532,7 @@ public class PlayerStateCache
         }
     }
 
-    /// <summary>Adds an entity's index to the associated entities list for a player slot.</summary>
+    /// <summary>Adds one connected object index to a player's list.</summary>
     private bool AddAssociatedEntity(int slot, ref int entityIdx, CBaseEntity entity, ref PlayerSnapshot snap)
     {
         if (entity == null || !entity.IsValid || !FowConstants.IsValidEntityIndex((int)entity.Index))
@@ -566,9 +550,8 @@ public class PlayerStateCache
     }
 
     /// <summary>
-    /// Same as AddAssociatedEntity, but skips duplicates.
-    /// A weapon can appear in multiple lists (MyWeapons + ActiveWeapon), so we
-    /// check if it is already recorded before adding.
+    /// Same as AddAssociatedEntity, but skips duplicates. A weapon can appear in
+    /// multiple engine lists, so S2FOW records it only once.
     /// </summary>
     private bool AddAssociatedEntityUnique(int slot, ref int entityIdx, CBaseEntity entity, ref PlayerSnapshot snap)
     {
@@ -594,9 +577,8 @@ public class PlayerStateCache
     }
 
     /// <summary>
-    /// Adds valid owner entities reachable through the scene-node child/sibling tree.
-    /// These are common parented or bone-merged visuals that can crash clients if
-    /// transmitted after their parent pawn is hidden.
+    /// Adds valid attached scene objects reachable through the engine's scene tree.
+    /// These are common visuals attached to a player body and must be hidden with it.
     /// </summary>
     private void CollectSceneNodeClosure(int slot, ref int entityIdx, CBaseEntity entity, ref PlayerSnapshot snap)
     {
@@ -607,6 +589,7 @@ public class PlayerStateCache
                 return;
 
             int scannedNodes = 0;
+            CollectSceneNodeParentOwners(slot, ref entityIdx, sceneNode.PParent, ref snap);
             CollectSceneNodeChildren(slot, ref entityIdx, sceneNode.Child, ref snap, depth: 0, ref scannedNodes);
         }
         catch (Exception ex)
@@ -670,6 +653,34 @@ public class PlayerStateCache
         }
     }
 
+    private void CollectSceneNodeParentOwners(int slot, ref int entityIdx, CGameSceneNode? node, ref PlayerSnapshot snap)
+    {
+        int depth = 0;
+        while (node != null)
+        {
+            if (depth++ >= MaxSceneNodeDepth)
+            {
+                MarkDependentEntityCollectionFailed(ref snap);
+                return;
+            }
+
+            try
+            {
+                CBaseEntity? owner = TryGetSceneNodeOwnerEntity(node);
+                if (owner != null && owner.IsValid)
+                    AddAssociatedEntityUnique(slot, ref entityIdx, owner, ref snap);
+
+                node = node.PParent;
+            }
+            catch (Exception ex)
+            {
+                MarkDependentEntityCollectionFailed(ref snap);
+                LogSuppressedException("scene-node parent collect isolated", ex, null);
+                return;
+            }
+        }
+    }
+
     private CBaseEntity? TryGetSceneNodeOwnerEntity(CGameSceneNode node)
     {
         var owner = node.Owner;
@@ -709,7 +720,7 @@ public class PlayerStateCache
 
     /// <summary>
     /// Logs a warning to the console, but only once every 128 ticks (≈2 seconds)
-    /// per unique context+entity combination. This prevents a broken entity from
+    /// per unique context/object combination. This prevents a broken object from
     /// flooding the console with thousands of identical warnings.
     /// </summary>
     private void LogSuppressedWarning(string context, string detail, CEntityInstance? entity)

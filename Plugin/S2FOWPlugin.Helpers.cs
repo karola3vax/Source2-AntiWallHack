@@ -9,7 +9,7 @@ namespace S2FOW;
 /// Helper methods used by multiple parts of the plugin:
 ///   - Round phase tracking (warmup → freeze → live → post-plant → round end).
 ///   - State resets between maps and rounds.
-///   - NOINTERP flag management for individual players.
+///   - Short visual-refresh flag management for individual players.
 ///   - Debug renderer creation.
 /// </summary>
 public partial class S2FOWPlugin
@@ -34,6 +34,7 @@ public partial class S2FOWPlugin
     private void ResetRuntimeState(string? logMapName)
     {
         ResetNoInterpState();
+        ResetObserverFullUpdateState();
         _visibilityManager?.OnMapChange();
         _visibilityManager?.SetRoundPhase(_currentRoundPhase);
         _playerStateCache?.ResetTracking();
@@ -41,13 +42,13 @@ public partial class S2FOWPlugin
         _perfMonitor?.Reset();
 
         if (!string.IsNullOrEmpty(logMapName))
-            Log($"Map changed to {logMapName}. Internal state refreshed.");
+            Log($"Map changed to {logMapName}. S2FOW reset smoke, player, debug, and safety counters.");
     }
 
     /// <summary>
-    /// Clears all pending NOINTERP flags across all players.
-    /// Used during round resets and plugin unload to ensure no player
-    /// gets stuck with the "no interpolation" effect.
+    /// Clears all pending visual-refresh flags across all players.
+    /// Used during round resets and plugin unload so no player stays in the
+    /// temporary snap-to-current-position state.
     /// </summary>
     private void ResetNoInterpState()
     {
@@ -56,7 +57,7 @@ public partial class S2FOWPlugin
     }
 
     /// <summary>
-    /// Immediately clears the NOINTERP flag for a single player.
+    /// Immediately clears the visual-refresh flag for a single player.
     /// Used when a player disconnects to clean up their state.
     /// </summary>
     private void ClearNoInterpState(CCSPlayerController controller)
@@ -81,8 +82,8 @@ public partial class S2FOWPlugin
 
     /// <summary>
     /// Determines the current round phase by querying the engine's game rules entity.
-    /// The game rules entity knows whether it is warmup, freeze time, or if the bomb
-    /// is planted. If the entity cannot be found (e.g., during a map transition),
+    /// The game rules object knows whether it is warmup, freeze time, or if the bomb
+    /// is planted. If the object cannot be found (for example during a map transition),
     /// we fall back to the provided default phase.
     /// </summary>
     private void RefreshRoundPhaseFromGameRules(RoundPhase fallbackPhase)
@@ -135,6 +136,19 @@ public partial class S2FOWPlugin
 
         _currentRoundPhase = phase;
         _visibilityManager?.SetRoundPhase(phase);
-        Log($"Round phase -> {_currentRoundPhase}");
+        Log($"Round state: {FriendlyRoundPhase(_currentRoundPhase)}");
+    }
+
+    private static string FriendlyRoundPhase(RoundPhase phase)
+    {
+        return phase switch
+        {
+            RoundPhase.Warmup => "warmup",
+            RoundPhase.FreezeTime => "freeze time",
+            RoundPhase.Live => "live play",
+            RoundPhase.PostPlant => "bomb planted",
+            RoundPhase.RoundEnd => "round ended",
+            _ => phase.ToString()
+        };
     }
 }

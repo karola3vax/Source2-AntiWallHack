@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>S2AC LOS Point Editor</title>
+  <title>S2FOW Visibility Point Editor</title>
   <link rel="stylesheet" href="./styles.css">
   <script type="importmap">
     {
@@ -16,12 +16,12 @@
 </head>
 <body>
   <main id="app">
-    <canvas id="viewport" aria-label="LOS point editor viewport"></canvas>
+    <canvas id="viewport" aria-label="Visibility point editor viewport"></canvas>
     <div id="labels" aria-hidden="true"></div>
 
     <section class="hud topbar" aria-label="Editor toolbar">
       <div class="brand">
-        <span class="title">LOS Pose Points</span>
+        <span class="title">Visibility Points</span>
         <span id="status" class="status">Loading</span>
       </div>
       <div class="toolbar-group" role="group" aria-label="Axis lock">
@@ -47,7 +47,7 @@
 
     <section class="hud point-panel" aria-label="Selected point">
       <div class="panel-row">
-        <select id="pointSelect" aria-label="LOS point"></select>
+        <select id="pointSelect" aria-label="Visibility point"></select>
       </div>
       <label class="name-row">Name <input id="pointName" type="text" maxlength="48" spellcheck="false" placeholder="Custom point name"></label>
       <div class="coords" aria-label="Source coordinates">
@@ -57,7 +57,7 @@
       </div>
       <div class="panel-actions">
         <button id="autoGlbMatch" type="button" disabled title="Apply posed GLB bone transforms">Automatic GLB Match</button>
-        <button id="addCustomPoint" type="button" title="Add a custom draggable LOS dot near the selected point">Add Dot</button>
+        <button id="addCustomPoint" type="button" title="Add a custom draggable visibility dot near the selected point">Add Dot</button>
         <button id="deleteCustomPoint" type="button" disabled title="Delete the selected custom dot">Delete Dot</button>
         <button id="resetSelected" type="button" title="Reset the selected dot to its baseline position">Reset Point</button>
         <button id="resetCustom" type="button" disabled title="Reset only custom dots">Reset Custom</button>

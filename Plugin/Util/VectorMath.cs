@@ -73,7 +73,7 @@ public static class VectorMath
     /// Tests whether a line segment passes through a sphere.
     ///
     /// Imagine a smoke cloud as a ball (sphere) in the world. Now draw a straight
-    /// line from an observer's eyes to a target player. This method checks if that
+    /// line from the viewer's eyes to the enemy being checked. This method checks if that
     /// line passes through the smoke ball at any point along its length.
     ///
     /// Uses the quadratic formula to find where the line intersects the sphere's

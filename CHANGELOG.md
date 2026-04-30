@@ -1,5 +1,33 @@
 # Changelog
 
+## v1.0.5 - 2026-04-30
+
+### Plain-English Output And Config
+- Config schema bumped to v33.
+- Renamed the generated config to layman-friendly sections: `Main`, `SmokeVisibility`, `EnemyCheckPoints`, `ViewerEyePrediction`, `Advanced`, and `Debug`.
+- Renamed generated config keys to describe real behavior, such as `ProtectionEnabled`, `HidePlayersBehindSmoke`, `RaycastLimitPerFrame`, `ShowDebugHud`, `ShowDebugRays`, and `ShowDebugPoints`.
+- Kept old v32 section and key names readable for migration, then rewrote configs in the new shape.
+- Stopped writing removed ray-hit threshold settings because strict world-only visibility no longer uses them.
+- Reworked startup logs, command replies, status output, debug HUD labels, README text, and tool messages for clearer server-owner language.
+- Added clearer command aliases: `css_s2fow_status` and `css_s2fow_toggle`; existing `css_fow_stats` and `css_fow_toggle` remain supported.
+
+## v1.0.4 - 2026-04-30
+
+### Crash Mitigation
+- Relicensed the project to AGPLv3.
+- Added observer-side `ForceFullUpdate` recovery after CheckTransmit hide/unhide changes, coalesced per observer per frame and throttled to once every 32 ticks per observer.
+- Packaged S2FOW gamedata for `INetworkServerService_GetIGameServer`, `INetworkGameServer_Slots`, and `CServerSideClient_m_nForceWaitForTick`.
+- Added `css_fow_stats` counters for full-update requests, coalescing, sends, throttling, failures, and request reasons.
+- Kept hidden-to-visible NOINTERP resync and added same-angle pawn teleport after full updates.
+- Hardened dependent entity closure traversal and isolated per-player snapshot failures so one bad entity cannot abort the frame.
+
+### Visibility And Tooling
+- Changed world-only LOS so any world hit before the target blocks visibility; aim reveal behavior is unchanged.
+- Made RayTrace call failures fail open and count in stats.
+- Reduced debug beam caps so debug rendering cannot create unbounded entity counts.
+- Fixed LOS layout generation checks, hitbox verification skip behavior when `resourceinfo.exe` is unavailable, and VPK extraction temp-file cleanup.
+- Tightened generated-artifact ignore rules for build outputs and Python cache files.
+
 ## v1.0.3 - 2026-04-27
 
 ### Smoke Tuning

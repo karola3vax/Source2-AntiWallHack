@@ -5,21 +5,19 @@ using S2FOW.Core;
 namespace S2FOW;
 
 /// <summary>
-/// Game event handlers — reacts to things that happen during a match.
+/// Game event handlers: reacts to important match events.
 ///
-/// Each handler listens for a specific game event (player death, smoke detonation,
-/// round start, etc.) and updates the plugin's internal state accordingly.
-/// All handlers return HookResult.Continue so the event keeps flowing to other plugins.
+/// These handlers update S2FOW's memory of the round, player spawns and deaths,
+/// smoke grenades, bomb state, and map changes. They do not hide players directly.
+/// They only update information used later during the per-viewer visibility check.
 /// </summary>
 public partial class S2FOWPlugin
 {
-    // ────────────────────────────────────────────────────────────────────────
-    //  Player events
-    // ────────────────────────────────────────────────────────────────────────
+    // Player events
 
     /// <summary>
     /// A player disconnected from the server.
-    /// We clear their NOINTERP state and tell the visibility manager to forget them.
+    /// S2FOW clears that player's visual-refresh state and forgets their old visibility data.
     /// </summary>
     private HookResult OnPlayerDisconnect(EventPlayerDisconnect @event, GameEventInfo info)
     {
@@ -34,9 +32,8 @@ public partial class S2FOWPlugin
 
     /// <summary>
     /// A player just died.
-    /// We record the tick so the plugin can keep them visible for a brief "death grace"
-    /// period (default 128 ticks ≈ 2 seconds). This prevents the corpse from vanishing
-    /// mid-death-animation, which would look jarring.
+    /// S2FOW records the tick so the player can stay visible briefly after death.
+    /// This avoids a body disappearing during the death animation.
     /// </summary>
     private HookResult OnPlayerDeath(EventPlayerDeath @event, GameEventInfo info)
     {
@@ -50,9 +47,9 @@ public partial class S2FOWPlugin
     }
 
     /// <summary>
-    /// A player just spawned (either at round start or after a respawn).
-    /// We record the tick so the plugin can apply a brief "spawn grace" window
-    /// to avoid glitches while the player model initializes.
+    /// A player just spawned.
+    /// S2FOW records the tick so the player stays visible briefly while their model
+    /// and connected objects are still settling in.
     /// </summary>
     private HookResult OnPlayerSpawn(EventPlayerSpawn @event, GameEventInfo info)
     {
@@ -63,13 +60,12 @@ public partial class S2FOWPlugin
         return HookResult.Continue;
     }
 
-    // ────────────────────────────────────────────────────────────────────────
-    //  Round phase events
-    // ────────────────────────────────────────────────────────────────────────
+    // Round phase events
 
     /// <summary>
-    /// A new round has started. Reset NOINTERP state and update the round phase.
-    /// During freeze time, all players are visible (they cannot move yet).
+    /// A new round has started.
+    /// S2FOW clears visual-refresh state and marks the round phase. During freeze
+    /// time, all players are shown because they cannot move yet.
     /// </summary>
     private HookResult OnRoundStart(EventRoundStart @event, GameEventInfo info)
     {
@@ -80,8 +76,8 @@ public partial class S2FOWPlugin
     }
 
     /// <summary>
-    /// The freeze period just ended — the round is now live.
-    /// Players can move, so we switch to active visibility checking.
+    /// Freeze time just ended.
+    /// Players can move now, so S2FOW switches to active visibility checking.
     /// </summary>
     private HookResult OnRoundFreezeEnd(EventRoundFreezeEnd @event, GameEventInfo info)
     {
@@ -90,8 +86,8 @@ public partial class S2FOWPlugin
     }
 
     /// <summary>
-    /// The round ended. Switch to RoundEnd phase — everyone becomes visible
-    /// since the round outcome is already decided.
+    /// The round ended.
+    /// Everyone is shown because the round outcome is already decided.
     /// </summary>
     private HookResult OnRoundEnd(EventRoundEnd @event, GameEventInfo info)
     {
@@ -100,7 +96,8 @@ public partial class S2FOWPlugin
     }
 
     /// <summary>
-    /// Warmup just ended. Refresh the round phase from the engine's game rules.
+    /// Warmup ended.
+    /// S2FOW refreshes the round phase from the game rules object.
     /// </summary>
     private HookResult OnWarmupEnd(EventWarmupEnd @event, GameEventInfo info)
     {
@@ -108,14 +105,12 @@ public partial class S2FOWPlugin
         return HookResult.Continue;
     }
 
-    // ────────────────────────────────────────────────────────────────────────
-    //  Smoke grenade events
-    // ────────────────────────────────────────────────────────────────────────
+    // Smoke grenade events
 
     /// <summary>
-    /// A smoke grenade just detonated (bloomed) at the given world coordinates.
-    /// We track it so we can block visibility through smoke clouds.
-    /// The smoke starts small and grows to full size over a short "bloom" period.
+    /// A smoke grenade just detonated at the given world coordinates.
+    /// S2FOW tracks the smoke so visibility through that smoke can be blocked.
+    /// The smoke starts small and grows to full size over a short bloom period.
     /// </summary>
     private HookResult OnSmokeDetonate(EventSmokegrenadeDetonate @event, GameEventInfo info)
     {
@@ -127,8 +122,8 @@ public partial class S2FOWPlugin
     }
 
     /// <summary>
-    /// A smoke grenade has expired (dissipated). We remove it from our tracker
-    /// so it no longer blocks visibility.
+    /// A smoke grenade expired.
+    /// S2FOW removes it from the smoke tracker so it no longer blocks visibility.
     /// </summary>
     private HookResult OnSmokeExpired(EventSmokegrenadeExpired @event, GameEventInfo info)
     {
@@ -136,13 +131,11 @@ public partial class S2FOWPlugin
         return HookResult.Continue;
     }
 
-    // ────────────────────────────────────────────────────────────────────────
-    //  Bomb events
-    // ────────────────────────────────────────────────────────────────────────
+    // Bomb events
 
     /// <summary>
-    /// The bomb was planted. Switch to PostPlant phase — this affects how
-    /// aggressively we check visibility (post-plant rounds tend to be more static).
+    /// The bomb was planted.
+    /// S2FOW marks the round as post-plant so visibility decisions use that phase.
     /// </summary>
     private HookResult OnBombPlanted(EventBombPlanted @event, GameEventInfo info)
     {
@@ -150,27 +143,25 @@ public partial class S2FOWPlugin
         return HookResult.Continue;
     }
 
-    /// <summary>The bomb was defused. Round is effectively over — make everyone visible.</summary>
+    /// <summary>The bomb was defused. The round is effectively over, so everyone is shown.</summary>
     private HookResult OnBombDefused(EventBombDefused @event, GameEventInfo info)
     {
         SetRoundPhase(RoundPhase.RoundEnd);
         return HookResult.Continue;
     }
 
-    /// <summary>The bomb exploded. Round is effectively over — make everyone visible.</summary>
+    /// <summary>The bomb exploded. The round is effectively over, so everyone is shown.</summary>
     private HookResult OnBombExploded(EventBombExploded @event, GameEventInfo info)
     {
         SetRoundPhase(RoundPhase.RoundEnd);
         return HookResult.Continue;
     }
 
-    // ────────────────────────────────────────────────────────────────────────
-    //  Map lifecycle
-    // ────────────────────────────────────────────────────────────────────────
+    // Map lifecycle
 
     /// <summary>
-    /// A new map just loaded. Reset all internal state (smoke positions, cached
-    /// snapshots, debug visuals, performance counters) for the new map.
+    /// A new map just loaded.
+    /// S2FOW resets smoke positions, player snapshots, debug visuals, and counters.
     /// </summary>
     private void OnMapStart(string mapName)
     {
@@ -179,7 +170,8 @@ public partial class S2FOWPlugin
     }
 
     /// <summary>
-    /// The current map is ending. Reset state in preparation for the next map.
+    /// The current map is ending.
+    /// S2FOW resets state so the next map starts cleanly.
     /// </summary>
     private void OnMapEnd()
     {

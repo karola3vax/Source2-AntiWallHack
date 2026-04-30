@@ -6,64 +6,45 @@ using S2FOW.Util;
 namespace S2FOW.Core;
 
 /// <summary>
-/// Tracks the current round phase so the plugin knows when to bypass
-/// visibility checks (warmup, freeze time, round end) vs enforce them (live play).
+/// The current round state. S2FOW shows everyone during non-live states such as
+/// warmup, freeze time, and round end.
 /// </summary>
 public enum RoundPhase
 {
-    /// <summary>Pre-game warmup — all players visible.</summary>
+    /// <summary>Pre-game warmup: all players visible.</summary>
     Warmup = 0,
-    /// <summary>Buy-time freeze — all players visible.</summary>
+    /// <summary>Buy-time freeze: all players visible.</summary>
     FreezeTime = 1,
-    /// <summary>Active gameplay — visibility checks enforced.</summary>
+    /// <summary>Active gameplay: S2FOW may hide enemies.</summary>
     Live = 2,
-    /// <summary>Bomb planted — visibility checks enforced.</summary>
+    /// <summary>Bomb planted: S2FOW may hide enemies.</summary>
     PostPlant = 3,
-    /// <summary>Round has ended — all players visible.</summary>
+    /// <summary>Round has ended: all players visible.</summary>
     RoundEnd = 4
 }
 
 /// <summary>
-/// The central decision-maker for the anti-wallhack system.
+/// Decides whether one viewer should receive one enemy.
 ///
-/// For each observer→target pair, this class decides: "Should the server send
-/// this target's entity data to this observer?" The answer is YES (transmit) if
-/// any of these conditions are met:
+/// The code still uses the internal names "observer" for the viewer and "target"
+/// for the enemy being checked. The actual decision order is:
+///   1. Show everyone during warmup, freeze time, and round end.
+///   2. Show everyone briefly at round start.
+///   3. Show recently dead or freshly spawned players briefly.
+///   4. Hide the enemy if smoke fully blocks all checked sight paths.
+///   5. Show the enemy if the viewer is aiming directly at their body.
+///   6. Ask RayTrace whether walls block every checked body point.
+///   7. If S2FOW runs out of allowed checks or RayTrace fails, show the enemy.
 ///
-///   1. Round phase bypass — During warmup, freeze time, or round end, everyone
-///      is visible (no point hiding players when the round isn't active).
-///
-///   2. Round-start grace — For a few ticks after a round starts, everyone is
-///      visible to let the engine settle cleanly.
-///
-///   3. Death grace — A player who just died stays visible for ~2 seconds so their
-///      death animation plays out naturally.
-///
-///   4. Spawn grace — A freshly spawned player is briefly visible to avoid glitches.
-///
-///   5. Smoke blocking — If every line-of-sight ray to the target passes through
-///      an active smoke grenade, the target is HIDDEN (smoke blocks wallhacks too).
-///
-///   6. Aim reveal — If the observer's crosshair is aimed directly at a target's
-///      body outside smoke-blocked LOS, the target is shown (they'd see them anyway).
-///
-///   7. Line-of-sight check — The actual raycast visibility test. If at least one
-///      ray reaches the target without hitting a wall, they are visible.
-///
-///   8. Budget fail-open — If the raycast budget runs out before all checks finish,
-///      the target is force-shown (fail-open: never hide a player you haven't checked).
-///
-/// The class also tracks per-observer debug statistics (ray counts, decision reasons)
-/// for the debug HUD overlay.
+/// This class also keeps the debug HUD counts that explain why enemies were shown
+/// or hidden during the current frame.
 /// </summary>
 public class VisibilityManager
 {
     /// <summary>
-    /// The original (legacy) LOS point count used for medium-priority checks.
-    /// Equals the count of primitives with UseFixedHeadOrigin = true in
-    /// Cs2VisibilityPrimitiveLayout (verified: primitives 0–18 = 19 total).
-    /// Used as the point budget for the "side-FOV" and "mid-distance" tiers
-    /// where full skeleton checks are unnecessary.
+    /// Number of original body points used for reduced checks. Close enemies can
+    /// use every detailed body point; far or off-angle enemies can use this smaller
+    /// set before falling back to the simple box check.
     /// </summary>
     private const int OriginalLosPointCount = 19;
 
@@ -86,14 +67,17 @@ public class VisibilityManager
     /// <summary>Tick until which each freshly spawned player should remain visible.</summary>
     private readonly int[] _spawnForceTransmitUntil = new int[FowConstants.MaxSlots];
 
-    /// <summary>Flat 2D array [observer × target]: was this target hidden from this observer last frame?</summary>
+    /// <summary>For each viewer/enemy pair, remembers whether the enemy was hidden last frame.</summary>
     private readonly bool[] _wasHidden = new bool[FowConstants.MaxSlots * FowConstants.MaxSlots];
 
-    /// <summary>Flags targets that transitioned from hidden→visible and need a NOINTERP resync.</summary>
+    /// <summary>Marks players that changed from hidden to visible and need a short visual refresh.</summary>
     private readonly bool[] _needsFlexResync = new bool[FowConstants.MaxSlots];
 
+    /// <summary>Marks viewers that need a forced refresh after a hide/show change.</summary>
+    private readonly bool[] _needsObserverFullUpdate = new bool[FowConstants.MaxSlots];
+
     // ────────────────────────────────────────────────────────────────────────
-    //  Per-observer debug counters (for the HUD overlay)
+    //  Per-viewer debug counters for the HUD overlay
     // ────────────────────────────────────────────────────────────────────────
 
     private readonly int[] _observerSkeletonTraceCounts = new int[FowConstants.MaxSlots];
@@ -118,7 +102,7 @@ public class VisibilityManager
     /// <summary>The last tick at which BeginFrame was called.</summary>
     private int _lastBeginFrameTick;
 
-    /// <summary>Lifetime count of targets force-shown due to budget exhaustion.</summary>
+    /// <summary>Lifetime count of enemies shown because the raycast budget ran out.</summary>
     private long _budgetFallbackOpenTransmitCount;
 
     /// <summary>Current round phase (determines whether to bypass visibility checks).</summary>
@@ -137,7 +121,7 @@ public class VisibilityManager
         _tickInterval = raycastEngine.TickInterval;
     }
 
-    /// <summary>How many targets have been force-shown because the ray budget ran out (lifetime total).</summary>
+    /// <summary>How many enemies were shown because S2FOW could not safely finish checking them.</summary>
     public long BudgetFallbackOpenTransmitCount => _budgetFallbackOpenTransmitCount;
 
     /// <summary>Stores the current tick number so other methods can reference it.</summary>
@@ -150,6 +134,7 @@ public class VisibilityManager
     public void BeginFrame()
     {
         Array.Clear(_needsFlexResync);
+        Array.Clear(_needsObserverFullUpdate);
         Array.Clear(_observerSkeletonTraceCounts);
         Array.Clear(_observerAabbTraceCounts);
         Array.Clear(_observerTargetCounts);
@@ -165,15 +150,20 @@ public class VisibilityManager
         _smokeTracker.CullExpired(_lastBeginFrameTick, _config.AntiWallhack.SmokeLifetimeTicks);
     }
 
-    /// <summary>Returns true if this target transitioned from hidden→visible and needs a NOINTERP flag to prevent visual jitter.</summary>
+    /// <summary>Returns true when a player just changed from hidden to visible and needs a short visual refresh.</summary>
     public bool NeedsFlexResync(int targetSlot)
     {
         return FowConstants.IsValidSlot(targetSlot) && _needsFlexResync[targetSlot];
     }
 
+    public bool NeedsObserverFullUpdate(int observerSlot)
+    {
+        return FowConstants.IsValidSlot(observerSlot) && _needsObserverFullUpdate[observerSlot];
+    }
+
     /// <summary>
-    /// Clears hidden state for a pair when the transmit layer force-shows a target
-    /// for safety reasons outside normal LOS evaluation.
+    /// Clears hidden state when another part of S2FOW decides an enemy must be
+    /// shown for safety reasons.
     /// </summary>
     public void MarkForceVisible(int observerSlot, int targetSlot)
     {
@@ -182,12 +172,10 @@ public class VisibilityManager
 
         int pairIndex = observerSlot * FowConstants.MaxSlots + targetSlot;
         bool previouslyHidden = _wasHidden[pairIndex];
-        _wasHidden[pairIndex] = false;
-        if (previouslyHidden)
-            MarkFlexResync(targetSlot);
+        MarkPairVisible(pairIndex, observerSlot, targetSlot, previouslyHidden);
     }
 
-    /// <summary>Gets the raycast breakdown for one observer this frame (for the debug HUD).</summary>
+    /// <summary>Gets the raycast breakdown for one viewer this frame, for the debug HUD.</summary>
     public void GetObserverTraceCounts(
         int observerSlot,
         out int skeleton,
@@ -216,7 +204,7 @@ public class VisibilityManager
         debugFallbackPoints = _observerDebugFallbackPointCounts[observerSlot];
     }
 
-    /// <summary>Gets the decision breakdown for one observer this frame (for the debug HUD).</summary>
+    /// <summary>Gets the show/hide reason counts for one viewer this frame, for the debug HUD.</summary>
     public void GetObserverDecisionCounts(
         int observerSlot,
         out int roundStart,
@@ -243,7 +231,7 @@ public class VisibilityManager
         }
     }
 
-    /// <summary>Copies this observer's debug point positions into the output buffers (for beam rendering).</summary>
+    /// <summary>Copies this viewer's debug point positions into output buffers used for beam drawing.</summary>
     public int FillObserverDebugPoints(int observerSlot, Span<Vector3> output, Span<bool> aabbFallbackOutput)
     {
         if (!FowConstants.IsValidSlot(observerSlot))
@@ -262,8 +250,8 @@ public class VisibilityManager
     }
 
     /// <summary>
-    /// The core decision method: should this target be transmitted to this observer?
-    /// Walks through the priority chain (phase bypass → grace periods → smoke → aim reveal → LOS → budget).
+    /// The core decision method: should this viewer receive this enemy?
+    /// Returns true to show the enemy and false to hide them from this viewer.
     /// </summary>
     public bool ShouldTransmit(in PlayerSnapshot observer, in PlayerSnapshot target, int currentTick)
     {
@@ -271,9 +259,7 @@ public class VisibilityManager
         if (ShouldBypassVisibilityWorkForCurrentPhase())
         {
             bool wasHiddenDuringRestrictedPhase = _wasHidden[pairIndex];
-            _wasHidden[pairIndex] = false;
-            if (wasHiddenDuringRestrictedPhase)
-                MarkFlexResync(target.Slot);
+            MarkPairVisible(pairIndex, observer.Slot, target.Slot, wasHiddenDuringRestrictedPhase);
             return true;
         }
 
@@ -285,7 +271,7 @@ public class VisibilityManager
         {
             if (FowConstants.IsValidSlot(observer.Slot))
                 _observerRoundStartCounts[observer.Slot]++;
-            _wasHidden[pairIndex] = false;
+            MarkPairVisible(pairIndex, observer.Slot, target.Slot, previouslyHidden);
             return true;
         }
 
@@ -293,13 +279,13 @@ public class VisibilityManager
         {
             if (FowConstants.IsValidSlot(observer.Slot))
                 _observerDeathForceCounts[observer.Slot]++;
-            _wasHidden[pairIndex] = false;
+            MarkPairVisible(pairIndex, observer.Slot, target.Slot, previouslyHidden);
             return true;
         }
 
         if (currentTick < _spawnForceTransmitUntil[target.Slot])
         {
-            _wasHidden[pairIndex] = false;
+            MarkPairVisible(pairIndex, observer.Slot, target.Slot, previouslyHidden);
             return true;
         }
 
@@ -311,6 +297,8 @@ public class VisibilityManager
 
         AppendDebugTargetPointsForObserver(observer.Slot, in target, eyeOriginX, eyeOriginY, eyeOriginZ, currentTick, maxCheckPoints);
 
+        // Smoke hides the enemy only when every checked body/box point is blocked
+        // from both the predicted viewer eye and the stable non-predicted eye.
         if (IsSmokeBlockingTarget(
                 observer.Slot,
                 in target,
@@ -321,15 +309,16 @@ public class VisibilityManager
         {
             if (FowConstants.IsValidSlot(observer.Slot))
                 _observerSmokeBlockCounts[observer.Slot]++;
+            _perfMonitor?.RecordHiddenBySmoke();
             _wasHidden[pairIndex] = true;
             return false;
         }
 
+        // Aim reveal is a safety path: if the viewer is aiming close enough to the
+        // enemy body, show the enemy instead of risking a visible player being hidden.
         if (IsTargetNearAimEndpoint(in observer, in target, eyeOriginX, eyeOriginY, eyeOriginZ, currentTick, maxCheckPoints))
         {
-            _wasHidden[pairIndex] = false;
-            if (previouslyHidden)
-                MarkFlexResync(target.Slot);
+            MarkPairVisible(pairIndex, observer.Slot, target.Slot, previouslyHidden);
             return true;
         }
 
@@ -337,6 +326,8 @@ public class VisibilityManager
         if (FowConstants.IsValidSlot(observer.Slot))
             _observerLiveLosCounts[observer.Slot]++;
 
+        // Ask RayTrace whether all checked body/box points are blocked by world
+        // geometry. Any point with a clear path means the enemy should be shown.
         var visibilityResult = _raycastEngine.CheckVisibility(
             in target,
             eyeOriginX, eyeOriginY, eyeOriginZ,
@@ -352,25 +343,35 @@ public class VisibilityManager
 
         if (visibilityResult.BudgetExceeded)
         {
+            // If S2FOW cannot finish checking within the configured budget, show
+            // the enemy. The plugin must never hide someone it did not finish checking.
             _perfMonitor?.RecordBudgetExceeded();
             _budgetFallbackOpenTransmitCount++;
             if (FowConstants.IsValidSlot(observer.Slot))
                 _observerBudgetFailOpenCounts[observer.Slot]++;
-            _wasHidden[pairIndex] = false;
-            if (previouslyHidden)
-                MarkFlexResync(target.Slot);
+            MarkPairVisible(pairIndex, observer.Slot, target.Slot, previouslyHidden);
+            return true;
+        }
+
+        if (visibilityResult.TraceFailed)
+        {
+            // If RayTrace fails, show the enemy. Missing visibility data must not
+            // become a hidden player.
+            _budgetFallbackOpenTransmitCount++;
+            if (FowConstants.IsValidSlot(observer.Slot))
+                _observerBudgetFailOpenCounts[observer.Slot]++;
+            MarkPairVisible(pairIndex, observer.Slot, target.Slot, previouslyHidden);
             return true;
         }
 
         if (visibilityResult.IsVisible)
         {
-            _wasHidden[pairIndex] = false;
-            if (previouslyHidden)
-                MarkFlexResync(target.Slot);
+            MarkPairVisible(pairIndex, observer.Slot, target.Slot, previouslyHidden);
             return true;
         }
 
         _wasHidden[pairIndex] = true;
+        _perfMonitor?.RecordHiddenByLineOfSight();
         return false;
     }
 
@@ -382,9 +383,10 @@ public class VisibilityManager
         Array.Clear(_spawnForceTransmitUntil);
         Array.Clear(_wasHidden);
         Array.Clear(_needsFlexResync);
+        Array.Clear(_needsObserverFullUpdate);
     }
 
-    /// <summary>Updates the current round phase. Clears hidden state when entering a bypass phase.</summary>
+    /// <summary>Updates the current round state and clears hidden records when everyone should be visible.</summary>
     public void SetRoundPhase(RoundPhase phase)
     {
         if (_currentRoundPhase == phase)
@@ -395,6 +397,7 @@ public class VisibilityManager
         {
             Array.Clear(_wasHidden);
             Array.Clear(_needsFlexResync);
+            Array.Clear(_needsObserverFullUpdate);
         }
     }
 
@@ -413,7 +416,7 @@ public class VisibilityManager
         _deathForceTransmitUntil[slot] = currentTick + Math.Max(0, _config.General.DeathVisibilityDurationTicks);
     }
 
-    /// <summary>Sets the spawn grace timer and marks the player for NOINTERP resync.</summary>
+    /// <summary>Sets the spawn grace timer and marks the player for a short visual refresh.</summary>
     public void OnPlayerSpawn(int slot, int currentTick)
     {
         if (!FowConstants.IsValidSlot(slot))
@@ -431,6 +434,7 @@ public class VisibilityManager
         Array.Clear(_spawnForceTransmitUntil);
         Array.Clear(_wasHidden);
         Array.Clear(_needsFlexResync);
+        Array.Clear(_needsObserverFullUpdate);
         _budgetFallbackOpenTransmitCount = 0;
     }
 
@@ -443,6 +447,7 @@ public class VisibilityManager
         _deathForceTransmitUntil[slot] = 0;
         _spawnForceTransmitUntil[slot] = 0;
         _needsFlexResync[slot] = false;
+        _needsObserverFullUpdate[slot] = false;
 
         for (int i = 0; i < FowConstants.MaxSlots; i++)
         {
@@ -455,6 +460,22 @@ public class VisibilityManager
     {
         if (FowConstants.IsValidSlot(targetSlot))
             _needsFlexResync[targetSlot] = true;
+    }
+
+    private void MarkObserverFullUpdate(int observerSlot)
+    {
+        if (FowConstants.IsValidSlot(observerSlot))
+            _needsObserverFullUpdate[observerSlot] = true;
+    }
+
+    private void MarkPairVisible(int pairIndex, int observerSlot, int targetSlot, bool previouslyHidden)
+    {
+        _wasHidden[pairIndex] = false;
+        if (!previouslyHidden)
+            return;
+
+        MarkFlexResync(targetSlot);
+        MarkObserverFullUpdate(observerSlot);
     }
 
     private int GetLimitedMaxCheckPoints(in PlayerSnapshot observer, in PlayerSnapshot target)

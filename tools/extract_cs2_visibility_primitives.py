@@ -166,10 +166,10 @@ def validate_stock_assets(cs2_root: Path) -> tuple[Path, Path]:
         checked_in_json = Path(__file__).resolve().with_name("cs2_player_hitboxes_canonical.json")
         detail = "\n  - ".join(missing)
         raise SystemExit(
-            "Local CS2 install was found, but the stock extraction assets required for regeneration are unavailable:\n"
+            "The checked-in geometry is still used, but stock CS2 geometry cannot be regenerated here:\n"
             f"  - {detail}\n"
             f"Checked install root: {cs2_root}\n"
-            f"Use the checked-in canonical geometry instead: {checked_in_json}"
+            f"Checked-in geometry file: {checked_in_json}"
         )
 
     return vpk_dir, resourceinfo
@@ -231,14 +231,19 @@ def read_vpk_entries(vpk_dir: Path, wanted: Iterable[str]) -> Dict[str, Tuple[in
     return entries
 
 
-def extract_temp_file(cs2_root: Path, vpk_entry: Tuple[int, int, int, bytes], name: str) -> Path:
+def extract_temp_file(
+    cs2_root: Path,
+    vpk_entry: Tuple[int, int, int, bytes],
+    name: str,
+    temp_dir: Path,
+) -> Path:
     archive, offset, length, preload_data = vpk_entry
     archive_path = cs2_root / "game" / "csgo" / f"pak01_{archive:03d}.vpk"
     with archive_path.open("rb") as handle:
         handle.seek(offset)
         data = preload_data + handle.read(length)
 
-    temp_path = Path(tempfile.gettempdir()) / name
+    temp_path = temp_dir / name
     temp_path.write_bytes(data)
     return temp_path
 
@@ -481,8 +486,15 @@ def build_output(models: Dict[str, Dict[str, dict]], cs2_root: Path) -> dict:
 
 def main() -> None:
     args = parse_args()
-    cs2_root = resolve_cs2_root(args.cs2_root)
-    vpk_dir, resourceinfo_exe = validate_stock_assets(cs2_root)
+    try:
+        cs2_root = resolve_cs2_root(args.cs2_root)
+        vpk_dir, resourceinfo_exe = validate_stock_assets(cs2_root)
+    except SystemExit as exc:
+        if args.verify_only:
+            print(f"SKIP: {exc}")
+            return
+
+        raise
 
     if args.verify_only:
         print(f"CS2 root: {cs2_root}")
@@ -495,9 +507,12 @@ def main() -> None:
     entries = read_vpk_entries(vpk_dir, wanted_models)
 
     models = {}
-    for model_path in wanted_models:
-        temp_path = extract_temp_file(cs2_root, entries[model_path], Path(model_path).name)
-        models[model_path] = parse_model_text(run_resourceinfo(cs2_root, resourceinfo_exe, temp_path))
+    with tempfile.TemporaryDirectory(prefix="s2fow_hitbox_extract_") as temp_dir_name:
+        temp_dir = Path(temp_dir_name)
+        for index, model_path in enumerate(wanted_models):
+            temp_name = f"{index}_{Path(model_path).name}"
+            temp_path = extract_temp_file(cs2_root, entries[model_path], temp_name, temp_dir)
+            models[model_path] = parse_model_text(run_resourceinfo(cs2_root, resourceinfo_exe, temp_path))
 
     output = build_output(models, cs2_root)
     args.output.parent.mkdir(parents=True, exist_ok=True)

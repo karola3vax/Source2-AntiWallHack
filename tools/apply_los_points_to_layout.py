@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Generate Plugin/Core/Cs2VisibilityPrimitiveLayout.cs from tuned LOS point JSON.
+Generate Plugin/Core/Cs2VisibilityPrimitiveLayout.cs from tuned visibility point JSON.
 
 Default input:
   tools/sas_blue_tools_preview_los_points.json
 
-The canonical CS2 hitbox JSON remains the provenance source. This script applies
-the manually tuned single-point layout used by the runtime.
+The checked-in CS2 hitbox JSON remains the source of truth. This script applies
+the manually tuned body-and-weapon point layout used while the plugin is running.
 """
 
 from __future__ import annotations
@@ -29,19 +29,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--check",
         action="store_true",
-        help="Verify the generated file matches the output path without writing.",
+        help="Verify the visibility point layout file matches the generated output without writing.",
     )
     return parser.parse_args()
 
 
 def require_point(value: Any, index: int) -> tuple[float, float, float]:
     if not isinstance(value, list) or len(value) != 3:
-        raise SystemExit(f"Point {index} local_point must be a 3-number array.")
+        raise SystemExit(f"Visibility point {index} local_point must be a 3-number array.")
 
     try:
         return (float(value[0]), float(value[1]), float(value[2]))
     except (TypeError, ValueError) as exc:
-        raise SystemExit(f"Point {index} local_point contains a non-number value.") from exc
+        raise SystemExit(f"Visibility point {index} local_point contains a non-number value.") from exc
 
 
 def format_float(value: float) -> str:
@@ -56,7 +56,7 @@ def format_float(value: float) -> str:
 def validate_points(data: dict[str, Any]) -> list[dict[str, Any]]:
     points = data.get("points")
     if not isinstance(points, list):
-        raise SystemExit("Input JSON must contain a points array.")
+        raise SystemExit("Input JSON must contain a points array for the visibility point layout.")
 
     primitive_count = int(data.get("primitive_count", len(points)))
     if primitive_count != len(points):
@@ -67,17 +67,17 @@ def validate_points(data: dict[str, Any]) -> list[dict[str, Any]]:
     names: set[str] = set()
     for expected_index, point in enumerate(points):
         if not isinstance(point, dict):
-            raise SystemExit(f"Point {expected_index} must be an object.")
+            raise SystemExit(f"Visibility point {expected_index} must be an object.")
 
         index = int(point.get("index", -1))
         if index != expected_index:
-            raise SystemExit(f"Point index mismatch at array position {expected_index}: got {index}.")
+            raise SystemExit(f"Visibility point index mismatch at array position {expected_index}: got {index}.")
 
         name = str(point.get("name", "")).strip()
         if not name:
-            raise SystemExit(f"Point {index} is missing name.")
+            raise SystemExit(f"Visibility point {index} is missing a name.")
         if name in names:
-            raise SystemExit(f"Duplicate point name: {name}")
+            raise SystemExit(f"Duplicate visibility point name: {name}")
         names.add(name)
 
         point["local_point"] = require_point(point.get("local_point"), index)
@@ -89,7 +89,7 @@ def validate_points(data: dict[str, Any]) -> list[dict[str, Any]]:
             required_weapon_class = "Sniper"
         if required_weapon_class not in {"None", "Pistol", "Rifle", "Sniper"}:
             raise SystemExit(
-                f"Point {index} has invalid required_weapon_class={required_weapon_class!r}."
+                f"Visibility point {index} has invalid required_weapon_class={required_weapon_class!r}."
             )
         point["required_weapon_class"] = required_weapon_class
 
@@ -114,13 +114,45 @@ def generate_layout(points: list[dict[str, Any]]) -> str:
         "",
         "namespace S2FOW.Core;",
         "",
+        "/// <summary>",
+        "/// One body or weapon spot S2FOW can check for visibility.",
+        "///",
+        "/// Each entry is a specific spot on the enemy being checked, such as the",
+        "/// head, shoulder, knee, foot, or weapon muzzle.",
+        "/// LocalPoint uses coordinates relative to the player model. At runtime,",
+        "/// S2FOW moves that point to the enemy's real position and facing direction.",
+        "/// </summary>",
         "internal readonly struct VisibilityPrimitive",
         "{",
+        "    /// <summary>The point's position relative to the center of the player model.</summary>",
         "    public required Vector3 LocalPoint { get; init; }",
+        "",
+        "    /// <summary>",
+        "    /// If true, S2FOW checks this point from the viewer's current eye position",
+        "    /// instead of the movement-predicted eye position. This keeps head checks stable.",
+        "    /// </summary>",
         "    public bool UseFixedHeadOrigin { get; init; }",
+        "",
+        "    /// <summary>",
+        "    /// If set, this point is used only when the enemy is holding that weapon type.",
+        "    /// WeaponLosClass.None means the point is always checked.",
+        "    /// </summary>",
         "    public WeaponLosClass RequiredWeaponClass { get; init; }",
         "}",
         "",
+        "/// <summary>",
+        "/// The body and weapon points S2FOW checks when deciding if an enemy is visible.",
+        "///",
+        "/// These 35 points come from the actual CS2 player model data. They cover the",
+        "/// head, neck, shoulders, spine, hips, knees, feet, elbows, and weapon muzzle",
+        "/// positions for each weapon class.",
+        "///",
+        "/// S2FOW can also check 8 backup box corners around the enemy. Those backup points",
+        "/// help catch edge cases where only a small visible sliver of the model can be seen.",
+        "///",
+        "/// Together, the 35 model points plus 8 backup box points give broad body coverage",
+        "/// while keeping the amount of per-frame work predictable.",
+        "/// </summary>",
         "internal static class Cs2VisibilityPrimitiveLayout",
         "{",
         f"    public const int PrimitiveCount = {len(points)};",
@@ -179,7 +211,7 @@ def main() -> None:
     if args.check:
         current = args.output.read_text(encoding="utf-8") if args.output.exists() else ""
         if current.replace("\r\n", "\n") != generated:
-            raise SystemExit(f"{args.output} is not up to date with {args.input}")
+            raise SystemExit(f"Visibility point layout is not up to date: {args.output} differs from {args.input}")
         return
 
     args.output.write_text(generated, encoding="utf-8", newline="\n")

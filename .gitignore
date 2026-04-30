@@ -1,6 +1,10 @@
 # Build output
 bin/
 obj/
+Plugin/bin/
+Plugin/obj/
+__pycache__/
+*.pyc
 
 # IDE
 .vs/

@@ -433,7 +433,7 @@ function updateSelectionPanel() {
   coordZ.value = formatInput(selectedPoint.localPoint[2]);
   pointName.value = selectedPoint.name;
   pointName.disabled = !selectedPoint.custom;
-  pointName.title = selectedPoint.custom ? "Rename custom point" : "Built-in LOS point names are locked";
+  pointName.title = selectedPoint.custom ? "Rename custom point" : "Built-in visibility point names are locked";
   updateCustomPointControls();
 }
 
@@ -884,7 +884,7 @@ function exportJsonObject() {
       animation: TARGET_ANIMATION,
       baseline: "tools/cs2_player_hitboxes_canonical.json",
       coordinate_space: "source_local_units",
-      description: "Editable LOS points for the CT SAS blue model in the tools_preview_sas blue pose."
+      description: "Editable visibility points for the CT SAS blue model in the tools_preview_sas blue pose."
     },
     viewer_mapping: {
       source_x: "forward/back",

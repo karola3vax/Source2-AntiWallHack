@@ -5,13 +5,19 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
-    <Version>1.0.3</Version>
-    <AssemblyVersion>1.0.3.0</AssemblyVersion>
-    <FileVersion>1.0.3.0</FileVersion>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <PackageLicenseExpression>AGPL-3.0-only</PackageLicenseExpression>
+    <Version>1.0.5</Version>
+    <AssemblyVersion>1.0.5.0</AssemblyVersion>
+    <FileVersion>1.0.5.0</FileVersion>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="CounterStrikeSharp.API" Version="1.0.367" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\gamedata\**\*.json" CopyToOutputDirectory="PreserveNewest" Link="gamedata\%(RecursiveDir)%(Filename)%(Extension)" />
   </ItemGroup>
 
 </Project>

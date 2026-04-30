@@ -2,138 +2,141 @@ using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Modules.Utils;
 using S2FOW.Config;
 using S2FOW.Models;
+using S2FOW.Util;
 using Vector3 = System.Numerics.Vector3;
 
 namespace S2FOW.Core;
 
 /// <summary>
-/// The raycast engine — the low-level workhorse that fires invisible "rays" (straight
-/// lines) from an observer's eyes toward points on an enemy's body and checks whether
-/// they hit a wall along the way.
+/// Performs the wall checks used by S2FOW.
 ///
-/// Key responsibilities:
-///   - Builds and caches the set of "visibility test points" for each enemy target.
-///     These are specific 3D positions on the target's skeleton (head, shoulders, hips,
-///     knees, weapon muzzle, etc.) plus 8 corners of the bounding box (AABB fallback).
-///   - Fires rays from the observer to each test point via the RayTrace native API.
-///   - Interprets the ray results: did the ray reach the target, or did it hit a wall?
-///   - Tracks the per-frame raycast budget and stops early if exceeded (fail-open).
-///   - Records debug rays for in-world visualization when debug mode is enabled.
+/// A "raycast" is an invisible straight-line check from the viewer's eye to a point
+/// on the enemy. RayTrace answers whether that line reaches the point or hits world
+/// geometry such as a wall first.
 ///
-/// Visibility checking is done in two tiers:
-///   1. Skeleton points — precise body positions extracted from CS2 hitbox data.
-///      If any skeleton ray reaches the target, the target is visible (early out).
-///   2. AABB fallback points — the 8 corners of the padded bounding box.
-///      Only checked if ALL skeleton rays were blocked. Acts as a safety net
-///      so players peeking a tiny sliver are not incorrectly hidden.
+/// This class checks two sets of points:
+///   1. Detailed body points: head, shoulders, hips, knees, feet, and weapon tips.
+///   2. Backup box points: the eight corners of a simple padded box around the enemy.
+///
+/// If any checked point is reachable, the enemy is visible. If every checked point is
+/// blocked by the world, the enemy can be hidden. If the ray budget runs out or the
+/// RayTrace call fails, the caller shows the enemy to stay safe.
 /// </summary>
 
 public class RaycastEngine
 {
     /// <summary>
-    /// The result of a full visibility check for one observer→target pair.
-    /// Contains whether the target is visible, whether the budget was exceeded,
-    /// and how many rays were cast in each tier.
+    /// The result of checking whether one viewer can see one enemy.
     /// </summary>
     public readonly struct VisibilityResult
     {
-        /// <summary>True if at least one ray reached the target (they are visible).</summary>
+        /// <summary>True if at least one ray reached the enemy.</summary>
         public bool IsVisible { get; init; }
 
-        /// <summary>True if the raycast budget ran out before all points could be checked.</summary>
+        /// <summary>True if S2FOW reached the configured per-frame raycast limit.</summary>
         public bool BudgetExceeded { get; init; }
 
-        /// <summary>How many rays were cast in each tier (skeleton vs AABB).</summary>
+        /// <summary>True if RayTrace failed; callers show the enemy when this happens.</summary>
+        public bool TraceFailed { get; init; }
+
+        /// <summary>How many detailed body checks and backup box checks were used.</summary>
         public TraceCountBreakdown TraceCounts { get; init; }
     }
 
-    /// <summary>Breakdown of how many rays were cast in each tier.</summary>
+    /// <summary>Breakdown of how many checks were used for detailed body points and backup box points.</summary>
     public readonly struct TraceCountBreakdown
     {
-        /// <summary>Rays cast to skeleton body points (head, shoulders, hips, etc.).</summary>
+        /// <summary>Rays cast to detailed body points such as head, shoulders, and hips.</summary>
         public int Skeleton { get; init; }
 
-        /// <summary>Rays cast to AABB fallback corners (bounding box).</summary>
+        /// <summary>Rays cast to the eight backup box corners.</summary>
         public int Aabb { get; init; }
 
-        /// <summary>Total rays cast (skeleton + AABB).</summary>
+        /// <summary>Total rays cast.</summary>
         public int Total => Skeleton + Aabb;
     }
 
-    /// <summary>Internal result of tracing a single primitive point.</summary>
+    /// <summary>Internal result of checking one body point.</summary>
     private enum PrimitiveTraceState
     {
-        /// <summary>The ray hit a wall — this point is hidden.</summary>
+        /// <summary>The ray hit a wall before reaching this point.</summary>
         Hidden = 0,
 
-        /// <summary>The ray reached the target — this point is visible.</summary>
+        /// <summary>The ray reached this point.</summary>
         Visible = 1,
 
-        /// <summary>The ray budget was exceeded — cannot determine visibility.</summary>
-        BudgetExceeded = 2
+        /// <summary>S2FOW reached the configured per-frame raycast limit.</summary>
+        BudgetExceeded = 2,
+
+        /// <summary>RayTrace failed, so the enemy must be shown by the caller.</summary>
+        TraceFailed = 3
+    }
+
+    private enum TraceVisibilityState
+    {
+        Hidden = 0,
+        Visible = 1,
+        BudgetExceeded = 2,
+        TraceFailed = 3
     }
 
     // ────────────────────────────────────────────────────────────────────────
     //  Constants
     // ────────────────────────────────────────────────────────────────────────
 
-    /// <summary>Number of skeleton-based visibility primitives (body points extracted from CS2 hitboxes).</summary>
+    /// <summary>Number of detailed body points extracted from CS2 player model data.</summary>
     public const int VisibilityPrimitiveCount = Cs2VisibilityPrimitiveLayout.PrimitiveCount;
 
-    /// <summary>Total check points per target: skeleton primitives + 8 AABB corners.</summary>
+    /// <summary>Total check points per enemy: detailed body points plus eight backup box corners.</summary>
     public const int MaxVisibilityTestPoints = Cs2VisibilityPrimitiveLayout.MaxVisibilityTestPoints;
 
-    /// <summary>Maximum debug points across all targets for one observer (64 targets × 43 points each).</summary>
-    public const int MaxDebugPointsPerObserver = FowConstants.MaxSlots * MaxVisibilityTestPoints;
+    /// <summary>Maximum debug points drawn for one viewer.</summary>
+    public const int MaxDebugPointsPerObserver = 512;
 
     /// <summary>Maximum debug rays recorded per frame for visualization.</summary>
     public const int MaxDebugRays = 512;
 
-    /// <summary>Number of AABB fallback corner points (8 corners of the bounding box).</summary>
+    /// <summary>Number of backup box corner points.</summary>
     private const int AabbPointCount = Cs2VisibilityPrimitiveLayout.AabbPointCount;
 
     // ────────────────────────────────────────────────────────────────────────
     //  Dependencies and configuration
     // ────────────────────────────────────────────────────────────────────────
 
-    /// <summary>The native RayTrace API — performs the actual "shoot a line and see what it hits" computation.</summary>
+    /// <summary>The RayTrace connection that performs the actual straight-line wall check.</summary>
     private readonly IRayTraceService _rayTrace;
 
     /// <summary>Active plugin configuration.</summary>
     private readonly S2FOWConfig _config;
 
-    /// <summary>Options passed to each RayTrace call (world-only collision, no entity collision).</summary>
+    private readonly PerformanceMonitor? _perfMonitor;
+
+    /// <summary>RayTrace options: check only the map/world, not players or other objects.</summary>
     private readonly TraceOptions _traceOptions;
 
-    /// <summary>Maximum raycasts allowed this frame. 0 = unlimited.</summary>
+    /// <summary>Maximum raycasts allowed this frame. 0 means unlimited.</summary>
     private int _maxRaycastsPerFrame;
-
-    /// <summary>A ray is considered "reaching the target" if its hit fraction exceeds this value.</summary>
-    private readonly float _visibleHitFractionThreshold;
-
-    /// <summary>A ray is considered "reaching the target" if the hit point is within this many units of the target.</summary>
-    private readonly float _visibleHitDistanceUnits;
 
     /// <summary>Server tick interval in seconds (1/64 ≈ 0.015625 for 64-tick).</summary>
     private readonly float _tickInterval;
 
     // ────────────────────────────────────────────────────────────────────────
-    //  Per-target geometry cache (rebuilt once per frame per target)
+    //  Per-enemy point cache, rebuilt once per frame per enemy
     // ────────────────────────────────────────────────────────────────────────
 
-    /// <summary>The tick at which each target's geometry was last built. -1 = never.</summary>
+    /// <summary>The tick when each enemy's body/box points were last built. -1 means never.</summary>
     private readonly int[] _cachedGeometryTicks = new int[FowConstants.MaxSlots];
 
-    /// <summary>Cached world-space positions of each target's skeleton visibility points.</summary>
+    /// <summary>Cached world positions of each enemy's detailed body points.</summary>
     private readonly Vector3[] _cachedPrimitivePoints = new Vector3[FowConstants.MaxSlots * VisibilityPrimitiveCount];
 
-    /// <summary>Cached world-space positions of each target's 8 AABB fallback corners.</summary>
+    /// <summary>Cached world positions of each enemy's eight backup box corners.</summary>
     private readonly Vector3[] _cachedAabbPoints = new Vector3[FowConstants.MaxSlots * AabbPointCount];
 
     /// <summary>Debug rays recorded this frame for visualization.</summary>
     private readonly DebugRay[] _debugRays = new DebugRay[MaxDebugRays];
 
-    /// <summary>Reusable Vector objects to avoid allocation in the hot path.</summary>
+    /// <summary>Reusable Vector objects to avoid creating garbage while checking many enemies.</summary>
     private readonly Vector _reusableTraceOrigin = new(0, 0, 0);
     private readonly Vector _reusableTraceEnd = new(0, 0, 0);
 
@@ -159,16 +162,19 @@ public class RaycastEngine
 
     /// <summary>
     /// Creates a new RaycastEngine bound to the given RayTrace API and config.
-    /// Configures collision masks to only test against world geometry (walls, floors)
-    /// and NOT against other entities (players, weapons, props).
+    /// Configures RayTrace to test only against world geometry such as walls and
+    /// floors, not against players, weapons, or props.
     /// </summary>
-    internal RaycastEngine(IRayTraceService rayTrace, S2FOWConfig config, float? tickIntervalOverride = null)
+    internal RaycastEngine(
+        IRayTraceService rayTrace,
+        S2FOWConfig config,
+        PerformanceMonitor? perfMonitor = null,
+        float? tickIntervalOverride = null)
     {
         _rayTrace = rayTrace;
         _config = config;
+        _perfMonitor = perfMonitor;
         _maxRaycastsPerFrame = Math.Max(0, config.Performance.MaxRaycastsPerFrame);
-        _visibleHitFractionThreshold = Math.Clamp(config.Performance.RayHitFractionThreshold, 0.0f, 1.0f);
-        _visibleHitDistanceUnits = Math.Max(0.0f, config.Performance.RayHitDistanceThreshold);
         _traceOptions = new TraceOptions(
             InteractionLayers.MaskWorldOnly,
             InteractionLayers.None,
@@ -192,9 +198,8 @@ public class RaycastEngine
     }
 
     /// <summary>
-    /// Fires a single ray along the observer's aim direction and returns where it lands.
-    /// Used for the "aim reveal" feature: if the observer's crosshair lands near an enemy,
-    /// that enemy is force-shown regardless of wall checks (they are directly aiming at them).
+    /// Checks where the viewer is aiming. If the aim point lands near an enemy's body,
+    /// S2FOW shows that enemy because the viewer is directly aiming at them.
     /// Returns false if the budget is exceeded or the distance is invalid.
     /// </summary>
     public bool TryTraceAimEndpoint(
@@ -241,23 +246,23 @@ public class RaycastEngine
             return true;
         }
 
+        if (!success)
+            _perfMonitor?.RecordRayTraceFailure();
+
         endpoint = new Vector3(endX, endY, endZ);
         RecordDebugRay(originX, originY, originZ, endX, endY, endZ, visible: true);
         return success;
     }
 
     /// <summary>
-    /// Performs the full two-tier visibility check for one target.
+    /// Checks whether the viewer can see the enemy.
     ///
-    /// Tier 1 (skeleton): Fires rays from the observer's eye to each skeleton body
-    /// point on the target. If ANY ray reaches the target → visible (early return).
+    /// First, S2FOW checks detailed body points. If any point is clear, the enemy
+    /// is visible. If all detailed body points are blocked, S2FOW checks the eight
+    /// corners of a padded backup box around the enemy.
     ///
-    /// Tier 2 (AABB fallback): If all skeleton rays hit walls, fires rays to the
-    /// 8 corners of the target's padded bounding box. If ANY corner ray reaches
-    /// the target → visible.
-    ///
-    /// If the budget runs out during checking, returns BudgetExceeded = true.
-    /// The caller (VisibilityManager) then force-shows the target (fail-open).
+    /// If S2FOW cannot finish because the raycast limit is reached, the caller
+    /// shows the enemy.
     /// </summary>
     public VisibilityResult CheckVisibility(
         in PlayerSnapshot target,
@@ -315,6 +320,15 @@ public class RaycastEngine
                         BudgetExceeded = true,
                         TraceCounts = new TraceCountBreakdown { Skeleton = skeletonTraceCount, Aabb = aabbTraceCount }
                     };
+
+                case PrimitiveTraceState.TraceFailed:
+                    return new VisibilityResult
+                    {
+                        IsVisible = false,
+                        BudgetExceeded = false,
+                        TraceFailed = true,
+                        TraceCounts = new TraceCountBreakdown { Skeleton = skeletonTraceCount, Aabb = aabbTraceCount }
+                    };
             }
         }
 
@@ -322,8 +336,8 @@ public class RaycastEngine
         {
             aabbTraceCount++;
             Vector3 corner = _cachedAabbPoints[aabbBaseIndex + i];
-            bool? visibility = TraceIsVisible(eyeOriginX, eyeOriginY, eyeOriginZ, corner.X, corner.Y, corner.Z);
-            if (visibility == null)
+            TraceVisibilityState visibility = TraceIsVisible(eyeOriginX, eyeOriginY, eyeOriginZ, corner.X, corner.Y, corner.Z);
+            if (visibility == TraceVisibilityState.BudgetExceeded)
             {
                 return new VisibilityResult
                 {
@@ -333,7 +347,18 @@ public class RaycastEngine
                 };
             }
 
-            if (visibility.Value)
+            if (visibility == TraceVisibilityState.TraceFailed)
+            {
+                return new VisibilityResult
+                {
+                    IsVisible = false,
+                    BudgetExceeded = false,
+                    TraceFailed = true,
+                    TraceCounts = new TraceCountBreakdown { Skeleton = skeletonTraceCount, Aabb = aabbTraceCount }
+                };
+            }
+
+            if (visibility == TraceVisibilityState.Visible)
             {
                 return new VisibilityResult
                 {
@@ -353,9 +378,8 @@ public class RaycastEngine
     }
 
     /// <summary>
-    /// Fills an output buffer with the world-space positions of all visibility test
-    /// points for a target. Used by smoke blocking checks and the debug renderer.
-    /// Overload without the fallback-flag output.
+    /// Fills an output buffer with all body/box points for an enemy. Smoke checks
+    /// and debug drawing use these same points.
     /// </summary>
     public int FillVisibilityTestPoints(
         in PlayerSnapshot target,
@@ -370,8 +394,8 @@ public class RaycastEngine
     }
 
     /// <summary>
-    /// Fills output buffers with visibility test point positions and a flag indicating
-    /// whether each point is an AABB fallback point (true) or a skeleton point (false).
+    /// Fills output buffers with body/box points and marks whether each point came
+    /// from the backup box.
     /// </summary>
     public int FillVisibilityTestPoints(
         in PlayerSnapshot target,
@@ -412,9 +436,8 @@ public class RaycastEngine
     }
 
     /// <summary>
-    /// Checks if a visibility primitive applies to this target's current weapon.
-    /// Some points (weapon muzzle tip) only exist for specific weapon classes.
-    /// A primitive with RequiredWeaponClass = None applies to all targets.
+    /// Checks whether a body point applies to the enemy's current weapon.
+    /// Weapon-tip points only apply when the enemy is holding that weapon class.
     /// </summary>
     private static bool ShouldUsePrimitiveForTarget(in VisibilityPrimitive primitive, in PlayerSnapshot target)
     {
@@ -423,9 +446,8 @@ public class RaycastEngine
     }
 
     /// <summary>
-    /// Fires a single ray from the observer to one primitive point on the target.
-    /// Some primitives use the "fixed" (no-prediction) origin for stability.
-    /// Returns Hidden, Visible, or BudgetExceeded.
+    /// Checks one detailed body point. Some body points use the stable eye position
+    /// instead of the movement-predicted eye position to reduce jitter.
     /// </summary>
     private PrimitiveTraceState TracePrimitivePoint(
         in VisibilityPrimitive primitive,
@@ -443,19 +465,22 @@ public class RaycastEngine
         float startZ = primitive.UseFixedHeadOrigin ? fixedEyeOriginZ : eyeOriginZ;
 
         traceCount++;
-        bool? visibility = TraceIsVisible(startX, startY, startZ, point.X, point.Y, point.Z);
-        if (visibility == null)
+        TraceVisibilityState visibility = TraceIsVisible(startX, startY, startZ, point.X, point.Y, point.Z);
+        if (visibility == TraceVisibilityState.BudgetExceeded)
             return PrimitiveTraceState.BudgetExceeded;
 
-        if (visibility.Value)
+        if (visibility == TraceVisibilityState.TraceFailed)
+            return PrimitiveTraceState.TraceFailed;
+
+        if (visibility == TraceVisibilityState.Visible)
             return PrimitiveTraceState.Visible;
 
         return PrimitiveTraceState.Hidden;
     }
 
     /// <summary>
-    /// Ensures the target's geometry (skeleton points + AABB corners) has been
-    /// computed for this frame. Only rebuilds if the target hasn't been processed yet.
+    /// Ensures the enemy's body/box points have been computed for this frame.
+    /// The points are reused if the same enemy is checked again in the same tick.
     /// </summary>
     private void EnsureTargetGeometryBuilt(in PlayerSnapshot target, int currentTick)
     {
@@ -471,9 +496,8 @@ public class RaycastEngine
     }
 
     /// <summary>
-    /// Builds the world-space positions of all visibility test points for a target.
-    /// Transforms the local-space skeleton points by the target's facing direction,
-    /// and constructs the 8 corners of the padded axis-aligned bounding box (AABB).
+    /// Builds world positions for all body points and the eight backup box corners
+    /// around the enemy.
     /// </summary>
     private void BuildTargetGeometry(in PlayerSnapshot target, int currentTick)
     {
@@ -525,8 +549,8 @@ public class RaycastEngine
     }
 
     /// <summary>
-    /// Converts a skeleton point from the player's local coordinate space
-    /// to the world coordinate space, using the player's facing direction.
+    /// Converts a body point from player-local coordinates into world coordinates,
+    /// using the player's facing direction.
     /// </summary>
     private static Vector3 TransformModelPoint(
         float originX,
@@ -545,8 +569,8 @@ public class RaycastEngine
     }
 
     /// <summary>
-    /// Converts an AABB corner from the player's local space to world space.
-    /// The Z coordinate is passed directly (already in world space).
+    /// Converts a backup box corner from player-local coordinates into world coordinates.
+    /// The Z coordinate is already in world coordinates.
     /// </summary>
     private static Vector3 TransformBoundsCorner(
         float originX,
@@ -566,16 +590,14 @@ public class RaycastEngine
     }
 
     /// <summary>
-    /// Fires a single ray from origin to end and determines if the path is clear.
-    /// Returns true (visible), false (blocked by wall), or null (budget exceeded).
-    /// Also applies the "near hit" threshold: if the ray hit a wall but landed
-    /// very close to the target point, it still counts as visible (prevents pop-in
-    /// caused by the target's own collision geometry).
+    /// Checks whether one straight path is clear. Any world hit before the enemy
+    /// point means the path is blocked. RayTrace failures are reported separately
+    /// so callers can show the enemy instead of hiding on missing data.
     /// </summary>
-    private bool? TraceIsVisible(float originX, float originY, float originZ, float endX, float endY, float endZ)
+    private TraceVisibilityState TraceIsVisible(float originX, float originY, float originZ, float endX, float endY, float endZ)
     {
         if (_maxRaycastsPerFrame > 0 && RaycastsThisFrame >= _maxRaycastsPerFrame)
-            return null;
+            return TraceVisibilityState.BudgetExceeded;
 
         _reusableTraceOrigin.X = originX;
         _reusableTraceOrigin.Y = originY;
@@ -596,62 +618,18 @@ public class RaycastEngine
         if (success && !result.DidHit)
         {
             RecordDebugRay(originX, originY, originZ, endX, endY, endZ, visible: true);
-            return true;
+            return TraceVisibilityState.Visible;
         }
 
         if (success && result.DidHit)
         {
-            if (IsTraceResultVisible(in result, _visibleHitFractionThreshold, _visibleHitDistanceUnits, originX, originY, originZ, endX, endY, endZ))
-            {
-                RecordDebugRay(originX, originY, originZ, endX, endY, endZ, visible: true);
-                return true;
-            }
-
             RecordDebugRay(originX, originY, originZ, result.EndPosX, result.EndPosY, result.EndPosZ, visible: false);
-            return false;
+            return TraceVisibilityState.Hidden;
         }
 
-        RecordDebugRay(originX, originY, originZ, endX, endY, endZ, visible: false);
-        return false;
-    }
-
-    /// <summary>
-    /// Interprets a ray trace result: did the ray reach the target?
-    /// A ray is "visible" if:
-    ///   - It did not hit anything (fraction = 1.0), OR
-    ///   - It hit something, but the fraction is above the threshold (very close to the target), OR
-    ///   - The hit point is within RayHitDistanceThreshold units of the target point.
-    /// This tolerance prevents false "hidden" results caused by the target's own body
-    /// blocking the last tiny segment of the ray.
-    /// </summary>
-    private static bool IsTraceResultVisible(
-        in TraceResult result,
-        float visibleHitFractionThreshold,
-        float visibleHitDistanceUnits,
-        float originX,
-        float originY,
-        float originZ,
-        float endX,
-        float endY,
-        float endZ)
-    {
-        if (!result.DidHit)
-            return true;
-
-        if (result.Fraction >= visibleHitFractionThreshold)
-            return true;
-
-        if (visibleHitDistanceUnits > 0.0f)
-        {
-            float dx = result.EndPosX - endX;
-            float dy = result.EndPosY - endY;
-            float dz = result.EndPosZ - endZ;
-            float hitDistSqr = dx * dx + dy * dy + dz * dz;
-            if (hitDistSqr <= visibleHitDistanceUnits * visibleHitDistanceUnits)
-                return true;
-        }
-
-        return false;
+        _perfMonitor?.RecordRayTraceFailure();
+        RecordDebugRay(originX, originY, originZ, endX, endY, endZ, visible: true);
+        return TraceVisibilityState.TraceFailed;
     }
 
     /// <summary>Records a ray for debug visualization (only when ShowRayLines is enabled).</summary>

@@ -1,6 +1,6 @@
-# LOS Point Editor
+# Visibility Point Editor
 
-Static Three.js editor for tuning the 19 S2AC/S2FOW LOS points against the CT SAS blue model in the `tools_preview_sas blue` pose.
+Static Three.js editor for tuning S2FOW visibility points against the CT SAS blue model in the `tools_preview_sas blue` pose.
 
 Serve the repository root, then open:
 
@@ -29,6 +29,6 @@ The JSON uses Source-style local units:
 
 Use **Automatic GLB Match** to generate a first pass from the GLB skeleton by transforming the canonical T-pose midpoint for each named bone into the `tools_preview_sas blue` pose. Review and adjust the result manually before exporting.
 
-Use **Add Dot** to create extra custom LOS points. Custom dots are included in JSON/C# exports and can be removed with **Delete Dot** while selected.
+Use **Add Dot** to create extra custom visibility points. Custom dots are included in JSON/C# exports and can be removed with **Delete Dot** while selected.
 
 Open **Calibration** and adjust **Opacity** when you need the dots visible through or around the model.

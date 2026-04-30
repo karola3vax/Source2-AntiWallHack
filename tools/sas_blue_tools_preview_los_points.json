@@ -4,7 +4,7 @@
     "animation": "tools_preview_sas blue",
     "baseline": "tools/cs2_player_hitboxes_canonical.json",
     "coordinate_space": "source_local_units",
-    "description": "Editable LOS points for the CT SAS blue model in the tools_preview_sas blue pose."
+    "description": "Editable visibility points for the CT SAS blue model in the tools_preview_sas blue pose."
   },
   "viewer_mapping": {
     "source_x": "forward/back",

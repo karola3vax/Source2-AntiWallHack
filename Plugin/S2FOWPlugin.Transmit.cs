@@ -8,68 +8,72 @@ using S2FOW.Util;
 namespace S2FOW;
 
 /// <summary>
-/// The CheckTransmit hot path — this is the heart of the anti-wallhack system.
+/// Per-frame player hiding.
 ///
-/// Every network frame (64 times per second), the Source 2 engine prepares a list of
-/// entities to send to each connected client. This is called the "transmit list".
+/// CheckTransmit is the engine callback where CS2 gives S2FOW the list of
+/// networked objects it is about to send to each viewer. S2FOW edits that list:
+/// if a viewer should not see an enemy, S2FOW removes that enemy's player body and
+/// connected objects from only that viewer's list.
 ///
-/// Our hook intercepts that list and removes enemy players that the client should not
-/// be able to see. Because the server never sends the enemy data, no wallhack on the
-/// client can reveal them — the data simply does not exist on their machine.
+/// In the code, "observer" means the viewer receiving updates. "target" means the
+/// enemy being checked for that viewer.
 ///
-/// The overall flow each frame:
-///   1. Take a snapshot of every player's position, speed, team, etc.
-///   2. For each human player (the "observer"), look at every enemy (the "target").
-///   3. Ask the VisibilityManager: "Can this observer see this target?"
-///   4. If not → remove the target's pawn and weapon entities from the transmit list.
-///   5. If transitioning from hidden to visible → set NOINTERP to prevent rubber-banding.
+/// Safety rule: S2FOW only hides a living enemy when it knows all connected objects
+/// for that enemy were collected. If anything is missing or uncertain, the enemy is
+/// shown instead of hidden.
 /// </summary>
 public partial class S2FOWPlugin
 {
     /// <summary>
-    /// Called by the engine every network frame with the list of transmit info
-    /// for all connected clients. This is where we actually hide enemy players.
+    /// Runs once per network frame. This is the only place where S2FOW actually
+    /// removes hidden enemies from each viewer's update list.
     /// </summary>
     private void OnCheckTransmit(CCheckTransmitInfoList infoList)
     {
-        // Do nothing if the plugin is not ready or is disabled in config.
+        // If S2FOW is not ready or protection is off, leave the engine's update
+        // lists untouched.
         if (!_initialized || _visibilityManager == null || _raycastEngine == null)
             return;
 
         if (!Config.General.Enabled)
             return;
 
-        // Get the list of all connected players and clear any pending NOINTERP flags.
+        // Read current players and clear any short-lived visual refresh flags that
+        // have expired from earlier hide/show transitions.
         var players = Utilities.GetPlayers();
+        ResetObserverFullUpdateFrameQueue();
         ClearPendingNoInterp(players);
 
-        // Start the performance timer for this frame.
+        // Start this frame's counters and apply the configured raycast limit.
         _perfMonitor?.BeginFrame();
         _raycastEngine.ResetFrameCounter();
         int currentTick = Server.TickCount;
         _raycastEngine.SetFrameBudget(Config.Performance.MaxRaycastsPerFrame);
 
-        // Tell the visibility manager what tick we are on so it can track time-based decisions.
+        // Give the visibility manager the current time so round-start, death, spawn,
+        // smoke lifetime, and throttling rules all use the same tick.
         _visibilityManager.SetFrameTick(currentTick);
         _visibilityManager.BeginFrame();
 
-        // During warmup, freeze time, and round end, skip all visibility work —
-        // everyone should see everyone.
+        // During non-live round states, everyone should be visible. S2FOW clears
+        // debug drawings, queues viewer refreshes, and skips all hiding work.
         if (_visibilityManager.ShouldBypassVisibilityWorkForCurrentPhase())
         {
             _debugAabbRenderer?.Clear();
+            QueueAllObserversFullUpdate(players, ObserverFullUpdateReason.Unhide | ObserverFullUpdateReason.PhaseBypass);
+            ProcessObserverFullUpdates(players, currentTick);
             _perfMonitor?.EndFrame(0);
             return;
         }
 
-        // Take a snapshot of every player's current state (position, speed, team, weapons, etc.).
-        // This is done once per frame so all visibility checks use consistent data.
+        // Read every player's state once so all visibility decisions in this frame
+        // are based on the same positions, teams, weapons, and connected objects.
         _playerStateCache!.BuildSnapshots(players);
 
         var snapshots = _playerStateCache.Snapshots;
         var activeSlots = _playerStateCache.ActiveSlots;
 
-        // Process each observer (a human player who is alive and on a real team).
+        // Process each human viewer that is alive and on a playing team.
         foreach ((CCheckTransmitInfo info, CCSPlayerController? controller) in infoList)
         {
             if (controller == null)
@@ -79,39 +83,40 @@ public partial class S2FOWPlugin
             if (!FowConstants.IsValidSlot(observerSlot))
                 continue;
 
-            // If another hook or the engine already removed a pawn, make sure no
-            // associated child entities remain orphaned in this transmit set.
-            EnforcePawnChildInvariant(info, activeSlots, snapshots);
+            // If the engine or another plugin has already removed a player's body,
+            // also remove that player's connected objects from this viewer's update
+            // list. A viewer must never receive child objects without the body they
+            // belong to.
+            EnforcePawnChildInvariant(info, observerSlot, activeSlots, snapshots);
 
             ref readonly var observer = ref snapshots[observerSlot];
             if (!observer.IsValid || !observer.IsAlive)
                 continue;
 
-            // Spectators should see everything — only filter for T and CT players.
+            // Spectators and unassigned players should see normally.
             if (observer.Team != CsTeam.Terrorist && observer.Team != CsTeam.CounterTerrorist)
                 continue;
 
-            // Bots don't run wallhack clients, so don't waste CPU filtering for them.
+            // Bots do not need player hiding work.
             if (observer.IsBot)
                 continue;
 
-            // In debug mode, hide other observers' debug point beams so they do not clutter the view.
+            // In debug mode, each viewer should see only their own debug points.
             if (Config.Debug.ShowTargetPoints && _debugAabbRenderer != null)
                 _debugAabbRenderer.RemoveOtherObserverPointEntities(info, observerSlot);
 
-            // Check each enemy target for this observer.
+            // Check each enemy against this viewer.
             for (int i = 0; i < activeSlots.Length; i++)
             {
                 int targetSlot = activeSlots[i];
                 ref readonly var target = ref snapshots[targetSlot];
 
-                // Skip invalid targets, self, and teammates.
+                // Skip disconnected players, the viewer themself, and teammates.
                 if (!target.IsValid || target.Slot == observerSlot || target.Team == observer.Team)
                     continue;
 
-                // Dead/dying players are always transmitted. Hiding a pawn while
-                // the engine is creating death/ragdoll deltas is the crash case
-                // CounterStrikeSharp explicitly warns plugins about.
+                // Dead or dying players stay visible. Hiding during death cleanup is
+                // unsafe because the engine may still be building death/ragdoll updates.
                 if (!target.IsAlive)
                 {
                     _visibilityManager.MarkForceVisible(observerSlot, target.Slot);
@@ -119,17 +124,21 @@ public partial class S2FOWPlugin
                     continue;
                 }
 
-                // A live pawn without a valid controller is not a normal LOS target.
-                // Clear it only together with its known associated closure.
+                // A live body without a valid controller is unusual. Remove it only
+                // together with the connected objects S2FOW already knows about.
                 if (!target.HasValidPawnController)
                 {
                     if (RemoveHiddenTargetEntities(info, targetSlot))
+                    {
                         _perfMonitor?.RecordInvalidControllerPawnClear();
+                        QueueObserverFullUpdate(observerSlot, ObserverFullUpdateReason.Hide | ObserverFullUpdateReason.SafetyClear);
+                    }
                     continue;
                 }
 
-                // If dependency collection was incomplete, fail open. A wallhack
-                // leak is preferable to orphaning a networked child entity.
+                // If S2FOW could not collect the complete connected-object list, show
+                // the enemy. Showing too much is safer than hiding the body while a
+                // connected object is still sent to the viewer.
                 if (!target.CanHideControlledLivePawn)
                 {
                     _visibilityManager.MarkForceVisible(observerSlot, target.Slot);
@@ -137,46 +146,40 @@ public partial class S2FOWPlugin
                     continue;
                 }
 
-                // For alive enemies, run the full visibility check (rays, smoke, etc.).
+                // Ask the visibility manager whether this viewer should receive this enemy.
                 bool shouldTransmit = _visibilityManager.ShouldTransmit(in observer, in target, currentTick);
 
-                // If the target should be hidden, remove their entities from the transmit list.
+                // If not visible, remove the enemy body and connected objects from
+                // this viewer's update list, then queue a viewer refresh.
                 if (!shouldTransmit)
                 {
+                    QueueObserverFullUpdate(observerSlot, ObserverFullUpdateReason.Hide);
                     RemoveHiddenTargetEntities(info, targetSlot);
                 }
             }
+
+            if (_visibilityManager.NeedsObserverFullUpdate(observerSlot))
+                QueueObserverFullUpdate(observerSlot, ObserverFullUpdateReason.Unhide);
         }
 
-        // Update debug overlays and handle NOINTERP for players transitioning to visible.
+        // Send queued viewer refreshes, update optional debug visuals, and refresh
+        // players that just changed from hidden to visible.
+        ProcessObserverFullUpdates(players, currentTick);
         UpdateDebugOutputs(snapshots, players, currentTick);
         ForceFlexStateResync(players, currentTick);
         _perfMonitor?.EndFrame(_raycastEngine.RaycastsThisFrame);
     }
 
     /// <summary>
-    /// Removes a hidden target's pawn entity, all weapon entities, all wearable
-    /// entities (gloves, agent accessories), and any hostage carry prop from the
-    /// transmit list so the client never receives them.
+    /// If a player body is absent from a viewer's update list, S2FOW also removes
+    /// that player's connected objects from the same viewer's list.
     ///
-    /// Important: We intentionally leave the player's "controller" entity transmitted.
-    /// The controller only carries scoreboard metadata (name, score, ping) and no
-    /// world-space position. Removing it would crash the client with a
-    /// "CopyExistingEntity" error during delta updates.
-    ///
-    /// All child entities that are parented or bone-merged to the pawn MUST be
-    /// hidden together. If any remain while the pawn is removed, the client
-    /// receives orphaned entity data and crashes with:
-    ///   FATAL ERROR: CL_CopyExistingEntity: missing client entity
-    ///
-    /// Entity types collected (verified against cs2-dumper schema):
-    ///   - Pawn body (C_CSPlayerPawn)
-    ///   - Weapons (CPlayer_WeaponServices → m_hMyWeapons, m_hActiveWeapon, m_hLastWeapon)
-    ///   - Wearables (C_BaseCombatCharacter → m_hMyWearables at offset 4440)
-    ///   - Hostage carry prop (CCSPlayer_HostageServices → m_hCarriedHostageProp at offset 76)
+    /// This protects against a client crash where the viewer receives a weapon,
+    /// wearable, hostage prop, or attached scene object whose player body is missing.
     /// </summary>
     private void EnforcePawnChildInvariant(
         CCheckTransmitInfo info,
+        int observerSlot,
         ReadOnlySpan<int> activeSlots,
         ReadOnlySpan<PlayerSnapshot> snapshots)
     {
@@ -191,10 +194,18 @@ public partial class S2FOWPlugin
                 continue;
 
             if (RemoveHiddenTargetEntities(info, targetSlot))
+            {
                 _perfMonitor?.RecordOrphanClosureCleanup();
+                QueueObserverFullUpdate(observerSlot, ObserverFullUpdateReason.Hide | ObserverFullUpdateReason.OrphanCleanup);
+            }
         }
     }
 
+    /// <summary>
+    /// Removes all known networked objects for one hidden enemy from one viewer's
+    /// update list. This includes the body, weapons, wearables, hostage objects,
+    /// and attached scene objects collected in the player snapshot.
+    /// </summary>
     private bool RemoveHiddenTargetEntities(
         CCheckTransmitInfo info,
         int targetSlot)
@@ -217,13 +228,10 @@ public partial class S2FOWPlugin
     }
 
     /// <summary>
-    /// When a player transitions from hidden to visible, their model would appear to
-    /// "teleport" from their last known position to their current one. To prevent this,
-    /// we set the NOINTERP effect flag which tells the client: "snap to the new position
-    /// instead of interpolating from the old one."
-    ///
-    /// We hold NOINTERP for 2 ticks (≈31ms) so the client receives at least one clean
-    /// snapshot even under single-packet loss, then clear it so normal smooth movement resumes.
+    /// When a player changes from hidden to visible, briefly set the NOINTERP
+    /// visual-refresh flag so the client uses the player's current position
+    /// immediately. After two ticks, S2FOW clears the flag and normal smooth
+    /// movement resumes.
     /// </summary>
     private void ForceFlexStateResync(List<CCSPlayerController> players, int currentTick)
     {
@@ -235,7 +243,7 @@ public partial class S2FOWPlugin
             var controller = players[i];
             int slot = controller.Slot;
 
-            // Only process players that the visibility manager flagged for resync.
+            // Only process players that the visibility manager flagged for refresh.
             if (!FowConstants.IsValidSlot(slot) || !_visibilityManager.NeedsFlexResync(slot))
                 continue;
 
@@ -243,23 +251,21 @@ public partial class S2FOWPlugin
             if (pawn == null || !pawn.IsValid)
                 continue;
 
-            // Set the NOINTERP flag and schedule its removal in 2 ticks.
+            // Set the short visual-refresh flag and schedule removal in two ticks.
             pawn.Effects |= EffectNoInterp;
             _clearNoInterpAfterTick[slot] = currentTick + 2;
             Utilities.SetStateChanged(pawn, "CBaseEntity", "m_fEffects");
 
-            // Mark eye angles as changed so the client gets the correct view direction.
+            // Mark eye angles as changed so the viewer receives the current facing direction.
             Utilities.SetStateChanged(pawn, "CCSPlayerPawn", "m_angEyeAngles");
 
-            // Force the interpolation history to repopulate so the client does not
-            // blend from a stale position.
+            // Ask the client to rebuild movement history from the current state.
             Utilities.SetStateChanged(pawn, "CBaseAnimGraph", "m_bInitiallyPopulateInterpHistory");
         }
     }
 
     /// <summary>
-    /// Clears the NOINTERP flag on players whose scheduled removal tick has arrived.
-    /// This restores normal smooth movement interpolation.
+    /// Clears the short visual-refresh flag once its scheduled removal tick arrives.
     /// </summary>
     private void ClearPendingNoInterp(List<CCSPlayerController> players)
     {
@@ -272,18 +278,16 @@ public partial class S2FOWPlugin
             if (!FowConstants.IsValidSlot(slot) || _clearNoInterpAfterTick[slot] == 0)
                 continue;
 
-            // Not time yet — keep waiting.
+            // Not time yet; keep the flag for now.
             if (currentTick < _clearNoInterpAfterTick[slot])
                 continue;
 
-            // Time to remove NOINTERP.
             _clearNoInterpAfterTick[slot] = 0;
 
             var pawn = controller.PlayerPawn.Value;
             if (pawn == null || !pawn.IsValid)
                 continue;
 
-            // Only clear if the flag is actually set (avoid redundant network updates).
             if ((pawn.Effects & EffectNoInterp) == 0)
                 continue;
 

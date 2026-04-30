@@ -5,11 +5,11 @@ using S2FOW.Util;
 namespace S2FOW.Core;
 
 /// <summary>
-/// Tracks active smoke grenades and checks whether they block line of sight.
+/// Tracks active smoke grenades and checks whether they block visibility.
 ///
 /// In CS2, smoke grenades create opaque clouds that block vision. This class
 /// models each smoke as a sphere in the game world and checks whether the
-/// straight line between an observer and a target passes through any of them.
+/// straight line between a viewer and the enemy being checked passes through any of them.
 ///
 /// Key behaviors:
 ///   - Smoke "bloom": When a smoke first detonates, it starts small and grows
@@ -185,11 +185,11 @@ public class SmokeTracker
     ///
     /// This is much cheaper than the full sphere-intersection test because it uses
     /// point-to-segment distance (simpler math). If no smoke is near the line,
-    /// we can skip all per-ray smoke checks for this observer-target pair.
+    /// we can skip all per-ray smoke checks for this viewer/enemy pair.
     ///
-    /// The targetExtentMargin accounts for the fact that check points are spread
-    /// around the target center — a smoke near the center might still block a point
-    /// at the edge of the body.
+    /// targetExtentMargin accounts for the fact that check points are spread
+    /// around the enemy's center. A smoke near the center might still block a
+    /// point at the edge of the body.
     /// </summary>
     public bool IsLineNearAnySmoke(
         float fromX, float fromY, float fromZ,

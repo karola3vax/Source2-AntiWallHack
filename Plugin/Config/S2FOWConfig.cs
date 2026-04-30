@@ -3,301 +3,577 @@ using CounterStrikeSharp.API.Core;
 
 namespace S2FOW.Config;
 
-/// <summary>
-/// The complete configuration schema for S2FOW.
-///
-/// This class defines every setting that server operators can tune in the JSON
-/// config file. Settings are organized into logical groups:
-///   - General:        Master on/off switch and grace-period durations.
-///   - AntiWallhack:   Smoke grenade blocking parameters.
-///   - TargetPoints:   How many and which body points to check on enemies.
-///   - ViewerRays:     How the observer's ray origin is predicted for moving players.
-///   - Debug:          In-game visual debugging options (beam lines, HUD overlay).
-///   - Performance:    Raycast budget, hit thresholds, and hitbox padding.
-///
-/// The config is serialized to/from JSON by CounterStrikeSharp's config system.
-/// A "guided" version with inline comments is also generated for human readability.
-/// </summary>
-public class S2FOWConfig : BasePluginConfig
+public sealed class S2FOWConfig : BasePluginConfig
 {
-    /// <summary>
-    /// The config schema version. Incremented when default values change,
-    /// so the migration system can detect and update old configs.
-    /// </summary>
-    [JsonPropertyName("ConfigVersion")]
-    public override int Version { get; set; } = 32;
+    public const int CurrentConfigVersion = 33;
 
-    /// <summary>General settings: master enable switch, death/spawn grace durations.</summary>
+    [JsonPropertyName("ConfigVersion")]
+    public override int Version { get; set; } = CurrentConfigVersion;
+
+    [JsonPropertyName("Main")]
     public GeneralSettings General { get; set; } = new();
 
-    /// <summary>Anti-wallhack settings: smoke blocking parameters.</summary>
+    [JsonPropertyName("SmokeVisibility")]
     public AntiWallhackSettings AntiWallhack { get; set; } = new();
 
-    /// <summary>Target point settings: FOV culling, distance tiering, movement prediction for targets.</summary>
+    [JsonPropertyName("EnemyCheckPoints")]
     public TargetPointSettings TargetPoints { get; set; } = new();
 
-    /// <summary>Viewer ray settings: movement prediction for the observer's ray origin.</summary>
+    [JsonPropertyName("ViewerEyePrediction")]
     public ViewerRaySettings ViewerRays { get; set; } = new();
 
-    /// <summary>Debug settings: toggle in-game visual aids for development and tuning.</summary>
     public DebugSettings Debug { get; set; } = new();
 
-    /// <summary>Performance settings: raycast budget, hit thresholds, hitbox padding.</summary>
+    [JsonPropertyName("Advanced")]
     public PerformanceSettings Performance { get; set; } = new();
 
-    /// <summary>Creates a deep copy of this config (changes to the copy do not affect the original).</summary>
+    [JsonPropertyName("General")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public GeneralSettings? LegacyGeneral
+    {
+        get => null;
+        set
+        {
+            if (value is not null)
+            {
+                General = value;
+            }
+        }
+    }
+
+    [JsonPropertyName("AntiWallhack")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public AntiWallhackSettings? LegacyAntiWallhack
+    {
+        get => null;
+        set
+        {
+            if (value is not null)
+            {
+                AntiWallhack = value;
+            }
+        }
+    }
+
+    [JsonPropertyName("TargetPoints")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public TargetPointSettings? LegacyTargetPoints
+    {
+        get => null;
+        set
+        {
+            if (value is not null)
+            {
+                TargetPoints = value;
+            }
+        }
+    }
+
+    [JsonPropertyName("ViewerRays")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ViewerRaySettings? LegacyViewerRays
+    {
+        get => null;
+        set
+        {
+            if (value is not null)
+            {
+                ViewerRays = value;
+            }
+        }
+    }
+
+    [JsonPropertyName("Performance")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public PerformanceSettings? LegacyPerformance
+    {
+        get => null;
+        set
+        {
+            if (value is not null)
+            {
+                Performance = value;
+            }
+        }
+    }
+
     public S2FOWConfig Clone()
     {
         return new S2FOWConfig
         {
             Version = Version,
-            General = General.Clone(),
-            AntiWallhack = AntiWallhack.Clone(),
-            TargetPoints = TargetPoints.Clone(),
-            ViewerRays = ViewerRays.Clone(),
-            Debug = Debug.Clone(),
-            Performance = Performance.Clone()
+            General = new GeneralSettings
+            {
+                Enabled = General.Enabled,
+                DeathVisibilityDurationTicks = General.DeathVisibilityDurationTicks,
+                RoundStartRevealDurationTicks = General.RoundStartRevealDurationTicks
+            },
+            AntiWallhack = new AntiWallhackSettings
+            {
+                SmokeBlocksWallhack = AntiWallhack.SmokeBlocksWallhack,
+                SmokeBlockRadius = AntiWallhack.SmokeBlockRadius,
+                SmokeLifetimeTicks = AntiWallhack.SmokeLifetimeTicks,
+                SmokeBloomDurationTicks = AntiWallhack.SmokeBloomDurationTicks,
+                SmokeGrowthStartFraction = AntiWallhack.SmokeGrowthStartFraction
+            },
+            TargetPoints = new TargetPointSettings
+            {
+                FovCullingEnabled = TargetPoints.FovCullingEnabled,
+                DistanceTieringEnabled = TargetPoints.DistanceTieringEnabled,
+                FullLosHalfAngleDegrees = TargetPoints.FullLosHalfAngleDegrees,
+                OriginalOnlyHalfAngleDegrees = TargetPoints.OriginalOnlyHalfAngleDegrees,
+                FullLosDistanceUnits = TargetPoints.FullLosDistanceUnits,
+                AabbOnlyDistanceUnits = TargetPoints.AabbOnlyDistanceUnits,
+                ForwardLookAheadTicks = TargetPoints.ForwardLookAheadTicks,
+                SideLookAheadTicks = TargetPoints.SideLookAheadTicks,
+                MaxMoveUnits = TargetPoints.MaxMoveUnits,
+                UpDownLookAheadTicks = TargetPoints.UpDownLookAheadTicks,
+                MaxUpDownUnits = TargetPoints.MaxUpDownUnits
+            },
+            ViewerRays = new ViewerRaySettings
+            {
+                StartAfterSpeed = ViewerRays.StartAfterSpeed,
+                ForwardLookAheadTicks = ViewerRays.ForwardLookAheadTicks,
+                SideLookAheadTicks = ViewerRays.SideLookAheadTicks,
+                JumpLookAheadTicks = ViewerRays.JumpLookAheadTicks,
+                MaxMoveUnits = ViewerRays.MaxMoveUnits
+            },
+            Debug = new DebugSettings
+            {
+                ShowRayCount = Debug.ShowRayCount,
+                ShowRayLines = Debug.ShowRayLines,
+                ShowTargetPoints = Debug.ShowTargetPoints
+            },
+            Performance = new PerformanceSettings
+            {
+                MaxRaycastsPerFrame = Performance.MaxRaycastsPerFrame,
+                ViewerHeightOffset = Performance.ViewerHeightOffset,
+                HitboxPaddingUp = Performance.HitboxPaddingUp,
+                HitboxPaddingSide = Performance.HitboxPaddingSide,
+                HitboxPaddingDown = Performance.HitboxPaddingDown,
+                AimRevealRadius = Performance.AimRevealRadius,
+                AimRayDistance = Performance.AimRayDistance,
+                SmokeBatchPreFilterEnabled = Performance.SmokeBatchPreFilterEnabled
+            }
         };
     }
 }
 
-/// <summary>
-/// General plugin settings.
-/// </summary>
-public class GeneralSettings
+public sealed class GeneralSettings
 {
-    /// <summary>Master switch: set to false to disable all anti-wallhack protection.</summary>
+    [JsonPropertyName("ProtectionEnabled")]
     public bool Enabled { get; set; } = true;
 
-    /// <summary>
-    /// How many ticks (64 ticks = 1 second) to keep a dead player visible after death.
-    /// This lets the death animation play out naturally instead of the body vanishing instantly.
-    /// Default: 128 ticks ≈ 2 seconds.
-    /// </summary>
+    [JsonPropertyName("KeepDeadPlayersVisibleTicks")]
     public int DeathVisibilityDurationTicks { get; set; } = 128;
 
-    /// <summary>
-    /// How many ticks to keep all players visible at the start of each round.
-    /// This prevents glitches during the spawn animation. Default: 32 ticks ≈ 0.5 seconds.
-    /// </summary>
+    [JsonPropertyName("ShowEveryoneAtRoundStartTicks")]
     public int RoundStartRevealDurationTicks { get; set; } = 32;
 
-    internal GeneralSettings Clone() => (GeneralSettings)MemberwiseClone();
+    [JsonPropertyName("Enabled")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? LegacyEnabled
+    {
+        get => null;
+        set { if (value.HasValue) Enabled = value.Value; }
+    }
+
+    [JsonPropertyName("DeathVisibilityDurationTicks")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? LegacyDeathVisibilityDurationTicks
+    {
+        get => null;
+        set { if (value.HasValue) DeathVisibilityDurationTicks = value.Value; }
+    }
+
+    [JsonPropertyName("RoundStartRevealDurationTicks")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? LegacyRoundStartRevealDurationTicks
+    {
+        get => null;
+        set { if (value.HasValue) RoundStartRevealDurationTicks = value.Value; }
+    }
 }
 
-/// <summary>
-/// Smoke grenade anti-wallhack settings.
-/// Controls whether and how smoke grenades block line-of-sight checks.
-/// </summary>
-public class AntiWallhackSettings
+public sealed class AntiWallhackSettings
 {
-    /// <summary>If true, smoke grenades block visibility (enemies behind smoke are hidden).</summary>
+    [JsonPropertyName("HidePlayersBehindSmoke")]
     public bool SmokeBlocksWallhack { get; set; } = true;
 
-    /// <summary>
-    /// Server-side approximation of the smoke blocking sphere radius (game units).
-    /// CS2 uses volumetric smoke that conforms to geometry — there is no actual fixed
-    /// sphere in the game. This value is used by S2FOW for its server-side LOS check
-    /// and should be tuned to match the visual extent of smokes on your map geometry.
-    /// CS:GO used radius ~144 units. Default: 144.
-    /// </summary>
-    public float SmokeBlockRadius { get; set; } = 144.0f;
+    [JsonPropertyName("SmokeSizeUnits")]
+    public float SmokeBlockRadius { get; set; } = 130f;
 
-    /// <summary>
-    /// How many ticks a smoke blocks visibility after detonation.
-    /// CS2 smoke lasts about 20 seconds. S2FOW stops short of that so smoke
-    /// does not keep hiding players after the client smoke is effectively gone.
-    /// Default: 1232 ticks (19.25 seconds at 64 Hz).
-    /// </summary>
+    [JsonPropertyName("SmokeLastsTicks")]
     public int SmokeLifetimeTicks { get; set; } = 1232;
 
-    /// <summary>
-    /// How many ticks the smoke takes to grow from its starting blocking radius
-    /// to its full blocking radius (the bloom duration).
-    /// Blocking starts immediately at detonation at SmokeGrowthStartFraction of full size;
-    /// it grows linearly to full size over this many ticks.
-    /// Default: 192 ticks = 3 seconds at 64 Hz.
-    /// </summary>
+    [JsonPropertyName("SmokeGrowsTicks")]
     public int SmokeBloomDurationTicks { get; set; } = 192;
 
-    /// <summary>
-    /// The starting blocking radius as a fraction of the full SmokeBlockRadius (0.0 to 1.0).
-    /// At detonation, the effective blocking radius = SmokeGrowthStartFraction × SmokeBlockRadius.
-    /// It grows linearly to 100% over SmokeBloomDurationTicks. Default: 0.50 (50% = 72 units).
-    /// </summary>
-    public float SmokeGrowthStartFraction { get; set; } = 0.50f;
+    [JsonPropertyName("SmokeStartsAtSizeFraction")]
+    public float SmokeGrowthStartFraction { get; set; } = 0.25f;
 
-    internal AntiWallhackSettings Clone() => (AntiWallhackSettings)MemberwiseClone();
+    [JsonPropertyName("SmokeBlocksWallhack")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? LegacySmokeBlocksWallhack
+    {
+        get => null;
+        set { if (value.HasValue) SmokeBlocksWallhack = value.Value; }
+    }
+
+    [JsonPropertyName("SmokeBlockRadius")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public float? LegacySmokeBlockRadius
+    {
+        get => null;
+        set { if (value.HasValue) SmokeBlockRadius = value.Value; }
+    }
+
+    [JsonPropertyName("SmokeLifetimeTicks")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? LegacySmokeLifetimeTicks
+    {
+        get => null;
+        set { if (value.HasValue) SmokeLifetimeTicks = value.Value; }
+    }
+
+    [JsonPropertyName("SmokeBloomDurationTicks")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? LegacySmokeBloomDurationTicks
+    {
+        get => null;
+        set { if (value.HasValue) SmokeBloomDurationTicks = value.Value; }
+    }
+
+    [JsonPropertyName("SmokeGrowthStartFraction")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public float? LegacySmokeGrowthStartFraction
+    {
+        get => null;
+        set { if (value.HasValue) SmokeGrowthStartFraction = value.Value; }
+    }
 }
 
-/// <summary>
-/// Settings for the check points placed on enemy targets.
-/// These control how many points are checked, how they are filtered by FOV
-/// and distance, and how target movement is predicted.
-/// </summary>
-public class TargetPointSettings
+public sealed class TargetPointSettings
 {
-    /// <summary>
-    /// If true, reduce the number of check points based on the observer's field of view.
-    /// Enemies directly ahead get more points (thorough checking).
-    /// Enemies to the side or behind get fewer points (faster, since they are less likely to be seen).
-    /// </summary>
-    public bool FovCullingEnabled { get; set; } = true;
+    [JsonPropertyName("UseFewerChecksOutsideView")]
+    public bool FovCullingEnabled { get; set; } = false;
 
-    /// <summary>
-    /// Enemies within this many degrees of the observer's crosshair get the full set of
-    /// check points (all skeleton + AABB points). Default: 60° (120° total cone).
-    /// </summary>
-    public float FullLosHalfAngleDegrees { get; set; } = 60.0f;
-
-    /// <summary>
-    /// Enemies within this many degrees get the original (reduced) set of check points.
-    /// Beyond this angle, only AABB fallback points are used. Default: 120° (240° total cone).
-    /// </summary>
-    public float OriginalOnlyHalfAngleDegrees { get; set; } = 120.0f;
-
-    /// <summary>
-    /// If true, reduce check point count based on distance to the target.
-    /// Nearby enemies get the full set. Far-away enemies get fewer points.
-    /// </summary>
+    [JsonPropertyName("UseFewerChecksFarAway")]
     public bool DistanceTieringEnabled { get; set; } = true;
 
-    /// <summary>Enemies closer than this many units get the full LOS point set. Default: 1000.</summary>
-    public float FullLosDistanceUnits { get; set; } = 1000.0f;
+    [JsonPropertyName("FullCheckViewHalfAngleDegrees")]
+    public float FullLosHalfAngleDegrees { get; set; } = 62f;
 
-    /// <summary>Enemies further than this many units get only AABB fallback points. Default: 3000.</summary>
-    public float AabbOnlyDistanceUnits { get; set; } = 3000.0f;
+    [JsonPropertyName("ReducedCheckViewHalfAngleDegrees")]
+    public float OriginalOnlyHalfAngleDegrees { get; set; } = 100f;
 
-    /// <summary>How many ticks of forward movement prediction for target points. Default: 0 (none).</summary>
-    public float ForwardLookAheadTicks { get; set; } = 0.0f;
+    [JsonPropertyName("FullCheckDistanceUnits")]
+    public float FullLosDistanceUnits { get; set; } = 3200f;
 
-    /// <summary>How many ticks of sideways movement prediction for target points. Default: 0 (none).</summary>
-    public float SideLookAheadTicks { get; set; } = 0.0f;
+    [JsonPropertyName("BoxOnlyDistanceUnits")]
+    public float AabbOnlyDistanceUnits { get; set; } = 6400f;
 
-    /// <summary>Maximum units the target point can be offset by movement prediction. Default: 0 (none).</summary>
-    public float MaxMoveUnits { get; set; } = 0.0f;
+    [JsonPropertyName("EnemyForwardPredictionTicks")]
+    public int ForwardLookAheadTicks { get; set; } = 4;
 
-    /// <summary>How many ticks of vertical (jump/fall) prediction for target points. Default: 8.</summary>
-    public float UpDownLookAheadTicks { get; set; } = 8.0f;
+    [JsonPropertyName("EnemySidePredictionTicks")]
+    public int SideLookAheadTicks { get; set; } = 3;
 
-    /// <summary>Maximum vertical prediction offset in units. Default: 16.</summary>
-    public float MaxUpDownUnits { get; set; } = 16.0f;
+    [JsonPropertyName("EnemyPredictionMaxUnits")]
+    public float MaxMoveUnits { get; set; } = 48f;
 
-    internal TargetPointSettings Clone() => (TargetPointSettings)MemberwiseClone();
+    [JsonPropertyName("EnemyVerticalPredictionTicks")]
+    public int UpDownLookAheadTicks { get; set; } = 2;
+
+    [JsonPropertyName("EnemyVerticalPredictionMaxUnits")]
+    public float MaxUpDownUnits { get; set; } = 32f;
+
+    [JsonPropertyName("FovCullingEnabled")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? LegacyFovCullingEnabled
+    {
+        get => null;
+        set { if (value.HasValue) FovCullingEnabled = value.Value; }
+    }
+
+    [JsonPropertyName("DistanceTieringEnabled")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? LegacyDistanceTieringEnabled
+    {
+        get => null;
+        set { if (value.HasValue) DistanceTieringEnabled = value.Value; }
+    }
+
+    [JsonPropertyName("FullLosHalfAngleDegrees")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public float? LegacyFullLosHalfAngleDegrees
+    {
+        get => null;
+        set { if (value.HasValue) FullLosHalfAngleDegrees = value.Value; }
+    }
+
+    [JsonPropertyName("OriginalOnlyHalfAngleDegrees")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public float? LegacyOriginalOnlyHalfAngleDegrees
+    {
+        get => null;
+        set { if (value.HasValue) OriginalOnlyHalfAngleDegrees = value.Value; }
+    }
+
+    [JsonPropertyName("FullLosDistanceUnits")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public float? LegacyFullLosDistanceUnits
+    {
+        get => null;
+        set { if (value.HasValue) FullLosDistanceUnits = value.Value; }
+    }
+
+    [JsonPropertyName("AabbOnlyDistanceUnits")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public float? LegacyAabbOnlyDistanceUnits
+    {
+        get => null;
+        set { if (value.HasValue) AabbOnlyDistanceUnits = value.Value; }
+    }
+
+    [JsonPropertyName("ForwardLookAheadTicks")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? LegacyForwardLookAheadTicks
+    {
+        get => null;
+        set { if (value.HasValue) ForwardLookAheadTicks = value.Value; }
+    }
+
+    [JsonPropertyName("SideLookAheadTicks")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? LegacySideLookAheadTicks
+    {
+        get => null;
+        set { if (value.HasValue) SideLookAheadTicks = value.Value; }
+    }
+
+    [JsonPropertyName("MaxMoveUnits")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public float? LegacyMaxMoveUnits
+    {
+        get => null;
+        set { if (value.HasValue) MaxMoveUnits = value.Value; }
+    }
+
+    [JsonPropertyName("UpDownLookAheadTicks")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? LegacyUpDownLookAheadTicks
+    {
+        get => null;
+        set { if (value.HasValue) UpDownLookAheadTicks = value.Value; }
+    }
+
+    [JsonPropertyName("MaxUpDownUnits")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public float? LegacyMaxUpDownUnits
+    {
+        get => null;
+        set { if (value.HasValue) MaxUpDownUnits = value.Value; }
+    }
 }
 
-/// <summary>
-/// Settings for the observer's ray origin prediction.
-/// These control how the observer's "eye" position is predicted forward based on movement.
-/// </summary>
-public class ViewerRaySettings
+public sealed class ViewerRaySettings
 {
-    /// <summary>Minimum horizontal speed (units/sec) before movement prediction activates. Default: 1.</summary>
-    public float StartAfterSpeed { get; set; } = 1.0f;
+    [JsonPropertyName("MinimumSpeedForEyePrediction")]
+    public float StartAfterSpeed { get; set; } = 25f;
 
-    /// <summary>
-    /// Forward movement prediction lookahead in ticks. Default: 8.
-    /// At 250 u/s running speed: 8 × (250 × 0.015625) = 31.25 units forward lead.
-    /// Kept below MaxMoveUnits=64 so it applies naturally without clamping.
-    /// </summary>
-    public float ForwardLookAheadTicks { get; set; } = 8.0f;
+    [JsonPropertyName("EyeForwardPredictionTicks")]
+    public int ForwardLookAheadTicks { get; set; } = 3;
 
-    /// <summary>
-    /// Sideways (strafe) movement prediction lookahead in ticks. Default: 64.
-    /// This intentionally large value ensures that at any running speed up to 250 u/s,
-    /// the predicted offset saturates the MaxMoveUnits clamp (64 units), giving all
-    /// moving players the maximum strafe prediction regardless of exact speed.
-    /// Effective lead = min(speed × tickInterval × 64, MaxMoveUnits).
-    /// </summary>
-    public float SideLookAheadTicks { get; set; } = 64.0f;
+    [JsonPropertyName("EyeSidePredictionTicks")]
+    public int SideLookAheadTicks { get; set; } = 2;
 
-    /// <summary>
-    /// Vertical prediction lookahead when jumping, in ticks. Default: 64.
-    /// Like SideLookAheadTicks, this is intentionally large to saturate MaxMoveUnits=64.
-    /// At jump impulse 301.993 u/s: 64 ticks would predict 302 units up — always clamped
-    /// to MaxMoveUnits so the actual lookahead is always bounded.
-    /// Effective vertical lead = min(velZ × tickInterval × 64, MaxMoveUnits).
-    /// </summary>
-    public float JumpLookAheadTicks { get; set; } = 64.0f;
+    [JsonPropertyName("EyeJumpPredictionTicks")]
+    public int JumpLookAheadTicks { get; set; } = 4;
 
-    /// <summary>
-    /// Hard cap on total prediction offset in game units. Default: 64 (one player-width).
-    /// All ForwardLookAheadTicks, SideLookAheadTicks, and JumpLookAheadTicks leads
-    /// are clamped to this value independently.
-    /// </summary>
-    public float MaxMoveUnits { get; set; } = 64.0f;
+    [JsonPropertyName("EyePredictionMaxUnits")]
+    public float MaxMoveUnits { get; set; } = 40f;
 
-    internal ViewerRaySettings Clone() => (ViewerRaySettings)MemberwiseClone();
+    [JsonPropertyName("StartAfterSpeed")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public float? LegacyStartAfterSpeed
+    {
+        get => null;
+        set { if (value.HasValue) StartAfterSpeed = value.Value; }
+    }
+
+    [JsonPropertyName("ForwardLookAheadTicks")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? LegacyForwardLookAheadTicks
+    {
+        get => null;
+        set { if (value.HasValue) ForwardLookAheadTicks = value.Value; }
+    }
+
+    [JsonPropertyName("SideLookAheadTicks")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? LegacySideLookAheadTicks
+    {
+        get => null;
+        set { if (value.HasValue) SideLookAheadTicks = value.Value; }
+    }
+
+    [JsonPropertyName("JumpLookAheadTicks")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? LegacyJumpLookAheadTicks
+    {
+        get => null;
+        set { if (value.HasValue) JumpLookAheadTicks = value.Value; }
+    }
+
+    [JsonPropertyName("MaxMoveUnits")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public float? LegacyMaxMoveUnits
+    {
+        get => null;
+        set { if (value.HasValue) MaxMoveUnits = value.Value; }
+    }
 }
 
-/// <summary>
-/// Debug visualization settings. Enable these during development to see the
-/// visibility checks happening in real-time in the game world.
-/// Keep all disabled in production for performance.
-/// </summary>
-public class DebugSettings
+public sealed class DebugSettings
 {
-    /// <summary>Show a HUD overlay with ray count and decision breakdown per observer.</summary>
+    [JsonPropertyName("ShowDebugHud")]
     public bool ShowRayCount { get; set; } = false;
 
-    /// <summary>Show colored beam lines for each raycast (yellow = visible, blue = blocked).</summary>
+    [JsonPropertyName("ShowDebugRays")]
     public bool ShowRayLines { get; set; } = false;
 
-    /// <summary>Show marker beams at each check point on enemy targets.</summary>
+    [JsonPropertyName("ShowDebugPoints")]
     public bool ShowTargetPoints { get; set; } = false;
 
-    internal DebugSettings Clone() => (DebugSettings)MemberwiseClone();
+    [JsonPropertyName("ShowRayCount")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? LegacyShowRayCount
+    {
+        get => null;
+        set { if (value.HasValue) ShowRayCount = value.Value; }
+    }
+
+    [JsonPropertyName("ShowRayLines")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? LegacyShowRayLines
+    {
+        get => null;
+        set { if (value.HasValue) ShowRayLines = value.Value; }
+    }
+
+    [JsonPropertyName("ShowTargetPoints")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? LegacyShowTargetPoints
+    {
+        get => null;
+        set { if (value.HasValue) ShowTargetPoints = value.Value; }
+    }
 }
 
-/// <summary>
-/// Performance tuning settings. These control the computational budget
-/// and the accuracy thresholds for ray hit detection.
-/// </summary>
-public class PerformanceSettings
+public sealed class PerformanceSettings
 {
-    /// <summary>
-    /// Maximum raycasts the plugin may perform per frame across ALL observers.
-    /// Set to 0 for unlimited. When the budget is exceeded, remaining targets are
-    /// force-shown (fail-open) to prevent hiding players without checking them.
-    /// </summary>
+    [JsonPropertyName("RaycastLimitPerFrame")]
     public int MaxRaycastsPerFrame { get; set; } = 0;
 
-    /// <summary>If true, do a quick pre-check before per-ray smoke blocking. Default: true.</summary>
+    [JsonPropertyName("EyeHeightOffsetUnits")]
+    public float ViewerHeightOffset { get; set; } = 6f;
+
+    [JsonPropertyName("ExtraBoxHeightUpUnits")]
+    public float HitboxPaddingUp { get; set; } = 12f;
+
+    [JsonPropertyName("ExtraBoxWidthUnits")]
+    public float HitboxPaddingSide { get; set; } = 10f;
+
+    [JsonPropertyName("ExtraBoxHeightDownUnits")]
+    public float HitboxPaddingDown { get; set; } = 8f;
+
+    [JsonPropertyName("AimRevealDistanceUnits")]
+    public float AimRevealRadius { get; set; } = 2.5f;
+
+    [JsonPropertyName("AimCheckDistanceUnits")]
+    public float AimRayDistance { get; set; } = 8192f;
+
+    [JsonPropertyName("FastSmokePreCheck")]
     public bool SmokeBatchPreFilterEnabled { get; set; } = true;
 
-    /// <summary>
-    /// A ray is considered "reaching the target" if its hit fraction is above this value.
-    /// 1.0 = hit nothing. Values slightly below 1.0 account for the target's own collision.
-    /// Default: 0.984375 (≈1/64th of the ray length from the endpoint).
-    /// </summary>
-    public float RayHitFractionThreshold { get; set; } = 0.984375f;
+    [JsonPropertyName("MaxRaycastsPerFrame")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? LegacyMaxRaycastsPerFrame
+    {
+        get => null;
+        set { if (value.HasValue) MaxRaycastsPerFrame = value.Value; }
+    }
 
-    /// <summary>
-    /// Alternative hit check: if the ray endpoint is within this many units of the
-    /// target point, it is considered a hit regardless of fraction. Default: 32.
-    /// </summary>
-    public float RayHitDistanceThreshold { get; set; } = 32.0f;
+    [JsonPropertyName("ViewerHeightOffset")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public float? LegacyViewerHeightOffset
+    {
+        get => null;
+        set { if (value.HasValue) ViewerHeightOffset = value.Value; }
+    }
 
-    /// <summary>Additional vertical offset added to the observer's eye position. Default: 0.</summary>
-    public float ViewerHeightOffset { get; set; } = 0.0f;
+    [JsonPropertyName("HitboxPaddingUp")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public float? LegacyHitboxPaddingUp
+    {
+        get => null;
+        set { if (value.HasValue) HitboxPaddingUp = value.Value; }
+    }
 
-    /// <summary>How much to expand the AABB upward for fallback check points. Default: 8 units.</summary>
-    public float HitboxPaddingUp { get; set; } = 8.0f;
+    [JsonPropertyName("HitboxPaddingSide")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public float? LegacyHitboxPaddingSide
+    {
+        get => null;
+        set { if (value.HasValue) HitboxPaddingSide = value.Value; }
+    }
 
-    /// <summary>How much to expand the AABB sideways for fallback check points. Default: 16 units.</summary>
-    public float HitboxPaddingSide { get; set; } = 16.0f;
+    [JsonPropertyName("HitboxPaddingDown")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public float? LegacyHitboxPaddingDown
+    {
+        get => null;
+        set { if (value.HasValue) HitboxPaddingDown = value.Value; }
+    }
 
-    /// <summary>How much to expand the AABB downward for fallback check points. Default: 0 units.</summary>
-    public float HitboxPaddingDown { get; set; } = 0.0f;
+    [JsonPropertyName("AimRevealRadius")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public float? LegacyAimRevealRadius
+    {
+        get => null;
+        set { if (value.HasValue) AimRevealRadius = value.Value; }
+    }
 
-    /// <summary>
-    /// If the observer's crosshair aim-point is within this many units of a target,
-    /// the target is always shown (they are directly aiming at them). Default: 64 units.
-    /// </summary>
-    public float AimRevealRadius { get; set; } = 64.0f;
+    [JsonPropertyName("AimRayDistance")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public float? LegacyAimRayDistance
+    {
+        get => null;
+        set { if (value.HasValue) AimRayDistance = value.Value; }
+    }
 
-    /// <summary>How far ahead (in units) to trace the observer's aim ray. Default: 8192.</summary>
-    public float AimRayDistance { get; set; } = 8192.0f;
+    [JsonPropertyName("SmokeBatchPreFilterEnabled")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? LegacySmokeBatchPreFilterEnabled
+    {
+        get => null;
+        set { if (value.HasValue) SmokeBatchPreFilterEnabled = value.Value; }
+    }
 
-    internal PerformanceSettings Clone() => (PerformanceSettings)MemberwiseClone();
+    [JsonPropertyName("RayHitFractionThreshold")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public float? LegacyRayHitFractionThreshold
+    {
+        get => null;
+        set { }
+    }
+
+    [JsonPropertyName("RayHitDistanceThreshold")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public float? LegacyRayHitDistanceThreshold
+    {
+        get => null;
+        set { }
+    }
 }

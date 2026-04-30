@@ -5,6 +5,10 @@ using CounterStrikeSharp.API.Modules.Utils;
 
 namespace S2FOW.Core;
 
+/// <summary>
+/// World layers S2FOW asks RayTrace to check. The plugin only wants map/world
+/// blockers, not players or props.
+/// </summary>
 [Flags]
 internal enum InteractionLayers : ulong
 {
@@ -15,6 +19,7 @@ internal enum InteractionLayers : ulong
     MaskWorldOnly = Solid | Window | PassBullets
 }
 
+/// <summary>Options passed to RayTrace for one straight-line wall check.</summary>
 internal readonly struct TraceOptions
 {
     public readonly ulong InteractsWith;
@@ -29,6 +34,7 @@ internal readonly struct TraceOptions
     }
 }
 
+/// <summary>RayTrace result reduced to only the data S2FOW needs.</summary>
 internal readonly struct TraceResult
 {
     public readonly float EndPosX;
@@ -47,11 +53,19 @@ internal readonly struct TraceResult
     public bool DidHit => Fraction < 1.0f;
 }
 
+/// <summary>
+/// Small local interface around the external RayTrace plugin. Keeping this interface
+/// narrow makes the rest of S2FOW read as "check this line" instead of reflection code.
+/// </summary>
 internal interface IRayTraceService
 {
     bool TraceEndShape(Vector start, Vector end, CEntityInstance? ignore, TraceOptions options, out TraceResult result);
 }
 
+/// <summary>
+/// Finds the external RayTrace plugin after all plugins load. If RayTrace is missing
+/// or incompatible, S2FOW stays idle instead of crashing the server.
+/// </summary>
 internal static class RayTraceCapabilityResolver
 {
     private const string CapabilityName = "raytrace:craytraceinterface";
@@ -106,6 +120,10 @@ internal static class RayTraceCapabilityResolver
     }
 }
 
+/// <summary>
+/// Adapter around RayTraceApi. It caches the reflected fields and method so each
+/// visibility check does not rediscover the same metadata repeatedly.
+/// </summary>
 internal sealed class ReflectiveRayTraceService : IRayTraceService
 {
     private readonly object _nativeService;
@@ -120,6 +138,10 @@ internal sealed class ReflectiveRayTraceService : IRayTraceService
     private readonly FieldInfo _endPosZField;
     private readonly FieldInfo _fractionField;
     private readonly object?[] _traceEndArgs = new object?[5];
+    private readonly object _externalOptions;
+    private object _externalResult;
+    private TraceOptions _lastOptions;
+    private bool _hasLastOptions;
 
     private ReflectiveRayTraceService(
         object nativeService,
@@ -139,6 +161,8 @@ internal sealed class ReflectiveRayTraceService : IRayTraceService
         _endPosYField = RequiredField(traceResultType, "EndPosY");
         _endPosZField = RequiredField(traceResultType, "EndPosZ");
         _fractionField = RequiredField(traceResultType, "Fraction");
+        _externalOptions = Activator.CreateInstance(_traceOptionsType)!;
+        _externalResult = Activator.CreateInstance(_traceResultType)!;
     }
 
     public static bool TryCreate(
@@ -174,24 +198,28 @@ internal sealed class ReflectiveRayTraceService : IRayTraceService
 
     public bool TraceEndShape(Vector start, Vector end, CEntityInstance? ignore, TraceOptions options, out TraceResult result)
     {
-        object externalOptions = Activator.CreateInstance(_traceOptionsType)!;
-        _interactsWithField.SetValue(externalOptions, options.InteractsWith);
-        _interactsExcludeField.SetValue(externalOptions, options.InteractsExclude);
-        _drawBeamField.SetValue(externalOptions, options.DrawBeam);
+        if (!_hasLastOptions || !_lastOptions.Equals(options))
+        {
+            _interactsWithField.SetValue(_externalOptions, options.InteractsWith);
+            _interactsExcludeField.SetValue(_externalOptions, options.InteractsExclude);
+            _drawBeamField.SetValue(_externalOptions, options.DrawBeam);
+            _lastOptions = options;
+            _hasLastOptions = true;
+        }
 
         _traceEndArgs[0] = start;
         _traceEndArgs[1] = end;
         _traceEndArgs[2] = ignore;
-        _traceEndArgs[3] = externalOptions;
-        _traceEndArgs[4] = Activator.CreateInstance(_traceResultType);
+        _traceEndArgs[3] = _externalOptions;
+        _traceEndArgs[4] = _externalResult;
 
         bool success = (bool)(_traceEndShapeMethod.Invoke(_nativeService, _traceEndArgs) ?? false);
-        object externalResult = _traceEndArgs[4]!;
+        _externalResult = _traceEndArgs[4]!;
         result = new TraceResult(
-            Convert.ToSingle(_endPosXField.GetValue(externalResult)),
-            Convert.ToSingle(_endPosYField.GetValue(externalResult)),
-            Convert.ToSingle(_endPosZField.GetValue(externalResult)),
-            Convert.ToSingle(_fractionField.GetValue(externalResult)));
+            Convert.ToSingle(_endPosXField.GetValue(_externalResult)),
+            Convert.ToSingle(_endPosYField.GetValue(_externalResult)),
+            Convert.ToSingle(_endPosZField.GetValue(_externalResult)),
+            Convert.ToSingle(_fractionField.GetValue(_externalResult)));
         return success;
     }
 

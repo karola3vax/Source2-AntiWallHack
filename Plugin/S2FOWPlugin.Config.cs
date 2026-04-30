@@ -57,7 +57,7 @@ public partial class S2FOWPlugin
                 config.AntiWallhack.SmokeBloomDurationTicks = 256;
         }
 
-        // v32: Tune smoke radius/timing and prevent aim reveal from bypassing smoke-blocked LOS.
+        // v32: Tune smoke radius/timing and prevent aim reveal from seeing through smoke.
         if (config.Version < SmokeTuningConfigVersion)
         {
             if (Math.Abs(config.AntiWallhack.SmokeBlockRadius - 128.0f) < 0.001f)
@@ -70,15 +70,16 @@ public partial class S2FOWPlugin
                 config.AntiWallhack.SmokeBloomDurationTicks = 192;
         }
 
-        // Stamp the config with the current version.
-        config.Version = SmokeTuningConfigVersion;
+        // v33 renamed the written config to plain-English sections and keys.
+        // The in-memory property names stay stable; JSON compatibility aliases handle old files.
+        config.Version = S2FOWConfig.CurrentConfigVersion;
     }
 
     // ────────────────────────────────────────────────────────────────────────
     //  Startup message builders
     // ────────────────────────────────────────────────────────────────────────
 
-    /// <summary>Builds a one-line status string like "Coverage mode: Protection on | Config v30".</summary>
+    /// <summary>Builds a one-line startup status string.</summary>
     private string BuildStartupConfigLine()
     {
         return PluginText.BuildStartupConfigLine(
@@ -86,7 +87,7 @@ public partial class S2FOWPlugin
             Config.Version);
     }
 
-    /// <summary>Builds a one-line coverage string like "Coverage: players, weapons, smoke blocking".</summary>
+    /// <summary>Builds a one-line summary of what S2FOW can hide.</summary>
     private string BuildStartupCoverageLine()
     {
         return PluginText.BuildCoverageLine(Config.AntiWallhack);
@@ -105,7 +106,7 @@ public partial class S2FOWPlugin
     {
         if (_initialized && _rayTrace != null)
         {
-            _raycastEngine = new RaycastEngine(_rayTrace, Config);
+            _raycastEngine = new RaycastEngine(_rayTrace, Config, _perfMonitor);
             _visibilityManager = new VisibilityManager(
                 _raycastEngine, _smokeTracker!,
                 Config, _perfMonitor);
@@ -171,19 +172,19 @@ public partial class S2FOWPlugin
         var changes = new List<string>(12);
 
         if (previousConfig.General.Enabled != currentConfig.General.Enabled)
-            changes.Add($"Enabled={previousConfig.General.Enabled}->{currentConfig.General.Enabled}");
+            changes.Add($"ProtectionEnabled {previousConfig.General.Enabled}->{currentConfig.General.Enabled}");
         if (previousConfig.AntiWallhack.SmokeBlocksWallhack != currentConfig.AntiWallhack.SmokeBlocksWallhack)
-            changes.Add($"SmokeBlocksWallhack={previousConfig.AntiWallhack.SmokeBlocksWallhack}->{currentConfig.AntiWallhack.SmokeBlocksWallhack}");
+            changes.Add($"HidePlayersBehindSmoke {previousConfig.AntiWallhack.SmokeBlocksWallhack}->{currentConfig.AntiWallhack.SmokeBlocksWallhack}");
         if (previousConfig.Debug.ShowTargetPoints != currentConfig.Debug.ShowTargetPoints)
-            changes.Add($"ShowTargetPoints={previousConfig.Debug.ShowTargetPoints}->{currentConfig.Debug.ShowTargetPoints}");
+            changes.Add($"ShowDebugPoints {previousConfig.Debug.ShowTargetPoints}->{currentConfig.Debug.ShowTargetPoints}");
         if (previousConfig.Debug.ShowRayLines != currentConfig.Debug.ShowRayLines)
-            changes.Add($"ShowRayLines={previousConfig.Debug.ShowRayLines}->{currentConfig.Debug.ShowRayLines}");
+            changes.Add($"ShowDebugRays {previousConfig.Debug.ShowRayLines}->{currentConfig.Debug.ShowRayLines}");
         if (previousConfig.Debug.ShowRayCount != currentConfig.Debug.ShowRayCount)
-            changes.Add($"ShowRayCount={previousConfig.Debug.ShowRayCount}->{currentConfig.Debug.ShowRayCount}");
+            changes.Add($"ShowDebugHud {previousConfig.Debug.ShowRayCount}->{currentConfig.Debug.ShowRayCount}");
         if (previousConfig.TargetPoints.FovCullingEnabled != currentConfig.TargetPoints.FovCullingEnabled)
-            changes.Add($"FovCullingEnabled={previousConfig.TargetPoints.FovCullingEnabled}->{currentConfig.TargetPoints.FovCullingEnabled}");
+            changes.Add($"UseFewerChecksOutsideView {previousConfig.TargetPoints.FovCullingEnabled}->{currentConfig.TargetPoints.FovCullingEnabled}");
         if (previousConfig.TargetPoints.DistanceTieringEnabled != currentConfig.TargetPoints.DistanceTieringEnabled)
-            changes.Add($"DistanceTieringEnabled={previousConfig.TargetPoints.DistanceTieringEnabled}->{currentConfig.TargetPoints.DistanceTieringEnabled}");
+            changes.Add($"UseFewerChecksFarAway {previousConfig.TargetPoints.DistanceTieringEnabled}->{currentConfig.TargetPoints.DistanceTieringEnabled}");
 
         if (changes.Count > 0)
             Log($"Settings updated: {string.Join(", ", changes)}");

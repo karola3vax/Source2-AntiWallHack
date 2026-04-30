@@ -3,20 +3,20 @@ using System.Numerics;
 namespace S2FOW.Models;
 
 /// <summary>
-/// Stores a single debug ray that was cast during this frame.
-/// Used by the debug renderer to visualize rays as colored lines in the game world.
+/// Stores one debug line drawn for a visibility check during this frame.
+/// The debug renderer shows these lines in the game world.
 ///
-/// Visible rays are shown in yellow (hit open air — target is visible).
-/// Blocked rays are shown in blue (hit a wall — target is hidden behind it).
+/// Yellow means the check reached the enemy point, so that point was visible.
+/// Blue means the check hit a wall first, so that point was blocked.
 /// </summary>
 internal struct DebugRay
 {
-    /// <summary>Where the ray started (the observer's eye position).</summary>
+    /// <summary>Where the check started: the viewer's eye position.</summary>
     public Vector3 Start;
 
-    /// <summary>Where the ray ended (either the target point or where it hit a wall).</summary>
+    /// <summary>Where the check ended: the enemy point or the wall it hit first.</summary>
     public Vector3 End;
 
-    /// <summary>True if this ray reached its target without hitting anything (target is visible).</summary>
+    /// <summary>True if this check reached the enemy point without hitting a wall.</summary>
     public bool Visible;
 }

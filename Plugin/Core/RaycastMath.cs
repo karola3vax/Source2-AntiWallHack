@@ -3,27 +3,24 @@ using S2FOW.Models;
 namespace S2FOW.Core;
 
 /// <summary>
-/// Pure math for computing where to start and end raycast checks.
+/// Pure math for deciding where visibility checks start and end.
 ///
-/// The anti-wallhack system works by shooting invisible "rays" (straight lines)
-/// from a player's eyes toward each enemy. If a ray reaches the enemy without
-/// hitting a wall, the enemy is visible. If every ray hits a wall, the enemy is hidden.
+/// S2FOW checks visibility by drawing invisible straight lines from the viewer's
+/// eyes toward points on the enemy. If a line reaches the enemy without hitting
+/// a wall, the enemy is visible. If every checked line hits a wall, the enemy can
+/// be hidden from that viewer.
 ///
-/// This class handles two key computations:
+/// This class computes two positions:
 ///
-/// 1. Where does the observer's ray START?
-///    - From the observer's eye position, slightly adjusted forward/sideways based
-///      on their movement speed. This "movement prediction" accounts for the fact
-///      that by the time the server's decision reaches the client, the observer
-///      may have moved slightly. Without this, fast-moving players could see enemies
-///      "pop in" as they come around corners.
+/// 1. Where the viewer's check starts.
+///    It starts at the viewer's eyes, then may be nudged slightly forward or
+///    sideways based on movement speed. This movement prediction helps prevent
+///    enemies from popping in late when a fast-moving player rounds a corner.
 ///
-/// 2. Where does the target's check point END?
-///    - At the target's body position, again with slight movement prediction.
-///    - Airborne targets get a small visual offset so the check points stay
-///      centered on the visible model rather than the feet.
-///    - Gravity is modeled for jumping targets so the prediction follows a
-///      realistic arc rather than a straight line upward.
+/// 2. Where the enemy's body point is checked.
+///    It starts at the enemy's body position, then may be nudged slightly based
+///    on enemy movement. Airborne enemies get a small height adjustment, and
+///    jumping/falling uses gravity so the prediction follows the visible model.
 /// </summary>
 internal static class RaycastMath
 {
@@ -34,22 +31,20 @@ internal static class RaycastMath
     private const float GravityUnitsPerSecondSq = 800.0f;
 
     /// <summary>
-    /// Small upward offset applied to airborne (jumping/falling) targets.
-    /// Without this, the check points would be at the feet, which may be
-    /// below the visible player model during jumps.
+    /// Small upward offset applied to airborne enemies.
+    /// Without this, the check points can sit too close to the feet during jumps.
     /// </summary>
     private const float AirborneTargetVisualOffsetZ = 8.0f;
 
-    // ────────────────────────────────────────────────────────────────────────
-    //  Direction calculations
-    // ────────────────────────────────────────────────────────────────────────
+    // Direction calculations
 
     /// <summary>
-    /// Converts a yaw angle (compass heading) into forward and right direction vectors.
+    /// Converts a yaw angle, meaning the player's compass heading, into forward
+    /// and right direction vectors.
     ///
-    /// Yaw is measured in degrees: 0° = East, 90° = North, 180° = West, 270° = South.
-    /// The "forward" direction is where the player is facing.
-    /// The "right" direction is 90° clockwise from forward (used for strafing).
+    /// Yaw is measured in degrees: 0 = East, 90 = North, 180 = West, 270 = South.
+    /// The forward direction is where the player faces. The right direction is
+    /// 90 degrees clockwise from forward and is used for sideways movement.
     /// </summary>
     public static void GetYawBasis(
         float yawDegrees,
@@ -66,10 +61,10 @@ internal static class RaycastMath
     }
 
     /// <summary>
-    /// Converts pitch and yaw angles into a 3D direction vector.
-    /// This is the direction the player's crosshair is pointing.
+    /// Converts pitch and yaw angles into the 3D direction the player's crosshair
+    /// is pointing.
     ///
-    /// Pitch: -90° = looking straight up, 0° = looking horizontal, +90° = looking straight down.
+    /// Pitch: -90 = looking straight up, 0 = looking horizontal, +90 = looking straight down.
     /// Yaw: compass heading as described above.
     /// </summary>
     public static void GetAimDirection(
@@ -88,21 +83,15 @@ internal static class RaycastMath
         directionZ = -MathF.Sin(pitchRad);
     }
 
-    // ────────────────────────────────────────────────────────────────────────
-    //  Observer ray origin (where the "eye" ray starts)
-    // ────────────────────────────────────────────────────────────────────────
+    // Viewer check start position
 
     /// <summary>
-    /// Computes the starting point of the observer's ray, with movement prediction.
+    /// Computes the viewer eye position used for wall checks, including movement
+    /// prediction.
     ///
-    /// The ray starts at the observer's eye position, then gets nudged forward and
-    /// sideways based on their movement speed. This "lead" ensures that a player
-    /// running around a corner will see the enemy slightly before they actually
-    /// arrive, preventing jarring pop-in.
-    ///
-    /// The lead distance is clamped to MaxMoveUnits to prevent abuse — a player
-    /// moving at extreme speeds (e.g., from an explosion boost) should not get
-    /// an unreasonably large "preview" window.
+    /// S2FOW starts at the viewer's eyes, then nudges that start point forward and
+    /// sideways based on movement speed. The nudge is capped so unusual high speed
+    /// cannot create a large preview around corners.
     /// </summary>
     public static void ComputeObserverRayOrigin(
         in PlayerSnapshot observer,
@@ -112,7 +101,7 @@ internal static class RaycastMath
         out float originY,
         out float originZ)
     {
-        // Get the forward and right directions based on where the observer is facing.
+        // Get the forward and right directions based on where the viewer is facing.
         GetYawBasis(observer.Yaw, out float forwardX, out float forwardY, out float rightX, out float rightY);
 
         float forwardLead = 0.0f;
@@ -127,18 +116,18 @@ internal static class RaycastMath
         // Standing still or moving very slowly does not need prediction.
         if (observerSpeed2DSqr >= minLeadSpeedSqr)
         {
-            // How fast is the player moving forward (positive) or backward (negative)?
+            // How fast is the viewer moving forward or backward?
             float forwardSpeed = observer.VelX * forwardX + observer.VelY * forwardY;
             forwardSpeed = Math.Clamp(forwardSpeed, -weaponMaxSpeed, weaponMaxSpeed);
             forwardLead = forwardSpeed * tickInterval * config.ViewerRays.ForwardLookAheadTicks;
 
-            // How fast is the player strafing left or right?
+            // How fast is the viewer moving sideways?
             float observedStrafeSpeed = observer.VelX * rightX + observer.VelY * rightY;
             observedStrafeSpeed = Math.Clamp(observedStrafeSpeed, -weaponMaxSpeed, weaponMaxSpeed);
             horizontalLead = observedStrafeSpeed * tickInterval * config.ViewerRays.SideLookAheadTicks;
         }
 
-        // Combine forward and strafe leads into a single horizontal offset.
+        // Combine forward and sideways movement into one horizontal offset.
         float leadX = forwardX * forwardLead + rightX * horizontalLead;
         float leadY = forwardY * forwardLead + rightY * horizontalLead;
 
@@ -155,11 +144,11 @@ internal static class RaycastMath
             }
         }
 
-        // Final origin = eye position + horizontal lead.
+        // Final start point = eye position + horizontal prediction.
         originX = observer.EyePosX + leadX;
         originY = observer.EyePosY + leadY;
 
-        // Apply vertical lead for jumping observers (looking up while moving up).
+        // Add vertical prediction while the viewer is moving upward.
         if (observer.VelZ > 0.0f)
         {
             verticalLead = observer.VelZ * tickInterval * config.ViewerRays.JumpLookAheadTicks;
@@ -171,9 +160,8 @@ internal static class RaycastMath
     }
 
     /// <summary>
-    /// Computes the observer's ray origin WITHOUT movement prediction.
-    /// Used for the "reverse" check (can the target see the observer?)
-    /// where prediction is less important.
+    /// Computes the viewer eye position without movement prediction.
+    /// Used for reverse checks where prediction is less important.
     /// </summary>
     public static void ComputeObserverRayOriginNoPrediction(
         in PlayerSnapshot observer,
@@ -187,21 +175,15 @@ internal static class RaycastMath
         originZ = observer.EyePosZ + config.Performance.ViewerHeightOffset;
     }
 
-    // ────────────────────────────────────────────────────────────────────────
-    //  Target lead position (where the check points are centered)
-    // ────────────────────────────────────────────────────────────────────────
+    // Enemy check point position
 
     /// <summary>
-    /// Computes where the target's body check points should be centered,
-    /// accounting for movement prediction and gravity.
+    /// Computes where the enemy's body check points should be centered, including
+    /// movement prediction and gravity.
     ///
-    /// Like the observer prediction above, this nudges the target's position
-    /// slightly forward based on their movement. This prevents the situation
-    /// where a fast-moving target "outruns" the check points and becomes
-    /// invisible even though their model is visible on screen.
-    ///
-    /// For jumping targets, we model gravity: the vertical prediction follows
-    /// a parabolic arc (up, slow down, fall) rather than a straight line up.
+    /// This nudges the enemy position slightly based on movement so fast-moving
+    /// enemies do not outrun their own check points and become hidden while their
+    /// model is still visible.
     /// </summary>
     public static void ComputeTargetLeadPosition(
         in PlayerSnapshot target,
@@ -217,7 +199,7 @@ internal static class RaycastMath
     {
         GetYawBasis(target.Yaw, out forwardX, out forwardY, out rightX, out rightY);
 
-        // Compute horizontal lead (forward + strafe).
+        // Compute horizontal lead (forward + sideways movement).
         float forwardSpeed = target.VelX * forwardX + target.VelY * forwardY;
         float observedStrafeSpeed = target.VelX * rightX + target.VelY * rightY;
 
@@ -228,7 +210,7 @@ internal static class RaycastMath
             forwardY * (forwardSpeed * tickInterval * config.TargetPoints.ForwardLookAheadTicks) +
             rightY * (observedStrafeSpeed * tickInterval * config.TargetPoints.SideLookAheadTicks);
 
-        // Clamp horizontal lead to the configured maximum.
+        // Clamp horizontal prediction to the configured maximum.
         float maxTargetLeadUnits = config.TargetPoints.MaxMoveUnits;
         if (maxTargetLeadUnits > 0.0f)
         {
@@ -242,7 +224,7 @@ internal static class RaycastMath
             }
         }
 
-        // Compute vertical lead with gravity modeling.
+        // Compute vertical prediction with gravity modeling.
         float pointLeadZ = ComputeTargetVerticalLead(target, tickInterval, config);
         float maxVerticalLead = config.TargetPoints.MaxUpDownUnits;
         if (maxVerticalLead > 0.0f)
@@ -250,23 +232,21 @@ internal static class RaycastMath
             pointLeadZ = Math.Clamp(pointLeadZ, -maxVerticalLead, maxVerticalLead);
         }
 
-        // Airborne targets get a small upward offset to keep check points on the body.
+        // Airborne enemies get a small upward offset to keep check points on the body.
         float visualOffsetZ = target.IsOnGround ? 0.0f : AirborneTargetVisualOffsetZ;
 
-        // Final position = base position + all offsets.
+        // Final position = current enemy position + prediction offsets.
         posX = target.PosX + pointLeadX;
         posY = target.PosY + pointLeadY;
         posZ = target.PosZ + pointLeadZ + visualOffsetZ;
     }
 
     /// <summary>
-    /// Computes vertical prediction for a target, modeling gravity.
+    /// Computes vertical prediction for an enemy, modeling gravity.
     ///
-    /// For a jumping player (moving upward), we predict along a parabolic arc:
-    /// the player rises, slows down, and eventually starts falling.
-    ///
-    /// For a grounded player not moving up, we return 0 (no vertical prediction).
-    /// For a falling player, we predict continued falling with gravity acceleration.
+    /// For a jumping player, this predicts a curved path: rise, slow down, then fall.
+    /// For a grounded player not moving up, it returns 0. For a falling player, it
+    /// predicts continued falling with gravity acceleration.
     /// </summary>
     private static float ComputeTargetVerticalLead(in PlayerSnapshot target, float tickInterval, S2FOWConfig config)
     {
@@ -278,7 +258,7 @@ internal static class RaycastMath
         if (target.IsOnGround && target.VelZ <= 0.0f)
             return 0.0f;
 
-        // Jumping: predict the parabolic arc (velocity × time − ½ × gravity × time²).
+        // Jumping: predict the curved path using velocity, time, and gravity.
         if (target.VelZ > 0.0f)
         {
             float timeToApex = target.VelZ / GravityUnitsPerSecondSq;

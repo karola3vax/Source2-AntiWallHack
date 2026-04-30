@@ -1,105 +1,96 @@
 using CounterStrikeSharp.API.Core;
 using CounterStrikeSharp.API.Modules.Admin;
 using CounterStrikeSharp.API.Modules.Commands;
-using S2FOW.Config;
 using S2FOW.Core;
 using S2FOW.Util;
 
 namespace S2FOW;
 
 /// <summary>
-/// Admin console commands — provides server operators with tools to monitor
-/// and control the plugin at runtime.
-///
-/// Commands:
-///   css_fow_stats  → Prints a detailed health summary (ray counts, timing, errors).
-///   css_fow_toggle → Turns the anti-wallhack protection on or off instantly.
-///
-/// Both commands require @css/root (server administrator) permissions.
+/// Admin console commands for checking status and turning protection on/off.
+/// Both commands require @css/root permissions.
 /// </summary>
 public partial class S2FOWPlugin
 {
-    /// <summary>
-    /// Prints a comprehensive health summary to the admin's console.
-    /// Includes performance metrics, decision breakdowns, and error counters.
-    /// </summary>
     [RequiresPermissions("@css/root")]
     private void OnFowStats(CCSPlayerController? player, CommandInfo command)
     {
         if (_perfMonitor == null)
         {
-            Reply(command, "Stats are not ready yet.");
+            Reply(command, "Status is not ready yet.");
             return;
         }
 
         ReplyMany(command, BuildStatsLines());
     }
 
-    /// <summary>
-    /// Toggles the anti-wallhack protection on or off.
-    /// When disabled, all entities are transmitted normally (no hiding).
-    /// </summary>
     [RequiresPermissions("@css/root")]
     private void OnFowToggle(CCSPlayerController? player, CommandInfo command)
     {
         Config.General.Enabled = !Config.General.Enabled;
         ResetRuntimeState(logMapName: null);
-        Reply(command, $"Protection {(Config.General.Enabled ? "enabled" : "disabled")}.");
+        if (!Config.General.Enabled)
+            ForceFullUpdateAllObserversNow(ObserverFullUpdateReason.Unhide | ObserverFullUpdateReason.Toggle);
+
+        Reply(command, Config.General.Enabled
+            ? "Protection enabled. S2FOW may hide enemies the player cannot see."
+            : "Protection disabled. All players are sent normally; full updates were sent to clients.");
     }
 
-    /// <summary>
-    /// Builds the multi-line stats output shown by css_fow_stats.
-    /// Each line covers a different aspect of the plugin's health.
-    /// </summary>
     private IEnumerable<string> BuildStatsLines()
     {
-        // Line 1: Overall performance averages (frame time, rays per frame, budget hits).
-        yield return _perfMonitor!.GetStatsString();
-
-        // Line 2: Config version and current round phase.
         yield return PluginOutput.Prefix(
-            $"Config v{Config.Version} | phase {_currentRoundPhase}");
+            $"Status: protection {(Config.General.Enabled ? "on" : "off")} | " +
+            $"RayTrace {(_initialized ? "ready" : "not ready")} | " +
+            $"round state {FriendlyRoundPhase(_currentRoundPhase)} | " +
+            $"config schema v{Config.Version}");
 
-        // Line 3: Detailed timing — how much time the plugin uses vs frame interval.
         yield return PluginOutput.Prefix(
-            $"Timing: plugin self {_perfMonitor.AvgFrameMicroseconds / 1000.0:F3}ms avg | " +
-            $"frame interval {_perfMonitor.AvgFrameIntervalMicroseconds / 1000.0:F3}ms avg");
+            $"Work: {_perfMonitor!.TotalEvaluations} player checks | " +
+            $"{_perfMonitor.TotalRaycasts} raycasts | " +
+            $"average plugin time {_perfMonitor.AvgFrameMicroseconds / 1000.0:F3} ms | " +
+            $"average raycasts {_perfMonitor.AvgRaycastsPerFrame:F1}/frame | " +
+            $"peak raycasts {_perfMonitor.PeakRaycastsPerFrame}");
 
-        // Line 4: Lifetime totals — total rays, visibility checks, and budget events since last reset.
         yield return PluginOutput.Prefix(
-            $"Lifetime work: {_perfMonitor.TotalRaycasts} rays | " +
-            $"{_perfMonitor.TotalEvaluations} visibility checks | " +
-            $"{_perfMonitor.TotalBudgetExceeded} budget events");
+            $"Visibility decisions: players checked {_perfMonitor.TotalEvaluations} | " +
+            $"hidden by smoke {_perfMonitor.HiddenBySmoke} | " +
+            $"hidden by blocked sight {_perfMonitor.HiddenByLineOfSight} | " +
+            $"shown to stay safe {_visibilityManager?.BudgetFallbackOpenTransmitCount ?? 0}");
 
-        // Line 5: How many times a target was force-shown because the ray budget ran out.
         yield return PluginOutput.Prefix(
-            $"Fallback decisions: forced visible {_visibilityManager?.BudgetFallbackOpenTransmitCount ?? 0}");
+            $"Crash protection: full updates sent {_perfMonitor.FullUpdateSent} | " +
+            $"throttled {_perfMonitor.FullUpdateThrottled} | " +
+            $"failed {_perfMonitor.FullUpdateFailed} | " +
+            $"requested {_perfMonitor.FullUpdateRequested} | " +
+            $"combined {_perfMonitor.FullUpdateCoalesced}");
 
-        // Crash-prevention paths and entity closure coverage.
         yield return PluginOutput.Prefix(
-            $"Safety: unsafe hides skipped {_perfMonitor.UnsafeHideSkipped} | " +
-            $"closure overflows {_playerStateCache?.AssociatedEntityOverflowCount ?? 0} | " +
-            $"scene children {_playerStateCache?.SceneChildEntitiesCollected ?? 0} | " +
-            $"invalid-controller clears {_perfMonitor.InvalidControllerPawnClears} | " +
-            $"dead force-transmits {_perfMonitor.DeadForceTransmits} | " +
-            $"orphan cleanups {_perfMonitor.OrphanClosureCleanups}");
+            $"Crash protection reasons: hide {_perfMonitor.FullUpdateHideReasons} | " +
+            $"show again {_perfMonitor.FullUpdateUnhideReasons} | " +
+            $"leftover child cleanup {_perfMonitor.FullUpdateOrphanReasons} | " +
+            $"safe fallback {_perfMonitor.FullUpdateSafetyReasons} | " +
+            $"round state {_perfMonitor.FullUpdatePhaseReasons} | " +
+            $"toggle {_perfMonitor.FullUpdateToggleReasons}");
 
-        // Line 6: Suppressed warning counters (entity access failures that were caught silently).
         yield return PluginOutput.Prefix(
-            $"Warning counters: {_playerStateCache?.SuppressedWarningCount ?? 0} suppressed | " +
-            $"{_playerStateCache?.DependentEntityCollectionFailureCount ?? 0} collection failures | " +
-            $"{_suppressedGameRulesErrors} gamerules");
+            $"Safety cleanup: unsafe hides skipped {_perfMonitor.UnsafeHideSkipped} | " +
+            $"leftover child cleanup {_perfMonitor.OrphanClosureCleanups} | " +
+            $"missing-controller cleanup {_perfMonitor.InvalidControllerPawnClears} | " +
+            $"dead-player safe shows {_perfMonitor.DeadForceTransmits} | " +
+            $"child list too large {_playerStateCache?.AssociatedEntityOverflowCount ?? 0}");
 
-        // Line 7: Config I/O error count (failed config file writes).
         yield return PluginOutput.Prefix(
-            $"Suppressed catches: config I/O {PluginDiagnostics.ConfigIoErrorCount}");
+            $"Warnings: config write failures {PluginDiagnostics.ConfigIoErrorCount} | " +
+            $"entity read failures {_playerStateCache?.SuppressedWarningCount ?? 0} | " +
+            $"incomplete child collection {_playerStateCache?.DependentEntityCollectionFailureCount ?? 0} | " +
+            $"round-state read failures {_suppressedGameRulesErrors} | " +
+            $"RayTrace failures {_perfMonitor.RayTraceFailures}");
 
-        // Line 8: Live state — active smokes, RayTrace status, and protection toggle.
         yield return PluginOutput.Prefix(
-            $"Live state: smokes {_smokeTracker?.ActiveCount ?? 0} | " +
-            $"ray tracing ready: {_initialized} | protection enabled: {Config.General.Enabled}");
+            $"Live map state: active smokes {_smokeTracker?.ActiveCount ?? 0} | " +
+            $"frame interval {_perfMonitor.AvgFrameIntervalMicroseconds / 1000.0:F3} ms");
 
-        // Line 9: What entity types are currently being protected.
         yield return PluginOutput.Prefix(BuildStartupCoverageLine());
     }
 }

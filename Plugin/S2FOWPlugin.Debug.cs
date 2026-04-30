@@ -7,13 +7,12 @@ using S2FOW.Util;
 namespace S2FOW;
 
 /// <summary>
-/// Debug visualization and console output — startup banner, in-game HUD overlay,
-/// and debug beam/point management.
+/// Debug visualization and console output.
 ///
 /// When Debug.ShowRayCount is enabled, every human player sees a HUD overlay showing:
 ///   - How many enemies are being checked.
-///   - How many raycasts (direct skeleton + backup AABB) were performed.
-///   - Why each target was shown or hidden (line-of-sight, smoke, death grace, etc.).
+///   - How many wall checks were performed.
+///   - Why each enemy was shown or hidden.
 ///   - Total server-wide raycast count for this frame.
 ///
 /// The overlay is rendered as HTML using PrintToCenterHtml, which CS2 renders as a
@@ -67,8 +66,8 @@ public partial class S2FOWPlugin
     // ────────────────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Called at the end of each CheckTransmit frame to update all debug visualizations.
-    /// Updates the in-world beam visuals (target points, ray lines) and the HUD overlay.
+    /// Called at the end of each player-hiding frame to update all debug visualizations.
+    /// Updates in-world beams and the HUD overlay.
     /// </summary>
     private void UpdateDebugOutputs(ReadOnlySpan<Models.PlayerSnapshot> snapshots, List<CCSPlayerController> players, int currentTick)
     {
@@ -105,17 +104,17 @@ public partial class S2FOWPlugin
         if (!FowConstants.IsValidSlot(slot) || controller.IsBot)
             return;
 
-        // Get this observer's raycasting stats for the current frame.
+        // Get this viewer's wall-check stats for the current frame.
         _visibilityManager.GetObserverTraceCounts(
             slot,
-            out int skeleton,       // Rays cast to skeleton body points.
-            out int aabb,           // Rays cast to AABB fallback corners.
-            out int total,          // Total rays (skeleton + AABB).
+            out int skeleton,       // Rays cast to detailed body points.
+            out int aabb,           // Rays cast to backup box corners.
+            out int total,          // Total rays.
             out int targets,        // How many enemies were checked.
             out int debugPoints,    // Number of check points rendered.
             out int debugFallbackPoints);  // Number of fallback points rendered.
 
-        // Get this observer's decision breakdown (why each target was shown/hidden).
+        // Get this viewer's decision breakdown (why each enemy was shown/hidden).
         _visibilityManager.GetObserverDecisionCounts(
             slot,
             out int roundStart,     // Targets shown because of round-start grace.
@@ -168,34 +167,34 @@ public partial class S2FOWPlugin
     {
         return $"""
 <font class='fontSize-m' color='#ffffff'>
-<div style='background: rgba(6, 8, 10, 0.96); padding: 12px 16px; border: 2px solid rgba(255,255,255,0.82); border-radius: 6px; text-align: left; width: 410px; line-height: 1.24;'>
+<div style='background: rgba(6, 8, 10, 0.96); padding: 12px 16px; border: 2px solid rgba(255,255,255,0.82); border-radius: 6px; text-align: left; width: 480px; line-height: 1.24;'>
 <b><font color='#ffffff'>S2FOW DEBUG</font></b><br/>
-<font color='#ffe27a'>ENEMIES</font> <font color='#ffffff'>{targets}</font>
+<font color='#ffe27a'>Enemies checked</font> <font color='#ffffff'>{targets}</font>
 <font color='#d9d9d9'>|</font>
-<font color='#9cffb8'>PARTS</font> <font color='#ffffff'>{primitives}</font><br/>
-<font color='#ffe27a'>CHECKS</font> <font color='#ffffff'>{total}</font>
+<font color='#9cffb8'>Body points</font> <font color='#ffffff'>{primitives}</font><br/>
+<font color='#ffe27a'>Raycasts</font> <font color='#ffffff'>{total}</font>
 <font color='#d9d9d9'>|</font>
-<font color='#8fefff'>DIRECT</font> <font color='#ffffff'>{skeleton}</font>
+<font color='#8fefff'>Body checks</font> <font color='#ffffff'>{skeleton}</font>
 <font color='#d9d9d9'>|</font>
-<font color='#a8c7ff'>BACKUP</font> <font color='#ffffff'>{aabb}</font><br/>
-<font color='#ffffff'>DOTS</font> <font color='#ffffff'>{debugPoints}</font>
+<font color='#a8c7ff'>Box checks</font> <font color='#ffffff'>{aabb}</font><br/>
+<font color='#ffffff'>Debug points</font> <font color='#ffffff'>{debugPoints}</font>
 <font color='#d9d9d9'>|</font>
-<font color='#c4d4ff'>EXTRA</font> <font color='#ffffff'>{debugFallbackPoints}</font><br/>
-<font color='#ffffff'>WHY</font> {decisionSummary}<br/>
-<font color='#ffb8ec'>SERVER THIS FRAME</font> <font color='#ffffff'>{serverTotalRays}</font>
+<font color='#c4d4ff'>Box points</font> <font color='#ffffff'>{debugFallbackPoints}</font><br/>
+<font color='#ffffff'>Why shown/hidden</font> {decisionSummary}<br/>
+<font color='#ffb8ec'>Server raycasts this frame</font> <font color='#ffffff'>{serverTotalRays}</font>
 </div>
 </font>
 """;
     }
 
     /// <summary>
-    /// Builds the "WHY" line of the debug overlay — a colored summary of why each
+    /// Builds the "Why shown/hidden" line of the debug overlay - a colored summary of why each
     /// target was shown or hidden. Each reason gets a different color:
-    ///   - DIRECT (cyan): checked via line-of-sight rays.
-    ///   - SMOKE (purple): hidden because smoke blocked all rays.
-    ///   - START (gold): shown because of round-start grace period.
-    ///   - DEAD (red): shown because they just died (death grace).
-    ///   - LOAD SHOW (green): force-shown because the ray budget ran out.
+    ///   - Checked by sight (cyan): checked by sight rays.
+    ///   - Hidden by smoke (purple): hidden because smoke blocked all rays.
+    ///   - Round start visible (gold): shown because of round-start grace period.
+    ///   - Death visible (red): shown because they just died.
+    ///   - Shown safely (green): force-shown because a safe fallback was needed.
     /// </summary>
     private static string BuildDecisionSummaryHtml(
         int roundStart,
@@ -224,14 +223,14 @@ public partial class S2FOWPlugin
             builder.Append("</font>");
         }
 
-        AppendToken("DIRECT", liveLos, "#7fe7ff");
-        AppendToken("SMOKE", smokeBlocked, "#b48cff");
-        AppendToken("START", roundStart, "#f0d58a");
-        AppendToken("DEAD", deathForce, "#ff9d9d");
-        AppendToken("LOAD SHOW", budgetFailOpen, "#50fa7b");
+        AppendToken("Checked by sight", liveLos, "#7fe7ff");
+        AppendToken("Hidden by smoke", smokeBlocked, "#b48cff");
+        AppendToken("Round start visible", roundStart, "#f0d58a");
+        AppendToken("Death visible", deathForce, "#ff9d9d");
+        AppendToken("Shown safely", budgetFailOpen, "#50fa7b");
 
         return builder.Length > 0
             ? builder.ToString()
-            : "<font color='#7d8796'>NONE</font>";
+            : "<font color='#7d8796'>No decisions this frame</font>";
     }
 }

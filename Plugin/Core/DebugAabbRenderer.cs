@@ -10,21 +10,21 @@ using S2FOW.Models;
 namespace S2FOW.Core;
 
 /// <summary>
-/// Draws in-world debug beams showing visibility check points and ray lines.
+/// Draws in-world debug beams showing the points and wall checks S2FOW uses.
 ///
-/// When Debug.ShowTargetPoints is enabled, this class creates env_beam entities
-/// (colored laser beams) at each check point on every enemy target:
+/// When Debug.ShowTargetPoints is enabled, this class creates env_beam objects
+/// (colored laser beams) at each check point on every enemy:
 ///   - White beams: skeleton body points (head, shoulders, hips, etc.)
-///   - Blue beams: AABB fallback corner points (bounding box corners)
-///   - Blue wireframe edges connect the 8 AABB corners to visualize the box
+///   - Blue beams: backup box corner points
+///   - Blue wireframe edges connect the 8 backup box corners
 ///
 /// When Debug.ShowRayLines is enabled, it also draws the actual rays fired:
-///   - Yellow: ray reached the target (visible)
+///   - Yellow: ray reached the enemy point (visible)
 ///   - Blue: ray hit a wall (blocked)
 ///
-/// These beams are real engine entities that are visible to all players in-game.
-/// Each observer only sees their own debug points — other observers' point entities
-/// are stripped from the transmit list to avoid clutter.
+/// These beams are real game objects.
+/// Each viewer only sees their own debug points; other viewers' debug beams are
+/// removed from that viewer's update list.
 ///
 /// DEVELOPMENT ONLY: Debug visuals create many entities and consume server resources.
 /// Keep all debug options disabled in production.

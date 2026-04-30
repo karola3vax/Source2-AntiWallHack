@@ -6,16 +6,18 @@ using S2FOW.Util;
 namespace S2FOW;
 
 /// <summary>
-/// Plugin lifecycle — handles loading, unloading, and connecting to the RayTrace API.
+/// Plugin lifecycle: handles startup, shutdown, config loading, and the RayTrace connection.
 ///
 /// When the server starts:
-///   1. Load() is called → we create helper objects and register all event listeners.
-///   2. OnConfigParsed() is called → we read the JSON config and apply any needed migrations.
-///   3. OnAllPluginsLoaded() is called → we connect to the RayTrace plugin (it must load first).
-///   4. Once RayTrace is ready, we build the engine components and set _initialized = true.
+///   1. Load() creates the helper objects and registers the game events S2FOW needs.
+///   2. OnConfigParsed() reads the JSON config, accepts old config names, and writes the current format.
+///   3. OnAllPluginsLoaded() tries to connect to RayTrace, the separate plugin that checks walls.
+///   4. Once RayTrace is ready, S2FOW can decide whether each viewer should receive each enemy.
 ///
 /// When the server shuts down:
-///   1. Unload() is called → we clean up debug visuals and reset any modified player state.
+///   1. Unload() removes debug visuals and clears short-lived visual-refresh flags.
+///
+/// Safety rule: if setup is incomplete, S2FOW stays idle instead of hiding players blindly.
 /// </summary>
 public partial class S2FOWPlugin
 {
@@ -28,17 +30,21 @@ public partial class S2FOWPlugin
         // Show the ASCII art banner in the server console.
         PrintStartupBanner();
 
-        // Create the helper objects that do not depend on RayTrace.
+        // Create the helper objects that can run before RayTrace is connected.
         _smokeTracker = new SmokeTracker();
         _playerStateCache = new PlayerStateCache();
         _perfMonitor = new PerformanceMonitor();
+        if (!NetworkFullUpdateService.TryCreate(out _networkFullUpdateService, out string fullUpdateError))
+            Log($"Crash recovery full-update support is unavailable: {fullUpdateError}");
+        else
+            Log("Crash recovery full-update support is active.");
 
         // Listen for map changes so we can reset state between maps.
         RegisterListener<Listeners.OnMapStart>(OnMapStart);
         RegisterListener<Listeners.OnMapEnd>(OnMapEnd);
 
-        // This is the critical listener — it fires every network frame and lets us
-        // control which entities each client receives.
+        // CheckTransmit runs every network frame. It is where S2FOW removes hidden
+        // enemy bodies and their connected objects from one viewer's update list.
         RegisterListener<Listeners.CheckTransmit>(OnCheckTransmit);
 
         // Register handlers for game events that affect visibility decisions.
@@ -57,11 +63,12 @@ public partial class S2FOWPlugin
 
         // Register admin commands for server operators.
         AddCommand("css_fow_stats", PluginText.StatsCommandDescription, OnFowStats);
+        AddCommand("css_s2fow_status", PluginText.StatsCommandDescription, OnFowStats);
         AddCommand("css_fow_toggle", PluginText.ToggleCommandDescription, OnFowToggle);
-        Log("Loaded. Waiting for ray tracing support...");
+        AddCommand("css_s2fow_toggle", PluginText.ToggleCommandDescription, OnFowToggle);
+        Log("Loaded. Waiting for RayTrace before checking player visibility.");
 
-        // If this is a hot reload (plugin reloaded while server is running),
-        // try to connect to RayTrace immediately since it may already be loaded.
+        // During a hot reload, RayTrace may already be loaded, so try connecting now.
         if (hotReload)
             InitializeRayTrace();
     }
@@ -75,7 +82,7 @@ public partial class S2FOWPlugin
         // Remove any debug beam entities we created in the world.
         _debugAabbRenderer?.Clear();
 
-        // Make sure no players are stuck with the NOINTERP flag.
+        // Clear the short visual-refresh flag used after hiding or showing a player.
         ResetNoInterpState();
 
         // Clear the player tracking cache.
@@ -104,6 +111,8 @@ public partial class S2FOWPlugin
 
         // Rebuild all runtime components that depend on config values.
         RebuildRuntimeConfig(resetRuntimeState: _initialized);
+        if (previousConfig.General.Enabled && !Config.General.Enabled)
+            ForceFullUpdateAllObserversNow(ObserverFullUpdateReason.Unhide | ObserverFullUpdateReason.Toggle);
 
         // Log any changed settings so server operators can verify what happened.
         LogConfigDiff(previousConfig, Config);
@@ -112,8 +121,8 @@ public partial class S2FOWPlugin
     }
 
     /// <summary>
-    /// Called once all plugins (including metamod/RayTrace) are loaded.
-    /// This is our first safe opportunity to connect to the RayTrace API.
+    /// Called once all plugins are loaded.
+    /// This is the first safe time to connect to RayTrace, the plugin that checks walls.
     /// </summary>
     public override void OnAllPluginsLoaded(bool hotReload)
     {
@@ -121,9 +130,9 @@ public partial class S2FOWPlugin
     }
 
     /// <summary>
-    /// Attempts to connect to the RayTrace plugin's API.
-    /// If successful, creates the engine components and marks the plugin as ready.
-    /// If RayTrace is not loaded, the plugin stays inactive (but does not crash).
+    /// Attempts to connect to RayTrace.
+    /// If successful, creates the visibility-checking components and marks S2FOW ready.
+    /// If RayTrace is missing, S2FOW stays inactive so players are shown normally.
     /// </summary>
     private void InitializeRayTrace()
     {
@@ -133,12 +142,12 @@ public partial class S2FOWPlugin
 
         if (!RayTraceCapabilityResolver.TryGet(out _rayTrace, out string error) || _rayTrace == null)
         {
-            Log($"Ray tracing support was not found. {error}");
+            Log($"RayTrace is not connected, so S2FOW is idle. Install and load RayTraceImpl and RayTraceApi first. Details: {error}");
             return;
         }
 
         // Build the core engine components now that we have ray tracing.
-        _raycastEngine = new RaycastEngine(_rayTrace, Config);
+        _raycastEngine = new RaycastEngine(_rayTrace, Config, _perfMonitor);
         _visibilityManager = new VisibilityManager(
             _raycastEngine, _smokeTracker!,
             Config, _perfMonitor);
@@ -148,6 +157,6 @@ public partial class S2FOWPlugin
         RebuildDebugRenderer();
 
         _initialized = true;
-        Log("Ray tracing ready. Protection is live.");
+        Log("RayTrace connected. S2FOW is now checking player visibility.");
     }
 }
