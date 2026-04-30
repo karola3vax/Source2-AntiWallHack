@@ -17,7 +17,23 @@
   </ItemGroup>
 
   <ItemGroup>
-    <None Include="..\gamedata\**\*.json" CopyToOutputDirectory="PreserveNewest" Link="gamedata\%(RecursiveDir)%(Filename)%(Extension)" />
+    <S2FOWGameData Include="..\gamedata\**\*.json" />
+    <S2FOWPackageDocs Include="..\README.md;..\CHANGELOG.md;..\LICENSE" />
   </ItemGroup>
+
+  <PropertyGroup>
+    <S2FOWPackageDir>$(MSBuildProjectDirectory)\bin\$(Configuration)\S2FOW-dropin\</S2FOWPackageDir>
+    <S2FOWPackagePluginDir>$(S2FOWPackageDir)addons\counterstrikesharp\plugins\S2FOW\</S2FOWPackagePluginDir>
+    <S2FOWPackageGameDataDir>$(S2FOWPackageDir)addons\counterstrikesharp\gamedata\</S2FOWPackageGameDataDir>
+  </PropertyGroup>
+
+  <Target Name="BuildS2FOWDropInPackage" AfterTargets="Build" Condition="'$(Configuration)' == 'Release'">
+    <MakeDir Directories="$(S2FOWPackagePluginDir);$(S2FOWPackageGameDataDir)" />
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(S2FOWPackagePluginDir)" />
+    <Copy SourceFiles="$(TargetDir)$(AssemblyName).deps.json" DestinationFolder="$(S2FOWPackagePluginDir)" />
+    <Copy SourceFiles="@(S2FOWGameData)" DestinationFolder="$(S2FOWPackageGameDataDir)" />
+    <Copy SourceFiles="@(S2FOWPackageDocs)" DestinationFolder="$(S2FOWPackageDir)" />
+    <Message Importance="High" Text="S2FOW drop-in package: $(S2FOWPackageDir)" />
+  </Target>
 
 </Project>

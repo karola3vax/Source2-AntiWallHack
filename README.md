@@ -131,8 +131,8 @@ RayTrace is required. If RayTrace is not loaded, S2FOW stays idle and players ar
 1. Install Metamod:Source and CounterStrikeSharp on the server.
 2. Install Ray-Trace with both RayTraceImpl and RayTraceApi.
 3. Build S2FOW or download a release.
-4. Copy the release `addons/` folder into the server's `csgo/addons/` folder.
-5. Make sure `gamedata/s2fow.gamedata.json` is installed with the plugin.
+4. Copy the release package's `addons/` folder into the server's `csgo/addons/` folder.
+5. Make sure `s2fow.gamedata.json` lands in CounterStrikeSharp's global `gamedata` folder.
 6. Restart the server.
 7. Check the server console for the S2FOW startup banner and RayTrace connection message.
 
@@ -149,6 +149,22 @@ Build output:
 ```text
 Plugin/bin/Release/net8.0/
 ```
+
+Drop-in server package:
+
+```text
+Plugin/bin/Release/S2FOW-dropin/
+  addons/
+    counterstrikesharp/
+      gamedata/
+        s2fow.gamedata.json
+      plugins/
+        S2FOW/
+          S2FOW.dll
+          S2FOW.deps.json
+```
+
+For server installs, copy the `addons` folder from `S2FOW-dropin` into the server's `csgo/addons` folder. Do not put `s2fow.gamedata.json` inside the plugin folder; CounterStrikeSharp reads it from `addons/counterstrikesharp/gamedata`.
 
 ## Commands
 
@@ -250,7 +266,7 @@ Plugin/
   Models/                     Player snapshots, smoke data, debug drawing data
   Util/                       Text, diagnostics, performance counters, vector math
 gamedata/
-  s2fow.gamedata.json         Required data for full-update crash recovery
+  s2fow.gamedata.json         Source copy for package building; installs to addons/counterstrikesharp/gamedata
 tools/
   los-point-editor/           Browser editor for visibility points
   apply_los_points_to_layout.py
@@ -260,7 +276,7 @@ tools/
 ## Recommended Server Owner Flow
 
 1. Install dependencies first: CounterStrikeSharp, Metamod:Source, and Ray-Trace.
-2. Install S2FOW with its `gamedata` file.
+2. Install S2FOW from the drop-in package so the plugin and gamedata land in the right folders.
 3. Start the server and confirm RayTrace connects.
 4. Leave defaults on the first test.
 5. Use `css_s2fow_status` to watch workload and warnings.
