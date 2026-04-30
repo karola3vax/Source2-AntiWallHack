@@ -118,7 +118,7 @@ public partial class S2FOWPlugin : BasePlugin, IPluginConfig<S2FOWConfig>
     // Plugin metadata shown in the server plugin list
 
     public override string ModuleName => "S2FOW";
-    public override string ModuleVersion => "1.0.8";
+    public override string ModuleVersion => "1.0.9";
     public override string ModuleAuthor => "karola3vax";
     public override string ModuleDescription => "Server-side CS2 player visibility plugin that hides enemies a viewer cannot see, supports smoke hiding, and sends crash-recovery full updates after hide/show changes.";
 

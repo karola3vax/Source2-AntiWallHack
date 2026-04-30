@@ -173,14 +173,18 @@ public partial class S2FOWPlugin
                 }
 
                 // If the enemy just changed from hidden to visible, do not reveal
-                // them in this same packet. First queue the forced refresh, then
-                // keep body and child objects hidden briefly so weapons/wearables
-                // cannot appear before the player body exists on the viewer.
+                // them in this same packet. Hold body and child objects hidden
+                // briefly, then queue the forced refresh on the actual reveal frame.
                 if (wasHiddenBeforeDecision)
-                    BeginDeferredReveal(observerSlot, targetSlot, currentTick, ObserverFullUpdateReason.Unhide);
+                    BeginDeferredReveal(observerSlot, targetSlot, currentTick);
 
                 if (ShouldKeepDeferredRevealHidden(observerSlot, targetSlot, currentTick))
+                {
                     RemoveHiddenTargetEntities(info, targetSlot);
+                    continue;
+                }
+
+                CompleteDeferredRevealIfReady(observerSlot, targetSlot, currentTick, ObserverFullUpdateReason.Unhide);
             }
         }
 
@@ -264,13 +268,40 @@ public partial class S2FOWPlugin
         _visibilityManager?.MarkForceVisible(observerSlot, targetSlot);
 
         if (wasHiddenBeforeDecision)
-            BeginDeferredReveal(observerSlot, targetSlot, currentTick, ObserverFullUpdateReason.Unhide);
+            BeginDeferredReveal(observerSlot, targetSlot, currentTick);
 
         if (ShouldKeepDeferredRevealHidden(observerSlot, targetSlot, currentTick))
+        {
             RemoveHiddenTargetEntities(info, targetSlot);
+            return;
+        }
+
+        CompleteDeferredRevealIfReady(observerSlot, targetSlot, currentTick, ObserverFullUpdateReason.Unhide);
     }
 
     private void BeginDeferredReveal(
+        int observerSlot,
+        int targetSlot,
+        int currentTick)
+    {
+        if (!FowConstants.IsValidSlot(observerSlot) || !FowConstants.IsValidSlot(targetSlot))
+            return;
+
+        int pairIndex = GetObserverTargetPairIndex(observerSlot, targetSlot);
+        _deferredRevealUntilTick[pairIndex] = Math.Max(
+            _deferredRevealUntilTick[pairIndex],
+            currentTick + RevealSettleTicks);
+    }
+
+    private bool ShouldKeepDeferredRevealHidden(int observerSlot, int targetSlot, int currentTick)
+    {
+        if (!FowConstants.IsValidSlot(observerSlot) || !FowConstants.IsValidSlot(targetSlot))
+            return false;
+
+        return currentTick < _deferredRevealUntilTick[GetObserverTargetPairIndex(observerSlot, targetSlot)];
+    }
+
+    private void CompleteDeferredRevealIfReady(
         int observerSlot,
         int targetSlot,
         int currentTick,
@@ -280,18 +311,12 @@ public partial class S2FOWPlugin
             return;
 
         int pairIndex = GetObserverTargetPairIndex(observerSlot, targetSlot);
-        _deferredRevealUntilTick[pairIndex] = Math.Max(
-            _deferredRevealUntilTick[pairIndex],
-            currentTick + RevealSettleTicks);
+        int revealTick = _deferredRevealUntilTick[pairIndex];
+        if (revealTick == 0 || currentTick < revealTick)
+            return;
+
+        _deferredRevealUntilTick[pairIndex] = 0;
         QueueObserverFullUpdate(observerSlot, reason);
-    }
-
-    private bool ShouldKeepDeferredRevealHidden(int observerSlot, int targetSlot, int currentTick)
-    {
-        if (!FowConstants.IsValidSlot(observerSlot) || !FowConstants.IsValidSlot(targetSlot))
-            return false;
-
-        return currentTick < _deferredRevealUntilTick[GetObserverTargetPairIndex(observerSlot, targetSlot)];
     }
 
     private void ClearDeferredReveal(int observerSlot, int targetSlot)

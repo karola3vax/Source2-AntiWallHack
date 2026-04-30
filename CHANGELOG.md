@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.0.9 - 2026-04-30
+
+### Crash Safety
+- Moved the unhide full-update request to the actual reveal frame, after S2FOW stops removing the player body and connected objects from `CheckTransmit`.
+- Kept the short reveal hold, but no longer sends the unhide full update while the target is still intentionally hidden.
+
 ## v1.0.8 - 2026-04-30
 
 ### Crash Safety And Pop-In
