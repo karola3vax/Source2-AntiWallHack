@@ -1,4 +1,4 @@
-# S2FOW - Source 2 Fog Of War
+# S2FOW - Source 2 Fog Of War [OUTDATED AS OF 18 May 2026]
 
 ![S2FOW in action](https://raw.githubusercontent.com/karola3vax/server-assets/main/s2fow.gif)
 
